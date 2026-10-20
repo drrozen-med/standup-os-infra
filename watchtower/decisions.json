@@ -199,19 +199,6 @@
     "status": "open"
   },
   {
-    "id": "crm-tests-timeout",
-    "lane": "gtm-crm",
-    "priority": 2,
-    "question": "shared-marketing crm-tests pytest is cancelled at its 20-minute limit on every run since 2026-10-19 (runs 295-311). GTM lane is re-running and isolating the slow test.",
-    "options": [
-      "delegated to GTM lane"
-    ],
-    "deadline": null,
-    "source": "GTM lane, PR #853",
-    "status": "delegated",
-    "decided_by": "control-tower"
-  },
-  {
     "id": "github-billing",
     "lane": "platform-cost",
     "priority": 2,
@@ -223,5 +210,18 @@
     "source": "platform lane PR #855",
     "status": "delegated",
     "decided_by": "control-tower"
+  },
+  {
+    "id": "merge-864",
+    "lane": "gtm-crm",
+    "priority": 2,
+    "question": "Merge shared-marketing #864? CRM tests take ~19.5 min against a 20-min limit, so every slightly slow run is cancelled and no CRM PR gets a real result. #864 raises the limit to 40 min (5 min per test). CI settings only; its own run passed.",
+    "options": [
+      "merge",
+      "hold"
+    ],
+    "deadline": null,
+    "source": "GTM lane diagnosis, run 39457612788",
+    "status": "open"
   }
 ]
