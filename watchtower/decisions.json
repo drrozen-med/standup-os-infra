@@ -107,10 +107,10 @@
     "id": "npi-duplicates",
     "lane": "gtm-crm",
     "priority": 2,
-    "question": "Review 130 duplicate NPI matches before any NPI write or deploy of shared-marketing #852.",
+    "question": "shared-marketing #852 (NPI attach endpoint) was merged to main 2026-10-20 outside the lanes. Do not deploy until the reported 130 duplicate NPI matches are reviewed.",
     "options": [
-      "review list",
-      "skip NPI writes"
+      "review list, then deploy",
+      "hold deploy"
     ],
     "deadline": null,
     "source": "run-residency CRM buyer-map session",
@@ -202,7 +202,7 @@
     "id": "crm-tests-timeout",
     "lane": "gtm-crm",
     "priority": 2,
-    "question": "shared-marketing pytest (crm-tests) is cancelled at ~20 min on #852, #853 and main. GTM lane is re-running once and investigating.",
+    "question": "shared-marketing crm-tests pytest is cancelled at its 20-minute limit on every run since 2026-10-19 (runs 295-311). GTM lane is re-running and isolating the slow test.",
     "options": [
       "delegated to GTM lane"
     ],
