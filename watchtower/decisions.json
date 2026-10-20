@@ -4,7 +4,11 @@
     "lane": "aba-cdl-launch",
     "priority": 1,
     "question": "ABA upgrade page shows $349 valid through Nov 1; notes say $79. Which is intended?",
-    "options": ["$349", "$79", "other"],
+    "options": [
+      "$349",
+      "$79",
+      "other"
+    ],
     "deadline": "2026-11-01",
     "source": "boardsBridge launch-readiness audit (G3)",
     "status": "open"
@@ -14,7 +18,10 @@
     "lane": "aba-cdl-launch",
     "priority": 1,
     "question": "Fix boardsBridge #2033 (any signed-in user can read any airline's candidate data) and #1966 before any paid launch?",
-    "options": ["yes, fix now", "defer"],
+    "options": [
+      "yes, fix now",
+      "defer"
+    ],
     "deadline": null,
     "source": "boardsBridge launch-readiness audit (S1, S2)",
     "status": "open"
@@ -24,7 +31,10 @@
     "lane": "aba-cdl-launch",
     "priority": 2,
     "question": "Merge boardsBridge #3070 (fixes resident-mcq CI failing on every open PR)?",
-    "options": ["yes", "no"],
+    "options": [
+      "yes",
+      "no"
+    ],
     "deadline": null,
     "source": "log-mining session",
     "status": "open"
@@ -34,7 +44,10 @@
     "lane": "aba-cdl-launch",
     "priority": 2,
     "question": "Buy Cloudflare Workers Paid ($5/month) so CDL sign-in emails work?",
-    "options": ["yes", "no"],
+    "options": [
+      "yes",
+      "no"
+    ],
     "deadline": null,
     "source": "CDL launch session",
     "status": "open"
@@ -44,7 +57,9 @@
     "lane": "aba-cdl-launch",
     "priority": 1,
     "question": "Provide 12+ tester Google emails for the Play 14-day closed test (CDL and AirlineBridge). The clock has not started.",
-    "options": ["provide list"],
+    "options": [
+      "provide list"
+    ],
     "deadline": null,
     "source": "CDL launch + airline capacitor sessions",
     "status": "open"
@@ -54,7 +69,10 @@
     "lane": "airlinebridge",
     "priority": 2,
     "question": "Switch AirlineBridge to Free in Play Console (likely saved as Paid by mistake)?",
-    "options": ["yes", "no, set up merchant account"],
+    "options": [
+      "yes",
+      "no, set up merchant account"
+    ],
     "deadline": null,
     "source": "airline capacitor-app session",
     "status": "open"
@@ -64,7 +82,10 @@
     "lane": "airlinebridge",
     "priority": 2,
     "question": "Merge feat/dodo-entitlement into main (check conflict with PR #144 first)?",
-    "options": ["yes", "no"],
+    "options": [
+      "yes",
+      "no"
+    ],
     "deadline": null,
     "source": "airline capacitor-app session",
     "status": "open"
@@ -74,7 +95,10 @@
     "lane": "airlinebridge",
     "priority": 3,
     "question": "Ask Michael for an airline-recruiting insider. B2B parks if none found within 60 days.",
-    "options": ["draft message", "park B2B"],
+    "options": [
+      "draft message",
+      "park B2B"
+    ],
     "deadline": "2026-12-12",
     "source": "airline B2B GTM session (#145)",
     "status": "open"
@@ -84,7 +108,10 @@
     "lane": "gtm-crm",
     "priority": 2,
     "question": "Review 130 duplicate NPI matches before any NPI write or deploy of shared-marketing #852.",
-    "options": ["review list", "skip NPI writes"],
+    "options": [
+      "review list",
+      "skip NPI writes"
+    ],
     "deadline": null,
     "source": "run-residency CRM buyer-map session",
     "status": "open"
@@ -93,8 +120,10 @@
     "id": "cf-worker-overwrite",
     "lane": "platform-cost",
     "priority": 2,
-    "question": "Confirm Cloudflare worker boardsbridge-institutional (nursebridge account) serves the right build; a run-residency deploy overwrote it on 10-15.",
-    "options": ["check and restore"],
+    "question": "Confirm Cloudflare worker boardsbridge-institutional serves the right build (possible 10-15 overwrite, unconfirmed). Needs read-only `wrangler deployments list` from a machine with Cloudflare credentials. Nobody deploys to it until checked.",
+    "options": [
+      "run check on my machine"
+    ],
     "deadline": null,
     "source": "run-residency screenshots session",
     "status": "open"
@@ -103,20 +132,30 @@
     "id": "host-capacity",
     "lane": "platform-cost",
     "priority": 2,
-    "question": "Host .251 (4 CPU) is overloaded (load 23-92). Bigger Hostinger plan, second machine, or neither? Also a Mac runner for sleepySounds CI?",
-    "options": ["bigger plan", "second machine", "neither", "add Mac runner"],
+    "question": "Host .251: $0 mitigation (concurrency cap + stale-process killer) is being prepared by the platform lane. Separately: bigger Hostinger plan or a second machine? Mac runner: your existing Mac ($0), GitHub macOS runners (~$0.06-0.08/min), or a Mac mini (~$600)?",
+    "options": [
+      "second machine",
+      "bigger plan",
+      "neither yet",
+      "Mac runner on my Mac",
+      "GitHub macOS runners",
+      "Mac mini"
+    ],
     "deadline": null,
-    "source": "sleepySounds pubmed_audit session",
+    "source": "platform lane PR shared-marketing #855",
     "status": "open"
   },
   {
     "id": "neon-connections",
     "lane": "platform-cost",
     "priority": 3,
-    "question": "Find the owner of 31 idle aba-pipeline-worker Neon connections (BoardsBridge DB is the remaining ~$120/month).",
-    "options": ["resume investigation"],
+    "question": "Neon bill is now ~$40/month (was ~$170), all BoardsBridge. Owner of 31 idle aba-pipeline-worker connections still unknown. Accept $40, or keep hunting?",
+    "options": [
+      "accept $40",
+      "keep hunting"
+    ],
     "deadline": null,
-    "source": "Neon expense reduction session",
+    "source": "platform lane PR shared-marketing #855",
     "status": "open"
   },
   {
@@ -124,17 +163,25 @@
     "lane": "platform-cost",
     "priority": 1,
     "question": "Suspended Render fallback expires 2026-10-21. Keep, renew or drop?",
-    "options": ["keep", "drop"],
+    "options": [
+      "keep",
+      "drop"
+    ],
     "deadline": "2026-10-21",
     "source": "sleepySounds Neon/CRM sessions",
-    "status": "open"
+    "status": "done",
+    "answer": "Let it lapse (platform lane recommendation); lane flags any dependency before 2026-10-21 12:00 UTC.",
+    "decided_by": "control-tower"
   },
   {
     "id": "branch-hygiene",
     "lane": "platform-cost",
     "priority": 3,
     "question": "sleepySounds has 16 branches vs a limit of 3, failing Repository Hygiene on every PR. Approve deleting other agents' stale branches?",
-    "options": ["approve deletion", "raise the limit"],
+    "options": [
+      "approve deletion",
+      "raise the limit"
+    ],
     "deadline": null,
     "source": "sleepySounds pubmed_audit session (#874)",
     "status": "open"
@@ -144,9 +191,37 @@
     "lane": "platform-cost",
     "priority": 1,
     "question": "Install the Claude GitHub App on boardsBridge, cdl-bridge, airline, run-residency, sleepySounds_love so lanes can see PRs and CI.",
-    "options": ["done"],
+    "options": [
+      "done"
+    ],
     "deadline": null,
     "source": "control tower",
     "status": "open"
+  },
+  {
+    "id": "crm-tests-timeout",
+    "lane": "gtm-crm",
+    "priority": 2,
+    "question": "shared-marketing pytest (crm-tests) is cancelled at ~20 min on #852, #853 and main. GTM lane is re-running once and investigating.",
+    "options": [
+      "delegated to GTM lane"
+    ],
+    "deadline": null,
+    "source": "GTM lane, PR #853",
+    "status": "delegated",
+    "decided_by": "control-tower"
+  },
+  {
+    "id": "github-billing",
+    "lane": "platform-cost",
+    "priority": 2,
+    "question": "Are GitHub-hosted runners still blocked by billing? Scheduled ubuntu-latest workflows (incl. 30-min liveness probe) would fail every run. Platform lane is verifying read-only.",
+    "options": [
+      "delegated to platform lane"
+    ],
+    "deadline": null,
+    "source": "platform lane PR #855",
+    "status": "delegated",
+    "decided_by": "control-tower"
   }
 ]

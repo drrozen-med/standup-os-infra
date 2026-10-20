@@ -44,8 +44,10 @@ Local test without installing: `WATCHTOWER_STATE_DIR=/tmp/wt python3 bin/watchto
 
 `decisions.json` is the source of truth for what is waiting on the owner. Entry fields:
 `id, lane, priority (1-3), question, options, deadline (YYYY-MM-DD or null), source, status`.
-When a decision is made, set `"status": "done"` and add `"answer"`; lane managers act on
-the answer. Nobody but the owner marks a money, data-deletion, deploy or outreach
+Statuses: `open` (waiting on the owner), `delegated` (a lane is handling it), `done`
+(add `"answer"` and `"decided_by"`). The control tower decides reversible, $0 operational
+calls itself (CI re-runs, read-only checks, opening PRs) and marks them `decided_by:
+control-tower`; lane managers escalate to the control tower, not to the owner. Nobody but the owner marks a money, data-deletion, deploy or outreach
 decision as done.
 
 ## Guardrails for lane managers
