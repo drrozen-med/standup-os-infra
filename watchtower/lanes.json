@@ -1,0 +1,23 @@
+{
+  "owner": "drrozen-med",
+  "stale_pr_days": 7,
+  "blocker_labels": ["release-blocker", "security", "P0"],
+  "lanes": {
+    "aba-cdl-launch": {
+      "title": "ABA + CDL launch",
+      "repos": ["boardsBridge", "cdl-bridge"]
+    },
+    "airlinebridge": {
+      "title": "AirlineBridge release",
+      "repos": ["airline"]
+    },
+    "gtm-crm": {
+      "title": "GTM / CRM",
+      "repos": ["shared-marketing", "sleepySounds_love", "run-residency"]
+    },
+    "platform-cost": {
+      "title": "Platform and cost",
+      "repos": ["standup-os-infra", "standup-os-core", "standup-os-api", "standup-os-api-backend"]
+    }
+  }
+}

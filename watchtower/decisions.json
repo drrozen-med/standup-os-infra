@@ -1,0 +1,152 @@
+[
+  {
+    "id": "aba-price",
+    "lane": "aba-cdl-launch",
+    "priority": 1,
+    "question": "ABA upgrade page shows $349 valid through Nov 1; notes say $79. Which is intended?",
+    "options": ["$349", "$79", "other"],
+    "deadline": "2026-11-01",
+    "source": "boardsBridge launch-readiness audit (G3)",
+    "status": "open"
+  },
+  {
+    "id": "security-2033",
+    "lane": "aba-cdl-launch",
+    "priority": 1,
+    "question": "Fix boardsBridge #2033 (any signed-in user can read any airline's candidate data) and #1966 before any paid launch?",
+    "options": ["yes, fix now", "defer"],
+    "deadline": null,
+    "source": "boardsBridge launch-readiness audit (S1, S2)",
+    "status": "open"
+  },
+  {
+    "id": "merge-3070",
+    "lane": "aba-cdl-launch",
+    "priority": 2,
+    "question": "Merge boardsBridge #3070 (fixes resident-mcq CI failing on every open PR)?",
+    "options": ["yes", "no"],
+    "deadline": null,
+    "source": "log-mining session",
+    "status": "open"
+  },
+  {
+    "id": "cf-workers-paid",
+    "lane": "aba-cdl-launch",
+    "priority": 2,
+    "question": "Buy Cloudflare Workers Paid ($5/month) so CDL sign-in emails work?",
+    "options": ["yes", "no"],
+    "deadline": null,
+    "source": "CDL launch session",
+    "status": "open"
+  },
+  {
+    "id": "play-closed-test",
+    "lane": "aba-cdl-launch",
+    "priority": 1,
+    "question": "Provide 12+ tester Google emails for the Play 14-day closed test (CDL and AirlineBridge). The clock has not started.",
+    "options": ["provide list"],
+    "deadline": null,
+    "source": "CDL launch + airline capacitor sessions",
+    "status": "open"
+  },
+  {
+    "id": "airline-play-free",
+    "lane": "airlinebridge",
+    "priority": 2,
+    "question": "Switch AirlineBridge to Free in Play Console (likely saved as Paid by mistake)?",
+    "options": ["yes", "no, set up merchant account"],
+    "deadline": null,
+    "source": "airline capacitor-app session",
+    "status": "open"
+  },
+  {
+    "id": "airline-merge-release",
+    "lane": "airlinebridge",
+    "priority": 2,
+    "question": "Merge feat/dodo-entitlement into main (check conflict with PR #144 first)?",
+    "options": ["yes", "no"],
+    "deadline": null,
+    "source": "airline capacitor-app session",
+    "status": "open"
+  },
+  {
+    "id": "airline-b2b-insider",
+    "lane": "airlinebridge",
+    "priority": 3,
+    "question": "Ask Michael for an airline-recruiting insider. B2B parks if none found within 60 days.",
+    "options": ["draft message", "park B2B"],
+    "deadline": "2026-12-12",
+    "source": "airline B2B GTM session (#145)",
+    "status": "open"
+  },
+  {
+    "id": "npi-duplicates",
+    "lane": "gtm-crm",
+    "priority": 2,
+    "question": "Review 130 duplicate NPI matches before any NPI write or deploy of shared-marketing #852.",
+    "options": ["review list", "skip NPI writes"],
+    "deadline": null,
+    "source": "run-residency CRM buyer-map session",
+    "status": "open"
+  },
+  {
+    "id": "cf-worker-overwrite",
+    "lane": "platform-cost",
+    "priority": 2,
+    "question": "Confirm Cloudflare worker boardsbridge-institutional (nursebridge account) serves the right build; a run-residency deploy overwrote it on 10-15.",
+    "options": ["check and restore"],
+    "deadline": null,
+    "source": "run-residency screenshots session",
+    "status": "open"
+  },
+  {
+    "id": "host-capacity",
+    "lane": "platform-cost",
+    "priority": 2,
+    "question": "Host .251 (4 CPU) is overloaded (load 23-92). Bigger Hostinger plan, second machine, or neither? Also a Mac runner for sleepySounds CI?",
+    "options": ["bigger plan", "second machine", "neither", "add Mac runner"],
+    "deadline": null,
+    "source": "sleepySounds pubmed_audit session",
+    "status": "open"
+  },
+  {
+    "id": "neon-connections",
+    "lane": "platform-cost",
+    "priority": 3,
+    "question": "Find the owner of 31 idle aba-pipeline-worker Neon connections (BoardsBridge DB is the remaining ~$120/month).",
+    "options": ["resume investigation"],
+    "deadline": null,
+    "source": "Neon expense reduction session",
+    "status": "open"
+  },
+  {
+    "id": "render-fallback",
+    "lane": "platform-cost",
+    "priority": 1,
+    "question": "Suspended Render fallback expires 2026-10-21. Keep, renew or drop?",
+    "options": ["keep", "drop"],
+    "deadline": "2026-10-21",
+    "source": "sleepySounds Neon/CRM sessions",
+    "status": "open"
+  },
+  {
+    "id": "branch-hygiene",
+    "lane": "platform-cost",
+    "priority": 3,
+    "question": "sleepySounds has 16 branches vs a limit of 3, failing Repository Hygiene on every PR. Approve deleting other agents' stale branches?",
+    "options": ["approve deletion", "raise the limit"],
+    "deadline": null,
+    "source": "sleepySounds pubmed_audit session (#874)",
+    "status": "open"
+  },
+  {
+    "id": "github-app-access",
+    "lane": "platform-cost",
+    "priority": 1,
+    "question": "Install the Claude GitHub App on boardsBridge, cdl-bridge, airline, run-residency, sleepySounds_love so lanes can see PRs and CI.",
+    "options": ["done"],
+    "deadline": null,
+    "source": "control tower",
+    "status": "open"
+  }
+]

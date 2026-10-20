@@ -1,0 +1,19 @@
+[Unit]
+Description=StandupOS Watchtower - read-only portfolio snapshot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=claude-agent
+EnvironmentFile=/etc/standup-os/watchtower.env
+ExecStart=/usr/local/libexec/watchtower-run.sh
+TimeoutStartSec=300
+# Read-only collector: no home, no writes outside the state dir.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/opt/standup-os/watchtower-state
+MemoryMax=256M
+CPUQuota=10%

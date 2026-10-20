@@ -6,6 +6,7 @@ tmux + systemd deployment configuration for StandupOS.
 
 - `systemd/` — systemd service files for all agents
 - `bin/` — launcher and utility scripts
+- `watchtower/` — read-only portfolio monitor and decision queue (see `watchtower/README.md`)
 
 ## Deployment
 
