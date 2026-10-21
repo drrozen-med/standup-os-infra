@@ -1,0 +1,11 @@
+[Unit]
+Description=Run StandupOS Watchtower hourly and before the morning brief
+
+[Timer]
+OnCalendar=hourly
+OnCalendar=*-*-* 02:45:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
