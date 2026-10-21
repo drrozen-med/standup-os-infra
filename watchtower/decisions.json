@@ -80,14 +80,14 @@
   {
     "id": "airline-merge-release",
     "lane": "airlinebridge",
-    "priority": 2,
-    "question": "Merge feat/dodo-entitlement into main (check conflict with PR #144 first)?",
+    "priority": 1,
+    "question": "The AirlineBridge release code (feat/dodo-entitlement) was never pushed to GitHub; it only exists on your Mac. Push it from there, or tell me where it lives.",
     "options": [
-      "yes",
-      "no"
+      "I will push it",
+      "tell me where it is"
     ],
     "deadline": null,
-    "source": "airline capacitor-app session",
+    "source": "AirlineBridge lane, PR airline#155",
     "status": "open"
   },
   {
@@ -222,6 +222,19 @@
     ],
     "deadline": null,
     "source": "GTM lane diagnosis, run 39457612788",
+    "status": "open"
+  },
+  {
+    "id": "airline-144-privacy",
+    "lane": "airlinebridge",
+    "priority": 3,
+    "question": "airline #144 adds opt-in camera snapshots (2k lines, checks green). OK to hold until Michael approves the consent text and an independent review is done?",
+    "options": [
+      "hold",
+      "review now"
+    ],
+    "deadline": null,
+    "source": "AirlineBridge lane",
     "status": "open"
   }
 ]
