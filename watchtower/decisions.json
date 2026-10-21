@@ -17,13 +17,13 @@
     "id": "security-2033",
     "lane": "aba-cdl-launch",
     "priority": 1,
-    "question": "Fix boardsBridge #2033 (any signed-in user can read any airline's candidate data) and #1966 before any paid launch?",
+    "question": "The data-exposure fixes (any user reading any airline's candidates; trial owner spoofing) are done on staging (#3086) but NOT on production. Promote staging to main?",
     "options": [
-      "yes, fix now",
-      "defer"
+      "yes, promote",
+      "no, wait"
     ],
     "deadline": null,
-    "source": "boardsBridge launch-readiness audit (S1, S2)",
+    "source": "ABA+CDL lane report",
     "status": "open"
   },
   {
@@ -37,7 +37,9 @@
     ],
     "deadline": null,
     "source": "log-mining session",
-    "status": "open"
+    "status": "done",
+    "answer": "Already merged into staging (#3070, #3067, #3073). Nothing to do.",
+    "decided_by": "lane report"
   },
   {
     "id": "cf-workers-paid",
@@ -235,6 +237,18 @@
     ],
     "deadline": null,
     "source": "AirlineBridge lane",
+    "status": "open"
+  },
+  {
+    "id": "safari-device-check",
+    "lane": "aba-cdl-launch",
+    "priority": 3,
+    "question": "Push-to-talk (#3073) needs a 2-minute check in Safari on your Mac and on your iPhone.",
+    "options": [
+      "I will check"
+    ],
+    "deadline": null,
+    "source": "ABA+CDL lane",
     "status": "open"
   }
 ]
