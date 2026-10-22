@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CCC Navigator</title>
+<style>
+:root{
+  --bg:#0d1117;--panel:#161b22;--line:#262e39;--line2:#2f3946;--sel:#243041;--hover:#1c232d;
+  --text:#e6e9ee;--text2:#d5dae1;--muted:#9aa4b2;--dim:#8b95a3;--accent:#f0b45a;--accent2:#ffd08a;
+  --live:#4cc38a;--idle:#3a4452;
+  --mono:ui-monospace,"JetBrains Mono",SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:13px/1.35 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;overflow:hidden}
+button{font:inherit;color:inherit}
+input{font:inherit}
+input::placeholder{color:#7d8796}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+#side{width:400px;flex:none;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);min-height:0}
+.top{padding:16px 16px 10px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--line)}
+.row1{display:flex;align-items:center;justify-content:space-between}
+.brand{font-size:15px;font-weight:700}
+.seg{display:flex;gap:2px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px}
+.seg button{border:0;border-radius:4px;padding:4px 9px;font-size:11.5px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted)}
+.seg button[aria-pressed=true]{background:#2a3546;color:#fff}
+.search{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:0 10px;height:34px}
+.search:focus-within{border-color:#46536a}
+.search input{flex:1;background:transparent;border:0;outline:none;color:var(--text)}
+.kbd{font:11px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
+.status{font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
+.status .bad{color:#ff9b8a}
+
+#list{flex:1;overflow-y:auto;padding:4px 0 12px;min-height:0}
+#list::-webkit-scrollbar{width:8px}#list::-webkit-scrollbar-thumb{background:#2a3340;border-radius:4px}
+.repo-h{width:100%;display:flex;align-items:center;gap:8px;padding:8px 16px;background:transparent;border:0;cursor:pointer;text-align:left;margin-top:4px}
+.repo-h:hover{background:var(--hover)}
+.repo-h .name{font-weight:700;font-size:13.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chev{flex:none;transition:transform .12s}
+.open>.repo-h .chev,.open>.grp-h .chev{transform:rotate(90deg)}
+.livec{display:flex;align-items:center;gap:4px;color:#6fd3a0;font-size:11.5px}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--idle)}
+.dot.live{background:var(--live)}.dot.you{background:var(--accent)}
+.cnt{color:var(--muted);font-size:11.5px;min-width:18px;text-align:right}
+.grp-h{width:100%;display:flex;align-items:center;gap:6px;padding:5px 16px 5px 34px;background:transparent;border:0;cursor:pointer;text-align:left;color:var(--muted);font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase}
+.grp-h:hover{background:var(--hover)}
+.grp-h .gname{color:#c3cad4}
+.grp-h .gname.none{color:var(--dim);font-style:italic}
+.grp-h.drop{background:#2a3546;outline:1px dashed var(--accent);outline-offset:-2px}
+.tag{font-size:9.5px;letter-spacing:.4px;padding:0 5px;border-radius:3px;line-height:15px;font-weight:700;text-transform:uppercase}
+.tag.orca{color:#9ec5ff;background:#16243a}
+.items{display:none}.open>.items{display:block}
+.groups{display:none}.open>.groups{display:block}
+.s{width:100%;display:flex;align-items:center;gap:10px;padding:7px 16px 7px 50px;border:0;cursor:pointer;text-align:left;background:transparent}
+.s:hover{background:var(--hover)}
+.s[aria-current=true]{background:var(--sel)}
+.s .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.s .t{font-size:13px;font-weight:500;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s .t.nick{font-weight:600;color:#fff}
+.s .meta{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden}
+.s .wt{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis}
+.s .you{color:var(--accent);font-weight:600}
+.s .ago{color:var(--dim);font-size:11px;flex:none}
+.eng{padding:0 6px;border-radius:4px;line-height:16px;font-size:10.5px;font-weight:600;flex:none}
+.eng.claude{color:#f2a27c;background:#2b1d17}.eng.codex{color:#8fd6c4;background:#132622}
+.eng.devin{color:#b3bdfc;background:#1b1e33}.eng.pi{color:#f5a9cf;background:#2c1824}
+.eng.other{color:#c3cad4;background:#222a35}
+.empty{padding:24px 16px;color:var(--muted)}
+.hiddenbox{margin:14px 12px 0;padding:10px 12px;border:1px dashed var(--line2);border-radius:8px;display:flex;flex-direction:column;gap:6px}
+.hiddenbox .h{font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.hiddenbox .r{display:flex;justify-content:space-between;gap:12px;color:#c3cad4;font-size:12px}
+.foot{border-top:1px solid var(--line);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px}
+.btn{background:transparent;border:1px solid var(--line2);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+.btn:hover{border-color:#46536a}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1205;font-weight:700;text-decoration:none;padding:10px 16px;border-radius:8px}
+.btn.big{padding:10px 16px;border-radius:8px;text-decoration:none}
+
+#main{flex:1;min-width:0;overflow-y:auto}
+.detail{padding:28px 36px;display:flex;flex-direction:column;gap:22px;max-width:780px}
+.crumb{color:var(--muted);font-size:12px}
+.lbl{font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.nick-in{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:10px 12px;color:var(--text);font-size:20px;font-weight:700;outline:none}
+.nick-in:focus{border-color:var(--accent)}
+.orig{color:var(--dim);font-size:12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.chip{border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;font-weight:600;border:1px solid var(--line2);background:transparent;color:#c3cad4}
+.chip[aria-pressed=true]{border-color:var(--accent);background:#3a2c14;color:var(--accent2)}
+.chip.orca{border-style:dashed}
+.newg{width:130px;background:var(--bg);border:1px dashed var(--line2);border-radius:999px;padding:6px 12px;color:var(--text);font-size:12px;outline:none}
+.link{background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:6px 4px}
+.facts{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 16px;padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.facts .k{color:var(--muted)}
+.facts .v{min-width:0;word-break:break-word}
+.facts .mono{font-family:var(--mono);font-size:12px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.runs{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px}
+.runs a{color:var(--text2);text-decoration:none;display:flex;gap:10px;font-size:12px;padding:3px 4px;border-radius:4px}
+.runs a:hover{background:var(--hover)}
+.overview h2{margin:0;font-size:18px}
+.overview p{color:var(--muted);margin:0}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card .n{font-size:22px;font-weight:700}
+.card .d{color:var(--muted);font-size:12px}
+.list{font-family:var(--mono);font-size:12px;color:#c3cad4;display:flex;flex-direction:column;gap:3px}
+@media (max-width: 760px){body{flex-direction:column;overflow:auto}#side{width:100%;height:70vh}#main{overflow:visible}.detail{padding:20px 16px}}
+</style>
+</head>
+<body>
+<nav id="side" aria-label="Sessions">
+  <div class="top">
+    <div class="row1">
+      <div class="brand">Sessions</div>
+      <div class="seg" id="win" role="group" aria-label="Time window"></div>
+    </div>
+    <label class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9aa4b2" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span class="sr">Search sessions</span>
+      <input id="q" type="text" placeholder="Search nickname, title, repo, group…" autocomplete="off">
+      <span class="kbd" aria-hidden="true">/</span>
+    </label>
+    <div class="status" id="status"></div>
+  </div>
+  <div id="list" role="tree"></div>
+  <div class="foot">
+    <span id="hiddenTxt"></span>
+    <button class="btn" id="hiddenBtn" type="button">Show</button>
+  </div>
+</nav>
+<main id="main"></main>
+
+<script>
+(() => {
+  const CHEV = '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9aa4b2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+  const BRANCH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0b45a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+  const WINS = [['now', 'Now'], ['1d', '1d'], ['7d', '7d'], ['all', 'All']];
+  const ENGINES = new Set(['claude', 'codex', 'devin', 'pi']);
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('ccc-nav-' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
+    set(k, v) { try { localStorage.setItem('ccc-nav-' + k, JSON.stringify(v)); } catch (_) {} },
+  };
+  const ui = {
+    win: store.get('win', '1d'),
+    collapsed: store.get('collapsed', {}),
+    selected: store.get('selected', null),
+    showHidden: false,
+    query: '',
+  };
+  let tree = null, flat = [], lastDetailKey = null, inflight = false;
+
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ago = (t) => { if (!t) return ''; const m = Math.max(0, (Date.now() / 1000 - t) / 60); if (m < 1) return 'now'; if (m < 60) return Math.floor(m) + 'm'; if (m < 1440) return Math.floor(m / 60) + 'h'; return Math.floor(m / 1440) + 'd'; };
+  const agoLong = (t) => { const a = ago(t); return a === 'now' ? 'just now' : a + ' ago'; };
+  const label = (s) => s.nick || s.original;
+
+  async function post(path, body) {
+    await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    await refresh(true);
+  }
+
+  async function refresh(force) {
+    if (inflight && !force) return;
+    inflight = true;
+    try {
+      const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.win));
+      tree = await r.json();
+      render();
+    } catch (e) {
+      $('#status').innerHTML = '<span class="bad">Navigator server unreachable</span>';
+    } finally { inflight = false; }
+  }
+
+  function matches(s, repo, group) {
+    const q = ui.query.trim().toLowerCase();
+    if (!q) return true;
+    return [s.nick, s.original, repo.name, group.name, s.engine, s.wt, s.orca_workspace].join(' ').toLowerCase().includes(q);
+  }
+
+  function renderWin() {
+    $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
+  }
+
+  function renderStatus() {
+    const s = tree.sources || {};
+    const parts = [];
+    parts.push(s.ccc && s.ccc.ok ? `CCC ${s.ccc.count} sessions · ${s.ccc.ms} ms` : `<span class="bad">CCC not reachable at ${esc(s.ccc && s.ccc.base)}</span>`);
+    if (s.pi && s.pi.found) parts.push(`Pi ${s.pi.count}`);
+    if (s.orca && s.orca.found) parts.push(s.orca.error ? `<span class="bad">Orca: ${esc(s.orca.error)}</span>` : `Orca ${s.orca.count} workspaces`);
+    $('#status').innerHTML = parts.map(p => `<span>${p}</span>`).join('');
+  }
+
+  function renderList() {
+    flat = [];
+    let html = '';
+    for (const repo of tree.repos) {
+      let groupsHtml = '', repoCount = 0, repoLive = 0;
+      for (const g of repo.groups) {
+        const items = g.items.filter(s => matches(s, repo, g));
+        if (!items.length) continue;
+        const gk = 'g:' + repo.key + '|' + g.name;
+        const gOpen = ui.query || !ui.collapsed[gk];
+        let rows = '';
+        for (const s of items) {
+          repoCount++; if (s.live) repoLive++;
+          if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
+          const eng = ENGINES.has(s.engine) ? s.engine : 'other';
+          const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
+          rows += `<button type="button" class="s" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
+            <span class="dot ${dot}"></span>
+            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${esc(label(s))}</span>
+              <span class="meta"><span class="eng ${eng}">${esc(s.engine)}</span>
+                ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
+                ${s.batch ? `<span>${s.batch} runs</span>` : ''}
+                ${s.needs_you ? '<span class="you">needs you</span>' : ''}</span></span>
+            <span class="ago">${ago(s.mtime)}</span></button>`;
+        }
+        groupsHtml += `<div class="${gOpen ? 'open' : ''}">
+          <button type="button" class="grp-h" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
+            ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
+            <span class="gname ${g.name ? '' : 'none'}">${esc(g.name || 'Ungrouped')}</span>
+            ${g.source === 'orca' ? '<span class="tag orca">Orca</span>' : ''}
+            <span>${items.length}</span></button>
+          <div class="items">${rows}</div></div>`;
+      }
+      if (!repoCount) continue;
+      const rOpen = ui.query || !ui.collapsed[repo.key];
+      html += `<div class="${rOpen ? 'open' : ''}">
+        <button type="button" class="repo-h" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
+          ${CHEV}${BRANCH}<span class="name">${esc(repo.name)}</span>
+          ${repoLive ? `<span class="livec"><span class="dot live"></span>${repoLive} live</span>` : ''}
+          <span class="cnt">${repoCount}</span></button>
+        <div class="groups">${groupsHtml}</div></div>`;
+    }
+    if (!html) html = `<div class="empty">${ui.query ? 'No sessions match “' + esc(ui.query) + '”.' : 'No sessions in this window.'}</div>`;
+    if (ui.showHidden && tree.hidden.length) {
+      html += `<div class="hiddenbox"><div class="h">Hidden by default</div>${tree.hidden.map(h => `<div class="r"><span>${esc(h.label)}</span><span>${h.count}</span></div>`).join('')}</div>`;
+    }
+    const list = $('#list'), top = list.scrollTop;
+    list.innerHTML = html;
+    list.scrollTop = top;
+    $('#hiddenTxt').textContent = `${tree.hidden_total} background runs hidden`;
+    $('#hiddenBtn').textContent = ui.showHidden ? 'Hide list' : 'Show';
+  }
+
+  function findSel() {
+    for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items)
+      if (s.key === ui.selected) return { s, repo, g };
+    return null;
+  }
+
+  function renderDetail(force) {
+    const main = $('#main');
+    const hit = findSel();
+    const key = hit ? hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview';
+    if (!force && main.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    if (!force && key === lastDetailKey && hit) { const a = main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
+    lastDetailKey = key;
+    if (!hit) { main.innerHTML = overview(); return; }
+    const { s, repo } = hit;
+    const groupChips = ['', ...repo.group_names].map(name => {
+      const isOrca = s.orca_workspace && name === s.orca_workspace && s.group_source !== 'manual';
+      return `<button type="button" class="chip ${isOrca ? 'orca' : ''}" data-assign="${esc(name)}" aria-pressed="${s.group === name}">${esc(name || 'Ungrouped')}</button>`;
+    }).join('');
+    const manualGroup = s.group && s.group_source === 'manual';
+    const status = s.needs_you ? 'Live, waiting on you' : (s.live ? 'Live, working' : 'Idle');
+    const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
+    main.innerHTML = `<div class="detail">
+      <div class="crumb">${esc(repo.name)} <span style="color:#4b5563">/</span> ${esc(s.group || 'Ungrouped')}${s.group_source === 'orca' ? ' <span class="tag orca">Orca workspace</span>' : ''}</div>
+      <label style="display:flex;flex-direction:column;gap:6px">
+        <span class="lbl">Nickname</span>
+        <input class="nick-in" id="nick" type="text" value="${esc(s.nick)}" placeholder="${esc(s.original)}" maxlength="120">
+      </label>
+      <div class="orig">Original title: ${esc(s.original)}</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <span class="lbl">Group in ${esc(repo.name)}</span>
+        <div class="chips">${groupChips}
+          <label><span class="sr">New group name</span><input class="newg" id="newg" type="text" placeholder="new group…" maxlength="60"></label>
+          <button type="button" class="link" id="addg">Add</button>
+          ${manualGroup ? `<button type="button" class="link" id="rng">Rename “${esc(s.group)}”</button><button type="button" class="link" id="rmg">Delete “${esc(s.group)}”</button>` : ''}
+        </div>
+        ${s.group_source === 'orca' ? '<div class="orig">Grouped automatically by its Orca workspace. Pick a group above to override.</div>' : ''}
+      </div>
+      <div class="facts">
+        <span class="k">Status</span><span class="v" style="display:flex;align-items:center;gap:6px"><span class="dot ${dot}"></span>${status}</span>
+        <span class="k">Engine</span><span class="v">${esc(s.engine)}${s.batch ? ` · ${s.batch} runs of the same prompt` : ''}</span>
+        <span class="k">Repo</span><span class="v mono">${esc(repo.path)}</span>
+        <span class="k">Working folder</span><span class="v mono">${esc(s.cwd)}</span>
+        ${s.branch ? `<span class="k">Branch</span><span class="v mono">${esc(s.branch)}</span>` : ''}
+        ${s.orca_workspace ? `<span class="k">Orca workspace</span><span class="v">${esc(s.orca_workspace)}</span>` : ''}
+        <span class="k">Last activity</span><span class="v" data-ago>${agoLong(s.mtime)}</span>
+        ${s.cost ? `<span class="k">Cost</span><span class="v">$${s.cost.toFixed(2)}</span>` : ''}
+        ${s.ccc_label ? `<span class="k">CCC shows it under</span><span class="v">${esc(s.ccc_label)}</span>` : ''}
+        ${s.file ? `<span class="k">Transcript</span><span class="v mono">${esc(s.file)}</span>` : ''}
+      </div>
+      ${s.batch ? `<div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Runs</span><div class="runs">${s.runs.map(r => `<a href="${esc(r.open_url)}" target="_blank" rel="noopener"><span class="dot ${r.live ? 'live' : ''}" style="margin-top:4px"></span><span style="flex:1;font-family:var(--mono)">${esc(r.sid.slice(0, 8))}</span><span>${esc(r.engine)}</span><span style="color:var(--dim)">${ago(r.mtime)}</span></a>`).join('')}</div></div>` : ''}
+      <div class="actions">
+        ${s.open_url ? `<a class="btn primary" href="${esc(s.open_url)}" target="_blank" rel="noopener">Open in CCC</a>` : ''}
+      </div>
+    </div>`;
+    wireDetail(s, repo);
+  }
+
+  function overview() {
+    const d = tree.diagnostics || {};
+    const res = Object.entries(d.resolution || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || '—';
+    const eng = Object.entries(d.engines || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div>${esc(k)}  ${v}</div>`).join('');
+    const unres = (d.unresolved || []).map(([p, c]) => `<div>${c}  ${esc(p)}</div>`).join('');
+    return `<div class="detail overview">
+      <h2>Overview</h2>
+      <p>Pick a session on the left. Drag a session onto a group header to file it. Keys: <span class="kbd">/</span> search, <span class="kbd">↑</span><span class="kbd">↓</span> move, <span class="kbd">Enter</span> open in CCC, <span class="kbd">r</span> rename.</p>
+      <div class="kv">
+        <div class="card"><div class="n">${tree.shown}</div><div class="d">sessions shown (${esc(tree.window)})</div></div>
+        <div class="card"><div class="n">${tree.hidden_total}</div><div class="d">background runs hidden</div></div>
+        <div class="card"><div class="n">${tree.repos.length}</div><div class="d">repos</div></div>
+      </div>
+      <div class="facts">
+        <span class="k">Repo detection</span><span class="v">${esc(res)}</span>
+        <span class="k">Engines</span><span class="v list">${eng || '—'}</span>
+        <span class="k">Unplaced folders</span><span class="v list">${unres || 'none'}</span>
+      </div></div>`;
+  }
+
+  function wireDetail(s, repo) {
+    const nick = $('#nick');
+    const saveNick = () => { if (nick.value.trim() !== (s.nick || '')) post('/api/nickname', { key: s.key, name: nick.value }); };
+    nick.addEventListener('keydown', e => { if (e.key === 'Enter') { nick.blur(); } if (e.key === 'Escape') { nick.value = s.nick || ''; nick.blur(); } });
+    nick.addEventListener('blur', saveNick);
+    document.querySelectorAll('[data-assign]').forEach(b => b.addEventListener('click', () =>
+      post('/api/assign', { key: s.key, repo: repo.key, group: b.dataset.assign })));
+    const newg = $('#newg');
+    const add = () => { const n = newg.value.trim(); if (n) post('/api/assign', { key: s.key, repo: repo.key, group: n }); };
+    $('#addg').addEventListener('click', add);
+    newg.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+    const rng = $('#rng'), rmg = $('#rmg');
+    if (rng) rng.addEventListener('click', () => {
+      const n = prompt('Rename group “' + s.group + '” to:', s.group);
+      if (n && n.trim() && n.trim() !== s.group) post('/api/group', { repo: repo.key, action: 'rename', name: s.group, new_name: n.trim() });
+    });
+    if (rmg) rmg.addEventListener('click', () => {
+      if (confirm('Delete group “' + s.group + '”? Its sessions move back to Ungrouped (or their Orca workspace).')) post('/api/group', { repo: repo.key, action: 'remove', name: s.group });
+    });
+  }
+
+  function render() { renderWin(); renderStatus(); renderList(); renderDetail(false); }
+
+  function select(key) {
+    ui.selected = key; store.set('selected', key);
+    renderList(); renderDetail(true);
+    const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+
+  // ---- events
+  $('#win').addEventListener('click', e => {
+    const b = e.target.closest('[data-win]'); if (!b) return;
+    ui.win = b.dataset.win; store.set('win', ui.win); renderWin(); refresh(true);
+  });
+  $('#q').addEventListener('input', e => { ui.query = e.target.value; renderList(); });
+  $('#hiddenBtn').addEventListener('click', () => { ui.showHidden = !ui.showHidden; renderList(); });
+  $('#list').addEventListener('click', e => {
+    const s = e.target.closest('.s');
+    if (s) return select(s.dataset.key);
+    const t = e.target.closest('[data-toggle]');
+    if (t) { const k = t.dataset.toggle; ui.collapsed[k] = !ui.collapsed[k]; store.set('collapsed', ui.collapsed); renderList(); }
+  });
+  $('#list').addEventListener('dblclick', e => {
+    const s = e.target.closest('.s'); if (!s) return;
+    select(s.dataset.key); const n = $('#nick'); if (n) { n.focus(); n.select(); }
+  });
+
+  // drag a session onto a group header (same repo) to file it
+  let dragKey = null, dragRepo = null;
+  $('#list').addEventListener('dragstart', e => {
+    const s = e.target.closest('.s'); if (!s) return;
+    dragKey = s.dataset.key; dragRepo = s.dataset.repo;
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragKey);
+  });
+  $('#list').addEventListener('dragover', e => {
+    const h = e.target.closest('[data-drop-repo]');
+    document.querySelectorAll('.grp-h.drop').forEach(x => x !== h && x.classList.remove('drop'));
+    if (h && dragKey && h.dataset.dropRepo === dragRepo) { e.preventDefault(); h.classList.add('drop'); }
+  });
+  $('#list').addEventListener('drop', e => {
+    const h = e.target.closest('[data-drop-repo]'); if (!h || !dragKey) return;
+    e.preventDefault(); h.classList.remove('drop');
+    if (h.dataset.dropRepo === dragRepo) post('/api/assign', { key: dragKey, repo: dragRepo, group: h.dataset.dropGroup });
+    dragKey = null;
+  });
+  $('#list').addEventListener('dragend', () => { dragKey = null; document.querySelectorAll('.grp-h.drop').forEach(x => x.classList.remove('drop')); });
+
+  document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (e.key === '/' && !typing) { e.preventDefault(); $('#q').focus(); return; }
+    if (e.key === 'Escape' && document.activeElement === $('#q')) { $('#q').value = ''; ui.query = ''; $('#q').blur(); renderList(); return; }
+    if (typing && document.activeElement !== $('#q')) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!flat.length) return;
+      e.preventDefault();
+      const i = flat.indexOf(ui.selected);
+      const n = e.key === 'ArrowDown' ? Math.min(flat.length - 1, i + 1) : Math.max(0, (i < 0 ? flat.length : i) - 1);
+      select(flat[n]);
+    } else if (e.key === 'Enter' && !typing) {
+      const hit = findSel(); if (hit && hit.s.open_url) window.open(hit.s.open_url, '_blank', 'noopener');
+    } else if (e.key === 'r' && !typing && !e.metaKey && !e.ctrlKey) {
+      const n = $('#nick'); if (n) { e.preventDefault(); n.focus(); n.select(); }
+    }
+  });
+
+  renderWin();
+  refresh(true);
+  setInterval(() => { if (!document.hidden) refresh(false); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(false); });
+})();
+</script>
+</body>
+</html>

@@ -45,3 +45,8 @@ Managed by `session-watchdog.sh` (auto-restart, rotation).
 
 - [standup-os-core](https://github.com/drrozen-med/standup-os-core) — AI agent system
 - [standup-os-api](https://github.com/drrozen-med/standup-os-api) — FastAPI backend
+
+## Tools
+
+- [`ccc-navigator/`](ccc-navigator/README.md): a Repo → Group → Session sidebar for Claude Command Center, with
+  nicknames, your own groups and Orca workspaces as groups. Run `python3 ccc-navigator/navigator.py`.
