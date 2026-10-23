@@ -63,6 +63,24 @@ input::placeholder{color:#7d8796}
 .s .wt{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis}
 .s .you{color:var(--accent);font-weight:600}
 .s .ago{color:var(--dim);font-size:11px;flex:none}
+.dots{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim);opacity:.45;cursor:pointer}
+.s:hover .dots,.s[aria-current="true"] .dots,.repo-h:hover .dots,.grp-h:hover .dots,.dots.on{opacity:1}
+.dots:hover,.dots.on{background:var(--line2);color:var(--text)}
+.pin{color:var(--accent);font-size:10px}
+#menu{position:fixed;z-index:50;min-width:210px;max-width:280px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.5);padding:4px;font-size:12.5px}
+#menu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text2);padding:6px 10px;border-radius:5px;cursor:pointer;font:inherit}
+#menu button:hover{background:var(--hover);color:#fff}
+#menu button.danger{color:#f08a8a}
+#menu .sep{height:1px;background:var(--line);margin:4px 2px}
+#menu .hd{padding:5px 10px 3px;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.6px}
+.s .eye{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim);opacity:0}
+.s:hover .eye,.s[aria-current="true"] .eye{opacity:1}
+.s .eye:hover{background:var(--line2);color:var(--text)}
+.s.ishidden{opacity:.5}.s.ishidden .eye{opacity:1;color:var(--accent)}
+.row1 .tools{display:flex;align-items:center;gap:8px}
+.iconbtn{background:transparent;border:1px solid var(--line2);border-radius:6px;width:28px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
+.iconbtn:hover{border-color:#46536a;color:var(--text)}
+.foot{flex-wrap:wrap;gap:6px 10px}
 .eng{padding:0 6px;border-radius:4px;line-height:16px;font-size:10.5px;font-weight:600;flex:none}
 .eng.claude{color:#f2a27c;background:#2b1d17}.eng.codex{color:#8fd6c4;background:#132622}
 .eng.devin{color:#b3bdfc;background:#1b1e33}.eng.pi{color:#f5a9cf;background:#2c1824}
@@ -142,7 +160,7 @@ input::placeholder{color:#7d8796}
   <div class="top">
     <div class="row1">
       <div class="brand">Sessions</div>
-      <div class="seg" id="win" role="group" aria-label="Time window"></div>
+      <div class="tools"><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
     </div>
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9aa4b2" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -156,6 +174,8 @@ input::placeholder{color:#7d8796}
   <div class="foot">
     <span id="hiddenTxt"></span>
     <button class="btn" id="hiddenBtn" type="button">Show</button>
+    <span id="mineTxt"></span>
+    <button class="btn" id="mineBtn" type="button">Show</button>
   </div>
 </nav>
 <main id="main"></main>
@@ -165,6 +185,10 @@ input::placeholder{color:#7d8796}
   const CHEV = '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9aa4b2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
   const CARET = '<svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
   const BRANCH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0b45a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+  const EYE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19C5.5 19 2 12 2 12a18 18 0 0 1 5-5.9M9.9 5.2A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-2.2 3.2M1 1l22 22"/></svg>';
+  const FOLD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>';
+  const DOTS = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
   const WINS = [['now', 'Now'], ['1d', '1d'], ['7d', '7d'], ['all', 'All']];
   const ENGINES = new Set(['claude', 'codex', 'devin', 'pi']);
 
@@ -178,6 +202,7 @@ input::placeholder{color:#7d8796}
     selected: store.get('selected', null),
     pane: store.get('pane', 'chat'),
     showHidden: false,
+    showMine: store.get('showMine', false),
     query: '',
   };
   let tree = null, flat = [], lastDetailKey = null, inflight = false;
@@ -197,7 +222,7 @@ input::placeholder{color:#7d8796}
     if (inflight && !force) return;
     inflight = true;
     try {
-      const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.win));
+      const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.win) + (ui.showMine ? '&hidden=1' : ''));
       tree = await r.json();
       render();
     } catch (e) {
@@ -240,21 +265,22 @@ input::placeholder{color:#7d8796}
           if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
           const eng = ENGINES.has(s.engine) ? s.engine : 'other';
           const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
-          rows += `<button type="button" class="s" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
+          rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
-            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${esc(label(s))}</span>
+            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Pinned">●</span> ' : ''}${esc(label(s))}</span>
               <span class="meta"><span class="eng ${eng}">${esc(s.engine)}</span>
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
                 ${s.needs_you ? '<span class="you">needs you</span>' : ''}</span></span>
-            <span class="ago">${ago(s.mtime)}</span></button>`;
+            ${s.hidden ? `<span class="eye" role="button" tabindex="0" data-hide="${esc(s.key)}" data-hidden="1" title="Unhide">${EYE_OFF}</span>` : ''}
+            <span class="ago">${ago(s.mtime)}</span><span class="dots" role="button" tabindex="0" data-menu="s" data-key="${esc(s.key)}" title="More actions" aria-label="More actions">${DOTS}</span></button>`;
         }
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
           <button type="button" class="grp-h" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
             <span class="gname ${g.name ? '' : 'none'}">${esc(g.name || 'Ungrouped')}</span>
             ${g.source === 'orca' ? '<span class="tag orca">Orca</span>' : ''}
-            <span>${items.length}</span></button>
+            <span class="cnt" style="margin-left:auto">${items.length}</span><span class="dots" role="button" tabindex="0" data-menu="g" data-repo="${esc(repo.key)}" data-group="${esc(g.name)}" title="Group actions" aria-label="Group actions">${DOTS}</span></button>
           <div class="items">${rows}</div></div>`;
       }
       if (!repoCount) continue;
@@ -263,7 +289,7 @@ input::placeholder{color:#7d8796}
         <button type="button" class="repo-h" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
           ${CHEV}${BRANCH}<span class="name">${esc(repo.name)}</span>
           ${repoLive ? `<span class="livec"><span class="dot live"></span>${repoLive} live</span>` : ''}
-          <span class="cnt">${repoCount}</span></button>
+          <span class="cnt">${repoCount}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
         <div class="groups">${groupsHtml}</div></div>`;
     }
     if (!html) html = `<div class="empty">${ui.query ? 'No sessions match “' + esc(ui.query) + '”.' : 'No sessions in this window.'}</div>`;
@@ -273,6 +299,10 @@ input::placeholder{color:#7d8796}
     const list = $('#list'), top = list.scrollTop;
     list.innerHTML = html;
     list.scrollTop = top;
+    $('#mineTxt').textContent = `${tree.user_hidden || 0} hidden by you`;
+    $('#mineBtn').textContent = ui.showMine ? 'Hide list' : 'Show';
+    $('#mineBtn').style.display = (tree.user_hidden || ui.showMine) ? '' : 'none';
+    $('#mineTxt').style.display = (tree.user_hidden || ui.showMine) ? '' : 'none';
     $('#hiddenTxt').textContent = `${tree.hidden_total} background runs hidden`;
     $('#hiddenBtn').textContent = ui.showHidden ? 'Hide list' : 'Show';
   }
@@ -487,7 +517,94 @@ input::placeholder{color:#7d8796}
   });
   $('#q').addEventListener('input', e => { ui.query = e.target.value; renderList(); });
   $('#hiddenBtn').addEventListener('click', () => { ui.showHidden = !ui.showHidden; renderList(); });
+  // ---- three-dots menus
+  const menuEl = document.createElement('div'); menuEl.id = 'menu'; menuEl.hidden = true; document.body.appendChild(menuEl);
+  let menuAnchor = null;
+  function closeMenu() { menuEl.hidden = true; if (menuAnchor) menuAnchor.classList.remove('on'); menuAnchor = null; }
+  function openMenu(anchor, items) {
+    closeMenu(); menuAnchor = anchor; anchor.classList.add('on');
+    menuEl.innerHTML = '';
+    for (const it of items) {
+      if (it === '-') { const d = document.createElement('div'); d.className = 'sep'; menuEl.appendChild(d); continue; }
+      if (it.hd) { const d = document.createElement('div'); d.className = 'hd'; d.textContent = it.hd; menuEl.appendChild(d); continue; }
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = it.label; if (it.danger) b.className = 'danger';
+      b.addEventListener('click', ev => { ev.stopPropagation(); closeMenu(); it.fn(); });
+      menuEl.appendChild(b);
+    }
+    menuEl.hidden = false;
+    const r = anchor.getBoundingClientRect(), mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
+    menuEl.style.left = Math.max(8, Math.min(r.right - mw + 4, innerWidth - mw - 8)) + 'px';
+    menuEl.style.top = (r.bottom + mh + 8 > innerHeight ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+  }
+  document.addEventListener('click', e => { if (!menuEl.contains(e.target)) closeMenu(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+  $('#list').addEventListener('scroll', closeMenu);
+  const DAY = 86400, nowS = () => Date.now() / 1000;
+  const hideKeys = (keys, hidden = true) => keys.length && post('/api/hide', { keys, hidden });
+  const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);
+  const older = (items, days) => items.filter(s => nowS() - s.mtime > days * DAY).map(s => s.key);
+  function collapseRepoGroups(repo, collapse, except) {
+    for (const g of repo.groups) { const k = 'g:' + repo.key + '|' + g.name; if (collapse && g.name !== except) ui.collapsed[k] = true; else delete ui.collapsed[k]; }
+    store.set('collapsed', ui.collapsed); renderList();
+  }
+  function menuFor(anchor) {
+    const kind = anchor.dataset.menu;
+    if (kind === 's') {
+      const hit = (() => { for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) if (s.key === anchor.dataset.key) return { s, repo }; })();
+      if (!hit) return [];
+      const { s } = hit;
+      return [
+        { label: 'Rename…', fn: () => { const n = prompt('Nickname for this session (empty clears it):', s.nick || ''); if (n !== null) post('/api/nickname', { key: s.key, name: n }); } },
+        { label: 'Move to group…', fn: () => { select(s.key); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
+        { label: s.pinned ? 'Unpin' : 'Pin to top of group', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
+        '-',
+        { label: s.hidden ? 'Unhide' : 'Hide', fn: () => hideKeys([s.key], !s.hidden) },
+        '-',
+        { label: 'Copy session ID', fn: () => navigator.clipboard && navigator.clipboard.writeText(s.sid || s.key) },
+        ...(s.open_url ? [{ label: 'Open in new tab', fn: () => window.open(s.open_url, '_blank', 'noopener') }] : []),
+      ];
+    }
+    const repo = tree.repos.find(r => r.key === anchor.dataset.repo); if (!repo) return [];
+    if (kind === 'g') {
+      const g = repo.groups.find(x => x.name === anchor.dataset.group); if (!g) return [];
+      const its = g.items, vis = its.filter(s => !s.hidden), hid = its.filter(s => s.hidden);
+      return [
+        { hd: (g.name || 'Ungrouped') + ' · ' + its.length },
+        { label: `Hide all ${vis.length} visible`, fn: () => hideKeys(vis.map(s => s.key)) },
+        { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
+        { label: 'Hide older than 1 day', fn: () => hideKeys(older(vis, 1)) },
+        ...(hid.length ? [{ label: `Unhide ${hid.length}`, fn: () => hideKeys(hid.map(s => s.key), false) }] : []),
+        '-',
+        { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
+        ...(g.source === 'manual' && g.name ? [{ label: 'Rename group…', fn: () => { const n = prompt('Rename group “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/group', { repo: repo.key, action: 'rename', name: g.name, new_name: n.trim() }); } }] : []),
+      ];
+    }
+    const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
+    return [
+      { hd: repo.name + ' · ' + all.length },
+      { label: 'Hide older than 1 day', fn: () => hideKeys(older(vis, 1)) },
+      { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
+      { label: 'Hide older than 30 days', fn: () => hideKeys(older(vis, 30)) },
+      { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
+      '-',
+      { label: 'Collapse all groups', fn: () => collapseRepoGroups(repo, true) },
+      { label: 'Expand all groups', fn: () => collapseRepoGroups(repo, false) },
+    ];
+  }
+  $('#foldAll').innerHTML = FOLD;
+  $('#foldAll').addEventListener('click', () => {
+    const keys = [];
+    for (const repo of tree.repos) { keys.push(repo.key); for (const g of repo.groups) keys.push('g:' + repo.key + '|' + g.name); }
+    const anyOpen = keys.some(k => !ui.collapsed[k]);
+    ui.collapsed = {}; if (anyOpen) for (const k of keys) ui.collapsed[k] = true;
+    store.set('collapsed', ui.collapsed); renderList();
+  });
+  $('#mineBtn').addEventListener('click', () => { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); refresh(true); });
   $('#list').addEventListener('click', e => {
+    const dots = e.target.closest('[data-menu]');
+    if (dots) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === dots) return closeMenu(); return openMenu(dots, menuFor(dots)); }
+    const eye = e.target.closest('[data-hide]');
+    if (eye) { e.stopPropagation(); return post('/api/hide', { key: eye.dataset.hide, hidden: eye.dataset.hidden !== '1' }); }
     const s = e.target.closest('.s');
     if (s) return select(s.dataset.key);
     const t = e.target.closest('[data-toggle]');

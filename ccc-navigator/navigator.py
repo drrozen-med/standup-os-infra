@@ -69,6 +69,8 @@ class State:
             "nicknames": dict(d.get("nicknames") or {}),
             "groups": {k: list(v) for k, v in (d.get("groups") or {}).items()},
             "assign": dict(d.get("assign") or {}),
+            "hidden": dict(d.get("hidden") or {}),
+            "pinned": dict(d.get("pinned") or {}),
         }
 
     def _save(self):
@@ -100,6 +102,23 @@ class State:
                     groups.append(group)
             else:
                 self.data["assign"].pop(key, None)
+            self._save()
+
+    def set_pinned(self, key, pinned):
+        with self.lock:
+            if pinned:
+                self.data["pinned"][key] = True
+            else:
+                self.data["pinned"].pop(key, None)
+            self._save()
+
+    def set_hidden(self, keys, hidden):
+        with self.lock:
+            for key in keys:
+                if hidden:
+                    self.data["hidden"][key] = True
+                else:
+                    self.data["hidden"].pop(key, None)
             self._save()
 
     def add_group(self, repo, name):
@@ -141,7 +160,7 @@ class CCCSource:
     """GET /api/conversations?all=1 from a running CCC, cached briefly."""
 
     def __init__(self, base, ttl=30.0, cache_file="~/.ccc-navigator/ccc-cache.json"):
-        self.base = base.rstrip("/")
+        self.base = base.rstrip("/").replace("//localhost", "//127.0.0.1")  # skip the ::1 attempt
         self.ttl = ttl
         self.cache_file = Path(cache_file).expanduser()
         self._lock = threading.Lock()
@@ -152,34 +171,47 @@ class CCCSource:
             self._good = (d["rows"], d["at"])
         except Exception:
             pass
+        self._busy = False
         self._val = ([], {"ok": False, "error": "not fetched yet"})
 
     def rows(self):
+        """Never blocks a request on CCC: serve the last value, refresh in the background."""
         with self._lock:
-            if time.time() - self._at < self.ttl:
-                return self._val
-            t0 = time.time()
+            stale = time.time() - self._at >= self.ttl and not self._busy
+            if stale:
+                self._busy = True
+        if stale:
+            th = threading.Thread(target=self._refresh, daemon=True)
+            th.start()
+            if self._at == 0.0:  # first ever call: wait briefly so the first paint has data
+                th.join(8)
+        return self._val
+
+    def _refresh(self):
+        t0 = time.time()
+        try:
+            url = self.base + "/api/conversations?all=1&compact=1"
+            with urllib.request.urlopen(url, timeout=6) as r:
+                d = json.load(r)
+            rows = d.get("conversations") or []
+            meta = {"ok": True, "ms": round((time.time() - t0) * 1000), "count": len(rows)}
+            self._good = (rows, time.time())
             try:
-                url = self.base + "/api/conversations?all=1&compact=1"
-                with urllib.request.urlopen(url, timeout=10) as r:
-                    d = json.load(r)
-                rows = d.get("conversations") or []
-                meta = {"ok": True, "ms": round((time.time() - t0) * 1000), "count": len(rows)}
-                self._good = (rows, time.time())
-                try:
-                    self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    self.cache_file.write_text(json.dumps({"rows": rows, "at": self._good[1]}))
-                except OSError:
-                    pass
-            except Exception as e:  # CCC down: serve the last good snapshot, then Pi/Orca data
-                if self._good:
-                    rows = self._good[0]
-                    meta = {"ok": False, "stale": True, "age": round(time.time() - self._good[1]),
-                            "count": len(rows), "error": str(e)}
-                else:
-                    rows, meta = [], {"ok": False, "error": str(e)}
-            self._val, self._at = (rows, meta), time.time()
-            return self._val
+                self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                self.cache_file.write_text(json.dumps({"rows": rows, "at": self._good[1]}))
+            except OSError:
+                pass
+        except Exception as e:  # CCC down: serve the last good snapshot, then Pi/Orca data
+            if self._good:
+                rows = self._good[0]
+                meta = {"ok": False, "stale": True, "age": round(time.time() - self._good[1]),
+                        "count": len(rows), "error": str(e)}
+            else:
+                rows, meta = [], {"ok": False, "error": str(e)}
+        with self._lock:
+            # a failed fetch costs the connect timeout, so back off: retry after 2x ttl
+            self._val, self._at = (rows, meta), time.time() + (0 if meta["ok"] else self.ttl)
+            self._busy = False
 
 
 _pi_cache: dict[str, tuple[tuple[float, int], dict | None]] = {}
@@ -391,10 +423,19 @@ def short(path):
 
 # ---------------------------------------------------------------- tree
 
-def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
+def is_running(r):
+    """CCC flags every resumable Devin CLI session as live (no process behind it).
+    Trust the flag for other engines, a real pid, or recent activity."""
+    if not r.get("is_live"):
+        return False
+    return (str(r.get("engine")) != "devin" or bool(r.get("spawn_pid"))
+            or time.time() - mtime_of(r) < 600)
+
+
+def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False):
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
-    inwin = [r for r in rows if mtime_of(r) >= cutoff or r.get("is_live")]
+    inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r)]
 
     hidden = collections.Counter()
     keep, origins = [], {}
@@ -468,7 +509,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
             "key": item_key, "sid": sid, "engine": engine,
             "original": clean(original, 140),
             "nick": nick.get(item_key) or "",
-            "live": bool(r.get("is_live")),
+            "live": is_running(r),
+            "pinned": bool(state.get("pinned", {}).get(item_key)),
             "needs_you": bool(r.get("needs_approval") or r.get("question_waiting")),
             "mtime": mtime_of(r),
             "cost": float(r.get("cost_usd") or 0),
@@ -496,17 +538,31 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
         item.update({
             "original": clean(head.get("first_message"), 140),
             "batch": len(runs),
-            "live": any(x.get("is_live") for x in runs),
+            "live": any(is_running(x) for x in runs),
             "cost": sum(float(x.get("cost_usd") or 0) for x in runs),
             "runs": [{"sid": str(x.get("session_id")), "engine": x.get("engine") or "",
-                      "mtime": mtime_of(x), "live": bool(x.get("is_live")),
+                      "mtime": mtime_of(x), "live": is_running(x),
                       "open_url": f"{ccc_base}/?ccc_popout=conversation&conv={urllib.parse.quote(str(x.get('session_id')))}"}
                      for x in runs[:50]],
         })
         repo["items"].append(item)
 
+    user_hidden = 0
+    for repo in repos.values():
+        kept = []
+        for it in repo["items"]:
+            if state.get("hidden", {}).get(it["key"]):
+                user_hidden += 1
+                if not show_hidden:
+                    continue
+                it["hidden"] = True
+            kept.append(it)
+        repo["items"] = kept
+
     out_repos = []
     for repo in repos.values():
+        if not repo["items"]:
+            continue
         manual = state["groups"].get(repo["key"], [])
         by_group = collections.defaultdict(list)
         for it in repo["items"]:
@@ -514,7 +570,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
         names = sorted((g for g in by_group if g != UNGROUPED), key=str.lower)
         groups = []
         for g in names + ([UNGROUPED] if UNGROUPED in by_group else []):
-            items = sorted(by_group[g], key=lambda x: -x["mtime"])
+            items = sorted(by_group[g], key=lambda x: (not x["pinned"], -x["mtime"]))
             srcs = {x["group_source"] for x in items}
             groups.append({"name": g, "source": "manual" if "manual" in srcs or g in manual
                            else ("orca" if "orca" in srcs else "none"), "items": items})
@@ -536,6 +592,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
         "in_window": len(inwin),
         "hidden": [{"label": k, "count": v} for k, v in hidden.most_common()],
         "hidden_total": sum(hidden.values()),
+        "user_hidden": user_hidden,
         "diagnostics": {
             "resolution": dict(method_ct),
             "unresolved": unresolved.most_common(20),
@@ -554,11 +611,12 @@ class App:
         self.ccc = CCCSource(args.ccc)
         self.state = State(Path(args.state).expanduser())
 
-    def tree(self, window):
+    def tree(self, window, show_hidden=False):
         rows, ccc_meta = self.ccc.rows()
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
-        t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base)
+        t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
+                       show_hidden=show_hidden)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
@@ -593,8 +651,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             return self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/api/tree":
-            w = urllib.parse.parse_qs(u.query).get("window", ["1d"])[0]
-            return self._send(200, self.app.tree(w if w in WINDOWS else "1d"))
+            q = urllib.parse.parse_qs(u.query)
+            w = q.get("window", ["1d"])[0]
+            return self._send(200, self.app.tree(w if w in WINDOWS else "1d", q.get("hidden", ["0"])[0] == "1"))
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -615,6 +674,11 @@ class Handler(BaseHTTPRequestHandler):
             st.set_nickname(str(body.get("key") or ""), body.get("name"))
         elif p == "/api/assign":
             st.assign(str(body.get("key") or ""), str(body.get("repo") or ""), body.get("group"))
+        elif p == "/api/pin":
+            st.set_pinned(str(body.get("key") or ""), bool(body.get("pinned", True)))
+        elif p == "/api/hide":
+            keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
+            st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)))
         elif p == "/api/group":
             repo, action = str(body.get("repo") or ""), body.get("action")
             if action == "add":
