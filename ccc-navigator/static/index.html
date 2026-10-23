@@ -72,6 +72,19 @@ input::placeholder{color:#7d8796}
 .hiddenbox .h{font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
 .hiddenbox .r{display:flex;justify-content:space-between;gap:12px;color:#c3cad4;font-size:12px}
 .foot{border-top:1px solid var(--line);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px}
+.chatbar{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line2);font-size:12px}
+.chatbar .ttl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:13px;cursor:text}
+.chatbar .ttl-in{min-width:220px;background:#0e131b;color:var(--text);border:1px solid var(--accent);border-radius:5px;padding:3px 7px;font:600 13px inherit}
+.chatbar .crumbs{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
+.chatbar .eng{font:600 10.5px var(--mono);color:var(--muted);border:1px solid var(--line2);border-radius:4px;padding:1px 5px}
+.frame{position:relative;flex:1;min-height:0;display:flex}
+.frame .ld{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;background:var(--bg,#0b0f15);color:var(--muted);font-size:12px;pointer-events:none;transition:opacity .2s}
+.frame.ready .ld{opacity:0}
+.frame .ld i{width:14px;height:14px;border:2px solid var(--line2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.chatbar .btn{text-decoration:none;color:inherit}
+#main.chat{display:flex;flex-direction:column;overflow:hidden}
+#main.chat iframe{flex:1;width:100%;border:0;background:transparent}
 .btn{background:transparent;border:1px solid var(--line2);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
 .btn:hover{border-color:#46536a}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1205;font-weight:700;text-decoration:none;padding:10px 16px;border-radius:8px}
@@ -84,10 +97,26 @@ input::placeholder{color:#7d8796}
 .nick-in{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:10px 12px;color:var(--text);font-size:20px;font-weight:700;outline:none}
 .nick-in:focus{border-color:var(--accent)}
 .orig{color:var(--dim);font-size:12px}
-.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.chip{border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;font-weight:600;border:1px solid var(--line2);background:transparent;color:#c3cad4}
-.chip[aria-pressed=true]{border-color:var(--accent);background:#3a2c14;color:var(--accent2)}
-.chip.orca{border-style:dashed}
+.grow{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.gsel{position:relative;flex:none;max-width:100%}
+.gsel-btn{display:flex;align-items:center;gap:8px;max-width:300px;background:var(--bg);border:1px solid var(--line2);border-radius:999px;padding:6px 12px;cursor:pointer;color:#c3cad4;font-size:12px;font-weight:600}
+.gsel-btn:hover{border-color:#46536a}
+.gsel.open>.gsel-btn{border-color:var(--accent);background:#3a2c14;color:var(--accent2)}
+.gsel-btn .gname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gsel-btn .caret{flex:none;transition:transform .12s}
+.gsel.open>.gsel-btn .caret{transform:rotate(90deg)}
+.gpop{position:absolute;z-index:20;top:calc(100% + 6px);left:0;width:270px;max-width:min(270px,calc(100vw - 64px));background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.55);padding:8px;display:flex;flex-direction:column;gap:8px}
+.gpop[hidden]{display:none}
+.gpop-in{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:6px;padding:6px 9px;color:var(--text);font-size:12px;outline:none}
+.gpop-in:focus{border-color:var(--accent)}
+.gpop-list{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;min-height:0}
+.gpop-list::-webkit-scrollbar{width:8px}.gpop-list::-webkit-scrollbar-thumb{background:#2a3340;border-radius:4px}
+.gpop-i{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;border:0;border-radius:6px;padding:5px 8px;cursor:pointer;color:#c3cad4;font-size:12px}
+.gpop-i:hover,.gpop-i:focus-visible{background:var(--hover)}
+.gpop-i[aria-selected=true]{background:#3a2c14;color:var(--accent2)}
+.gpop-i .gname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpop-i .tick{flex:none;color:var(--accent);font-weight:700}
+.gpop-empty{padding:8px;color:var(--muted);font-size:12px}
 .newg{width:130px;background:var(--bg);border:1px dashed var(--line2);border-radius:999px;padding:6px 12px;color:var(--text);font-size:12px;outline:none}
 .link{background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:6px 4px}
 .facts{display:grid;grid-template-columns:150px minmax(0,1fr);gap:10px 16px;padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
@@ -134,6 +163,7 @@ input::placeholder{color:#7d8796}
 <script>
 (() => {
   const CHEV = '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9aa4b2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+  const CARET = '<svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
   const BRANCH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f0b45a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
   const WINS = [['now', 'Now'], ['1d', '1d'], ['7d', '7d'], ['all', 'All']];
   const ENGINES = new Set(['claude', 'codex', 'devin', 'pi']);
@@ -146,6 +176,7 @@ input::placeholder{color:#7d8796}
     win: store.get('win', '1d'),
     collapsed: store.get('collapsed', {}),
     selected: store.get('selected', null),
+    pane: store.get('pane', 'chat'),
     showHidden: false,
     query: '',
   };
@@ -187,7 +218,7 @@ input::placeholder{color:#7d8796}
   function renderStatus() {
     const s = tree.sources || {};
     const parts = [];
-    parts.push(s.ccc && s.ccc.ok ? `CCC ${s.ccc.count} sessions · ${s.ccc.ms} ms` : `<span class="bad">CCC not reachable at ${esc(s.ccc && s.ccc.base)}</span>`);
+    parts.push(s.ccc && s.ccc.ok ? `CCC ${s.ccc.count} sessions · ${s.ccc.ms} ms` : (s.ccc && s.ccc.stale ? `<span class="bad">CCC offline · cached ${Math.round(s.ccc.age/60)}m ago</span>` : `<span class="bad">CCC not reachable at ${esc(s.ccc && s.ccc.base)}</span>`));
     if (s.pi && s.pi.found) parts.push(`Pi ${s.pi.count}`);
     if (s.orca && s.orca.found) parts.push(s.orca.error ? `<span class="bad">Orca: ${esc(s.orca.error)}</span>` : `Orca ${s.orca.count} workspaces`);
     $('#status').innerHTML = parts.map(p => `<span>${p}</span>`).join('');
@@ -255,16 +286,47 @@ input::placeholder{color:#7d8796}
   function renderDetail(force) {
     const main = $('#main');
     const hit = findSel();
-    const key = hit ? hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview';
+    const chat = !!(hit && ui.pane === 'chat' && hit.s.open_url && !hit.s.batch);
+    main.classList.toggle('chat', chat);
+    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview';
     if (!force && main.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
     if (!force && key === lastDetailKey && hit) { const a = main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
     lastDetailKey = key;
     if (!hit) { main.innerHTML = overview(); return; }
     const { s, repo } = hit;
-    const groupChips = ['', ...repo.group_names].map(name => {
-      const isOrca = s.orca_workspace && name === s.orca_workspace && s.group_source !== 'manual';
-      return `<button type="button" class="chip ${isOrca ? 'orca' : ''}" data-assign="${esc(name)}" aria-pressed="${s.group === name}">${esc(name || 'Ungrouped')}</button>`;
-    }).join('');
+    if (chat) {
+      const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
+      const bar = `<div class="chatbar"><span class="dot ${dotc}"></span><span class="ttl" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</span><span class="crumbs">${esc(repo.name)} › ${esc(s.group || 'Ungrouped')}</span><span class="eng">${esc(s.engine)}</span><button type="button" class="btn" id="toDetails">Details</button><a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener">New tab</a></div>`;
+      const fr = main.querySelector('iframe');
+      if (fr && fr.dataset.src === s.open_url) { main.querySelector('.chatbar').outerHTML = bar; }
+      else {
+        main.innerHTML = bar + `<div class="frame"><iframe data-src="${esc(s.open_url)}" src="${esc(s.open_url)}" title="Conversation"></iframe><div class="ld"><i></i>Loading conversation…</div></div>`;
+        const f = main.querySelector('iframe'), box = main.querySelector('.frame');
+        f.addEventListener('load', () => box.classList.add('ready'));
+        setTimeout(() => box.classList.add('ready'), 20000);
+      }
+      $('#toDetails').onclick = () => { ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); };
+      $('#ttl').ondblclick = (e) => {
+        const el = e.currentTarget, inp = document.createElement('input');
+        inp.className = 'ttl-in'; inp.value = s.nick || ''; inp.placeholder = s.original; inp.maxLength = 120;
+        el.replaceWith(inp); inp.focus(); inp.select();
+        let done = false;
+        const finish = (save) => { if (done) return; done = true; if (save && inp.value.trim() !== (s.nick || '')) post('/api/nickname', { key: s.key, name: inp.value }); else renderDetail(true); };
+        inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
+        inp.addEventListener('blur', () => finish(true));
+      };
+      return;
+    }
+    const gsel = `<div class="gsel" id="gsel">
+          <button type="button" class="gsel-btn" id="gselBtn" aria-haspopup="listbox" aria-expanded="false">
+            <span class="gname">${esc(s.group || 'Ungrouped')}</span>${s.group_source === 'orca' ? '<span class="tag orca">Orca workspace</span>' : ''}${CARET}
+          </button>
+          <div class="gpop" id="gpop" hidden>
+            <label><span class="sr">Filter groups</span><input class="gpop-in" id="gpopIn" type="text" placeholder="Filter groups…" autocomplete="off"></label>
+            <div class="gpop-list" id="gpopList" role="listbox" aria-label="Groups in ${esc(repo.name)}"></div>
+            <div class="gpop-empty" id="gpopEmpty" hidden>No matching group</div>
+          </div>
+        </div>`;
     const manualGroup = s.group && s.group_source === 'manual';
     const status = s.needs_you ? 'Live, waiting on you' : (s.live ? 'Live, working' : 'Idle');
     const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
@@ -277,12 +339,12 @@ input::placeholder{color:#7d8796}
       <div class="orig">Original title: ${esc(s.original)}</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <span class="lbl">Group in ${esc(repo.name)}</span>
-        <div class="chips">${groupChips}
+        <div class="grow">${gsel}
           <label><span class="sr">New group name</span><input class="newg" id="newg" type="text" placeholder="new group…" maxlength="60"></label>
           <button type="button" class="link" id="addg">Add</button>
           ${manualGroup ? `<button type="button" class="link" id="rng">Rename “${esc(s.group)}”</button><button type="button" class="link" id="rmg">Delete “${esc(s.group)}”</button>` : ''}
         </div>
-        ${s.group_source === 'orca' ? '<div class="orig">Grouped automatically by its Orca workspace. Pick a group above to override.</div>' : ''}
+        ${s.group_source === 'orca' ? '<div class="orig">Grouped automatically by its Orca workspace. Pick a different group to override.</div>' : ''}
       </div>
       <div class="facts">
         <span class="k">Status</span><span class="v" style="display:flex;align-items:center;gap:6px"><span class="dot ${dot}"></span>${status}</span>
@@ -298,10 +360,12 @@ input::placeholder{color:#7d8796}
       </div>
       ${s.batch ? `<div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Runs</span><div class="runs">${s.runs.map(r => `<a href="${esc(r.open_url)}" target="_blank" rel="noopener"><span class="dot ${r.live ? 'live' : ''}" style="margin-top:4px"></span><span style="flex:1;font-family:var(--mono)">${esc(r.sid.slice(0, 8))}</span><span>${esc(r.engine)}</span><span style="color:var(--dim)">${ago(r.mtime)}</span></a>`).join('')}</div></div>` : ''}
       <div class="actions">
-        ${s.open_url ? `<a class="btn primary" href="${esc(s.open_url)}" target="_blank" rel="noopener">Open in CCC</a>` : ''}
+        ${s.open_url && !s.batch ? `<button type="button" class="btn primary" id="toChat">Show conversation</button>` : ''}
+        ${s.open_url ? `<a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">Open in CCC</a>` : ''}
       </div>
     </div>`;
     wireDetail(s, repo);
+    const tc = $('#toChat'); if (tc) tc.onclick = () => { ui.pane = 'chat'; store.set('pane', 'chat'); renderDetail(true); };
   }
 
   function overview() {
@@ -311,7 +375,7 @@ input::placeholder{color:#7d8796}
     const unres = (d.unresolved || []).map(([p, c]) => `<div>${c}  ${esc(p)}</div>`).join('');
     return `<div class="detail overview">
       <h2>Overview</h2>
-      <p>Pick a session on the left. Drag a session onto a group header to file it. Keys: <span class="kbd">/</span> search, <span class="kbd">↑</span><span class="kbd">↓</span> move, <span class="kbd">Enter</span> open in CCC, <span class="kbd">r</span> rename.</p>
+      <p>Pick a session on the left. Drag a session onto a group header to file it. Keys: <span class="kbd">/</span> search, <span class="kbd">↑</span><span class="kbd">↓</span> move, <span class="kbd">Enter</span> show conversation, <span class="kbd">r</span> rename.</p>
       <div class="kv">
         <div class="card"><div class="n">${tree.shown}</div><div class="d">sessions shown (${esc(tree.window)})</div></div>
         <div class="card"><div class="n">${tree.hidden_total}</div><div class="d">background runs hidden</div></div>
@@ -329,8 +393,7 @@ input::placeholder{color:#7d8796}
     const saveNick = () => { if (nick.value.trim() !== (s.nick || '')) post('/api/nickname', { key: s.key, name: nick.value }); };
     nick.addEventListener('keydown', e => { if (e.key === 'Enter') { nick.blur(); } if (e.key === 'Escape') { nick.value = s.nick || ''; nick.blur(); } });
     nick.addEventListener('blur', saveNick);
-    document.querySelectorAll('[data-assign]').forEach(b => b.addEventListener('click', () =>
-      post('/api/assign', { key: s.key, repo: repo.key, group: b.dataset.assign })));
+    wireGroupPicker(s, repo);
     const newg = $('#newg');
     const add = () => { const n = newg.value.trim(); if (n) post('/api/assign', { key: s.key, repo: repo.key, group: n }); };
     $('#addg').addEventListener('click', add);
@@ -343,6 +406,69 @@ input::placeholder{color:#7d8796}
     if (rmg) rmg.addEventListener('click', () => {
       if (confirm('Delete group “' + s.group + '”? Its sessions move back to Ungrouped (or their Orca workspace).')) post('/api/group', { repo: repo.key, action: 'remove', name: s.group });
     });
+  }
+
+  // compact group picker: one button + popover with a filterable, scrollable list
+  function wireGroupPicker(s, repo) {
+    const wrap = $('#gsel'), btn = $('#gselBtn'), pop = $('#gpop'), input = $('#gpopIn');
+    const list = $('#gpopList'), empty = $('#gpopEmpty');
+    if (!wrap) return;
+    const names = ['', ...repo.group_names];
+    const orcaAuto = (s.orca_workspace && s.group_source !== 'manual') ? s.orca_workspace : '';
+
+    const match = (name, q) => !q || (name || 'ungrouped').toLowerCase().includes(q);
+    const paint = () => {
+      const q = input.value.trim().toLowerCase();
+      const vis = names.filter(n => match(n, q));
+      list.innerHTML = vis.map(name => {
+        const on = (s.group || '') === name;
+        return `<button type="button" class="gpop-i" role="option" data-assign="${esc(name)}" aria-selected="${on}"><span class="gname">${esc(name || 'Ungrouped')}</span>${orcaAuto && orcaAuto === name ? '<span class="tag orca">Orca</span>' : ''}${on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
+      }).join('');
+      empty.hidden = vis.length > 0;
+      const cur = list.querySelector('[aria-selected=true]');
+      if (cur) list.scrollTop = cur.offsetTop - list.clientHeight / 2 + cur.clientHeight / 2;
+    };
+    const setOpen = (on) => {
+      wrap.classList.toggle('open', on);
+      pop.hidden = !on;
+      btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (on) { input.value = ''; paint(); input.focus(); }
+    };
+    const choose = (name) => { setOpen(false); post('/api/assign', { key: s.key, repo: repo.key, group: name }); };
+
+    btn.addEventListener('click', () => setOpen(pop.hidden));
+    input.addEventListener('input', paint);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const vis = [...list.querySelectorAll('.gpop-i')];
+        if (!vis.length) return;
+        e.preventDefault();
+        const i = vis.indexOf(document.activeElement);
+        const n = e.key === 'ArrowDown' ? Math.min(vis.length - 1, i + 1) : Math.max(0, (i < 0 ? vis.length : i) - 1);
+        vis[n].focus();
+      } else if (e.key === 'Enter') {
+        const first = list.querySelector('.gpop-i');
+        if (first) { e.preventDefault(); choose(first.dataset.assign); }
+      }
+    });
+    list.addEventListener('click', e => {
+      const b = e.target.closest('[data-assign]');
+      if (b) choose(b.dataset.assign);
+    });
+
+    const down = (e) => {
+      if (!wrap.isConnected) { document.removeEventListener('mousedown', down, true); return; }
+      if (pop.hidden || wrap.contains(e.target)) return;
+      setOpen(false);
+    };
+    const key = (e) => {
+      if (!wrap.isConnected) { document.removeEventListener('keydown', key, true); return; }
+      if (e.key !== 'Escape' || pop.hidden) return;
+      e.preventDefault(); e.stopPropagation();
+      setOpen(false); btn.focus();
+    };
+    document.addEventListener('mousedown', down, true);
+    document.addEventListener('keydown', key, true);
   }
 
   function render() { renderWin(); renderStatus(); renderList(); renderDetail(false); }
@@ -404,7 +530,7 @@ input::placeholder{color:#7d8796}
       const n = e.key === 'ArrowDown' ? Math.min(flat.length - 1, i + 1) : Math.max(0, (i < 0 ? flat.length : i) - 1);
       select(flat[n]);
     } else if (e.key === 'Enter' && !typing) {
-      const hit = findSel(); if (hit && hit.s.open_url) window.open(hit.s.open_url, '_blank', 'noopener');
+      const hit = findSel(); if (hit && hit.s.open_url) { ui.pane = 'chat'; store.set('pane', 'chat'); renderDetail(true); }
     } else if (e.key === 'r' && !typing && !e.metaKey && !e.ctrlKey) {
       const n = $('#nick'); if (n) { e.preventDefault(); n.focus(); n.select(); }
     }
@@ -412,7 +538,7 @@ input::placeholder{color:#7d8796}
 
   renderWin();
   refresh(true);
-  setInterval(() => { if (!document.hidden) refresh(false); }, 5000);
+  setInterval(() => { if (!document.hidden) refresh(false); }, 10000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(false); });
 })();
 </script>

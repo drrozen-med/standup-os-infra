@@ -169,6 +169,40 @@ class Tree(unittest.TestCase):
         self.assertEqual(items["abc"]["open_url"], "http://ccc/?ccc_popout=conversation&conv=abc")
         self.assertEqual(items["p1"]["open_url"], "")
 
+    def test_claude_scratch_workspaces_fold_into_one_repo(self):
+        root = f"{navigator.HOME}/Library/Application Support/Claude/scratch-workspaces"
+        rows = [
+            row("1", f"{root}/-Users-tu-Library-Application-Support-Qux",
+                "Draft the launch note for this project"),
+            row("2", f"{root}/-Users-tu-projects-beta/src", "Another scratch session entirely"),
+            row("3", f"{root}/-Users-tu-Library-Application-Support-Qux/nested",
+                "Working one level deeper in the workspace"),
+        ]
+        t = self.build(rows)
+        self.assertEqual(len(t["repos"]), 1)  # three folders, one repo
+        repo = t["repos"][0]
+        self.assertEqual(repo["key"], "folder:claude-scratch")
+        self.assertEqual(repo["name"], "Claude scratch")
+        self.assertEqual(repo["path"], "~/Library/Application Support/Claude/scratch-workspaces")
+        items = [s for g in repo["groups"] for s in g["items"]]
+        self.assertEqual(sorted(s["sid"] for s in items), ["1", "2", "3"])
+        self.assertEqual(t["diagnostics"]["resolution"]["claude-scratch"], 3)
+
+    def test_unresolved_folder_named_by_last_path_component(self):
+        rows = [
+            row("1", "/Users/tu/Notes/quarterly-review", "Summarise the quarter for me",
+                folder_label="-Users-tu-Library-Appli-aaaaa-bbbbb"),
+            row("2", "/Users/tu/Notes/deep-dive/", "Trailing slash should not leak in"),
+            row("3", "", "Session with no folder at all"),
+        ]
+        t = self.build(rows)
+        repos = {r["key"]: r for r in t["repos"]}
+        self.assertEqual(sorted(repos), ["folder:deep-dive", "folder:quarterly-review", "folder:unknown"])
+        self.assertEqual(repos["folder:quarterly-review"]["name"], "quarterly-review")
+        self.assertEqual(repos["folder:deep-dive"]["name"], "deep-dive")
+        self.assertEqual(repos["folder:unknown"]["name"], "unknown")
+        self.assertTrue(all("-Users-tu-Library" not in r["name"] for r in repos.values()))
+
 
 class StateFile(unittest.TestCase):
     def test_roundtrip_and_group_ops(self):

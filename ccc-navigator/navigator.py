@@ -37,6 +37,12 @@ HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
 WINDOWS = {"now": 3600, "1d": 86400, "7d": 7 * 86400, "all": None}
 UNGROUPED = ""
+# Claude desktop throws away each scratch workspace in its own folder, named after
+# the project it was opened for with the slashes flattened to dashes. None of them
+# is a repo, so they all fold into this single pseudo-repo.
+CLAUDE_SCRATCH_MARKER = "Application Support/Claude/scratch-workspaces"
+CLAUDE_SCRATCH_KEY = "folder:claude-scratch"
+CLAUDE_SCRATCH_NAME = "Claude scratch"
 
 
 # ---------------------------------------------------------------- state
@@ -134,11 +140,18 @@ class State:
 class CCCSource:
     """GET /api/conversations?all=1 from a running CCC, cached briefly."""
 
-    def __init__(self, base, ttl=4.0):
+    def __init__(self, base, ttl=30.0, cache_file="~/.ccc-navigator/ccc-cache.json"):
         self.base = base.rstrip("/")
         self.ttl = ttl
+        self.cache_file = Path(cache_file).expanduser()
         self._lock = threading.Lock()
         self._at = 0.0
+        self._good = None  # (rows, fetched_at) from the last successful fetch
+        try:
+            d = json.loads(self.cache_file.read_text())
+            self._good = (d["rows"], d["at"])
+        except Exception:
+            pass
         self._val = ([], {"ok": False, "error": "not fetched yet"})
 
     def rows(self):
@@ -148,12 +161,23 @@ class CCCSource:
             t0 = time.time()
             try:
                 url = self.base + "/api/conversations?all=1&compact=1"
-                with urllib.request.urlopen(url, timeout=60) as r:
+                with urllib.request.urlopen(url, timeout=10) as r:
                     d = json.load(r)
                 rows = d.get("conversations") or []
                 meta = {"ok": True, "ms": round((time.time() - t0) * 1000), "count": len(rows)}
-            except Exception as e:  # CCC down: keep serving Pi/Orca data
-                rows, meta = [], {"ok": False, "error": str(e)}
+                self._good = (rows, time.time())
+                try:
+                    self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                    self.cache_file.write_text(json.dumps({"rows": rows, "at": self._good[1]}))
+                except OSError:
+                    pass
+            except Exception as e:  # CCC down: serve the last good snapshot, then Pi/Orca data
+                if self._good:
+                    rows = self._good[0]
+                    meta = {"ok": False, "stale": True, "age": round(time.time() - self._good[1]),
+                            "count": len(rows), "error": str(e)}
+                else:
+                    rows, meta = [], {"ok": False, "error": str(e)}
             self._val, self._at = (rows, meta), time.time()
             return self._val
 
@@ -282,6 +306,18 @@ def _resolve_pattern(path):
     return None
 
 
+def claude_scratch_root(path):
+    """Scratch-workspace root for a cwd, or None if it isn't one.
+
+    A Claude desktop scratch workspace is
+    <home>/Library/Application Support/Claude/scratch-workspaces/<dash-mangled
+    name>, one folder per session and never a git repo. Return the root they
+    share so callers can group them under a single name."""
+    path = str(path or "")
+    i = path.find(CLAUDE_SCRATCH_MARKER)
+    return None if i < 0 else (path[:i] + CLAUDE_SCRATCH_MARKER).rstrip("/")
+
+
 # ---------------------------------------------------------------- classification
 
 _origin_cache: dict[str, str | None] = {}
@@ -390,19 +426,25 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None):
 
     def place(r):
         cwd = r.get("session_cwd") or r.get("folder_path") or ""
+        scratch = claude_scratch_root(cwd)
         ws = orca.workspace_for(orca_ws, cwd, r.get("git_branch") or r.get("branch") or "")
         main, method, wt = resolve_repo(cwd)
-        if not main and ws and ws.get("repo_path"):
+        if scratch:
+            main, method, wt = CLAUDE_SCRATCH_KEY, "claude-scratch", None
+        elif not main and ws and ws.get("repo_path"):
             main, method, wt = ws["repo_path"], "orca", Path(ws["path"]).name
         if not main and str(r.get("engine")) == "devin":
             label = r.get("folder_label") or r.get("folder_label_chip") or "Devin"
             main, method = "devin:" + label, "devin"
         method_ct[method] += 1
-        if main:
+        if main == CLAUDE_SCRATCH_KEY:
+            key, name, path = CLAUDE_SCRATCH_KEY, CLAUDE_SCRATCH_NAME, short(scratch)
+        elif main:
             key, name, path = main, (main[6:] if main.startswith("devin:") else Path(main).name), short(main)
         else:
             unresolved[short(cwd) or "(no folder)"] += 1
-            label = r.get("folder_label") or Path(cwd).name or "unknown"
+            # last path component: CCC's folder_label is often a dash-mangled path
+            label = Path(cwd).name or r.get("folder_label") or "unknown"
             key, name, path = "folder:" + label, label, short(cwd)
         repo = repos.setdefault(key, {"key": key, "name": name, "path": path, "items": []})
         return repo, cwd, wt, ws
