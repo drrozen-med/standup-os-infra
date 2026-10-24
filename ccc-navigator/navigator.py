@@ -28,6 +28,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -71,6 +72,7 @@ class State:
             "assign": dict(d.get("assign") or {}),
             "hidden": dict(d.get("hidden") or {}),
             "pinned": dict(d.get("pinned") or {}),
+            "icons": dict(d.get("icons") or {}),
         }
 
     def _save(self):
@@ -102,6 +104,15 @@ class State:
                     groups.append(group)
             else:
                 self.data["assign"].pop(key, None)
+            self._save()
+
+    def set_icon(self, key, icon):
+        with self.lock:
+            icon = (icon or "").strip()[:8]
+            if icon:
+                self.data["icons"][key] = icon
+            else:
+                self.data["icons"].pop(key, None)
             self._save()
 
     def set_pinned(self, key, pinned):
@@ -593,6 +604,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         "hidden": [{"label": k, "count": v} for k, v in hidden.most_common()],
         "hidden_total": sum(hidden.values()),
         "user_hidden": user_hidden,
+        "icons": state.get("icons", {}),
         "diagnostics": {
             "resolution": dict(method_ct),
             "unresolved": unresolved.most_common(20),
@@ -644,12 +656,66 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    NAV_POST = {"/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon"}
+    HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+           "trailers", "transfer-encoding", "upgrade"}
+
+    def _proxy(self):
+        """Same-origin passthrough to CCC so its conversation view can be themed.
+        Streams (SSE) chunk by chunk; the popout page gets our skin injected."""
+        base = urllib.parse.urlparse(self.app.ccc.base)
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n else None
+        hdrs = {k: v for k, v in self.headers.items()
+                if k.lower() not in ("host", "connection", "accept-encoding", "origin", "referer", "content-length")}
+        hdrs["Host"] = base.netloc
+        hdrs["Accept-Encoding"] = "identity"
+        conn = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=300)
+        try:
+            conn.request(self.command, self.path, body=body, headers=hdrs)
+            resp = conn.getresponse()
+        except Exception as e:
+            return self._send(502, {"error": "CCC unreachable: %s" % e})
+        page = "ccc_popout" in self.path and (resp.getheader("Content-Type") or "").startswith("text/html")
+        try:
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                if k.lower() in self.HOP or (page and k.lower() == "content-length"):
+                    continue
+                self.send_header(k, v)
+            if page:
+                html = resp.read().decode("utf-8", "replace")
+                inj = '<link rel="stylesheet" href="/__nav/skin.css">'
+                html = html.replace("</head>", inj + "</head>", 1) if "</head>" in html else inj + html
+                data = html.encode()
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.end_headers()
+                while True:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            conn.close()
+
+    do_PUT = do_DELETE = do_PATCH = lambda self: self._proxy()
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
         u = urllib.parse.urlparse(self.path)
-        if u.path in ("/", "/index.html"):
+        if u.path == "/__nav/skin.css":
+            return self._send(200, (HERE / "static" / "ccc-skin.css").read_bytes(), "text/css; charset=utf-8")
+        if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
             return self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path != "/api/tree":
+            return self._proxy()
         if u.path == "/api/tree":
             q = urllib.parse.parse_qs(u.query)
             w = q.get("window", ["1d"])[0]
@@ -662,6 +728,8 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin and urllib.parse.urlparse(origin).hostname not in ("127.0.0.1", "localhost", "::1"):
             return self._send(403, {"error": "cross-origin"})
+        if urllib.parse.urlparse(self.path).path not in self.NAV_POST:
+            return self._proxy()
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             return self._send(415, {"error": "json only"})
         try:
@@ -674,6 +742,8 @@ class Handler(BaseHTTPRequestHandler):
             st.set_nickname(str(body.get("key") or ""), body.get("name"))
         elif p == "/api/assign":
             st.assign(str(body.get("key") or ""), str(body.get("repo") or ""), body.get("group"))
+        elif p == "/api/icon":
+            st.set_icon(str(body.get("key") or ""), body.get("icon"))
         elif p == "/api/pin":
             st.set_pinned(str(body.get("key") or ""), bool(body.get("pinned", True)))
         elif p == "/api/hide":

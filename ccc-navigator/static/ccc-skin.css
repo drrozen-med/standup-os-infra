@@ -1,0 +1,140 @@
+/* Midnight Indigo skin for CCC's conversation view (injected by the navigator proxy).
+   Same tokens as the navigator shell; CCC picks light/dark via [data-theme]. */
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root, :root[data-theme="dark"] {
+  --bg: oklch(0.13 0.025 270);
+  --surface: oklch(0.165 0.035 274);
+  --surface-2: oklch(0.215 0.035 273);
+  --border: oklch(1 0 0 / 11%);
+  --text: oklch(0.96 0.006 250);
+  --text-muted: oklch(0.72 0.02 260);
+  --text-secondary: oklch(0.72 0.02 260);
+  --accent: oklch(0.68 0.2 274);
+  --accent-contrast: oklch(0.99 0.005 250);
+  --cyan: oklch(0.74 0.12 240);
+  --green: oklch(0.74 0.16 155);
+  --orange: oklch(0.85 0.17 86);
+  --red: oklch(0.72 0.16 28);
+  --purple: oklch(0.76 0.12 285);
+  --cb-bg: oklch(0.1 0.025 272);
+  --cb-head-bg: oklch(1 0 0 / 4%);
+  --cb-border: oklch(1 0 0 / 10%);
+  --cb-text: oklch(0.9 0.01 255);
+  --cb-muted: oklch(0.7 0.02 260);
+  --nav-primary: oklch(0.58 0.22 274);
+  --nav-primary-soft: oklch(0.58 0.22 274 / 18%);
+  --nav-shadow: 0 8px 28px oklch(0 0 0 / 40%);
+  --font-ui: Manrope, "Heebo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: oklch(0.985 0.008 270);
+  --surface: oklch(0.96 0.018 275);
+  --surface-2: oklch(0.93 0.026 275);
+  --border: oklch(0.4 0.05 274 / 16%);
+  --text: oklch(0.25 0.04 274);
+  --text-muted: oklch(0.46 0.035 270);
+  --text-secondary: oklch(0.46 0.035 270);
+  --accent: oklch(0.47 0.18 274);
+  --accent-contrast: oklch(0.99 0.008 92);
+  --cyan: oklch(0.49 0.13 240);
+  --green: oklch(0.5 0.13 155);
+  --orange: oklch(0.55 0.15 72);
+  --red: oklch(0.54 0.19 28);
+  --purple: oklch(0.45 0.15 285);
+  --cb-bg: oklch(0.955 0.02 275);
+  --cb-head-bg: oklch(0.4 0.05 274 / 6%);
+  --cb-border: oklch(0.4 0.05 274 / 16%);
+  --cb-text: oklch(0.28 0.04 274);
+  --cb-muted: oklch(0.46 0.035 270);
+  --nav-primary: oklch(0.47 0.18 274);
+  --nav-primary-soft: oklch(0.47 0.18 274 / 10%);
+  --nav-shadow: 0 8px 24px oklch(0.3 0.06 274 / 14%);
+  color-scheme: light;
+}
+
+html, body { background: var(--bg) !important; color: var(--text); font-family: var(--font-ui) !important; -webkit-font-smoothing: antialiased; }
+.conv-pane, .conv-pane.has-conv-bg, .conv-pane.has-conv-bg .conversations-view, .conversations-view { background: var(--bg) !important; color: var(--text) !important; }
+.conv-pane.has-conv-bg { --bg: var(--bg); }
+
+/* typography: everything in the pane uses the UI font; code stays mono */
+.conv-pane, .conv-pane * { font-family: var(--font-ui); }
+.conv-pane code, .conv-pane pre, .conv-pane .cb, .conv-pane .cb *, .conv-pane .md-code, .conv-pane .tok-number,
+.conv-pane .line-num, .conv-pane .msg-ts, .conv-pane .path-link { font-family: var(--font-mono) !important; }
+.assistant-text, .user-msg { font-size: 14px; line-height: 1.6; }
+.md-h { font-family: var(--font-ui) !important; letter-spacing: -0.01em; }
+
+/* header strip / sticky ask */
+.conv-pane-header, .conv-sticky-header, .conv-presentation-toolbar {
+  background: color-mix(in oklab, var(--surface) 92%, transparent) !important;
+  border-color: var(--border) !important;
+  backdrop-filter: blur(10px);
+}
+.conv-sticky-header { border-radius: 0 0 14px 14px; box-shadow: var(--nav-shadow); }
+.csh-ask-original, .stl-title { font-weight: 700; letter-spacing: 0.04em; }
+
+/* messages */
+.user-msg {
+  background: linear-gradient(135deg, var(--nav-primary), color-mix(in oklab, var(--nav-primary) 70%, var(--purple))) !important;
+  color: var(--accent-contrast) !important;
+  border: 0 !important; border-radius: 16px 16px 4px 16px !important;
+  box-shadow: 0 4px 16px var(--nav-primary-soft);
+}
+.event { border-radius: 12px; }
+.assistant-text { color: var(--text); }
+.assistant-message-action { border-radius: 8px !important; }
+.msg-ts { color: var(--text-muted); font-size: 11px; opacity: .8; }
+
+/* code */
+.cb-wrap, .cb { border-radius: 12px !important; }
+.cb-wrap { border: 1px solid var(--cb-border) !important; overflow: hidden; background: var(--cb-bg) !important; }
+.cb-head { background: var(--cb-head-bg) !important; }
+.md-code { background: var(--surface-2) !important; border-radius: 6px !important; padding: 1px 6px; border: 1px solid var(--border); font-size: 0.88em; }
+
+/* composer */
+.conv-input-bar {
+  background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 18px !important;
+  box-shadow: var(--nav-shadow); margin: 10px 16px 14px !important; padding: 12px 14px !important;
+  transition: border-color .15s, box-shadow .15s;
+}
+.conv-input-bar:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--nav-primary-soft), var(--nav-shadow); }
+.conv-input-bar textarea, #convInput { font-family: var(--font-ui) !important; font-size: 14px !important; background: transparent !important; color: var(--text) !important; }
+.conv-input-bar textarea::placeholder { color: var(--text-muted); opacity: .8; }
+.conv-input-bar button, .conv-input-bar select {
+  border-radius: 10px !important; border: 1px solid var(--border) !important; background: var(--surface-2) !important;
+  color: var(--text-muted) !important; transition: background .12s, color .12s, border-color .12s;
+}
+.conv-input-bar button:hover, .conv-input-bar select:hover { color: var(--text) !important; border-color: color-mix(in oklab, var(--accent) 50%, var(--border)) !important; }
+.conv-input-bar button[type="submit"], .conv-input-bar #convSendBtn, .conv-input-bar .send-btn {
+  background: var(--nav-primary) !important; border-color: var(--nav-primary) !important; color: var(--accent-contrast) !important;
+  border-radius: 12px !important; box-shadow: 0 2px 10px var(--nav-primary-soft);
+}
+.conv-input-hint { color: var(--text-muted); opacity: .6; }
+
+/* floating pills */
+.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .status-rail-restore {
+  border-radius: 999px !important; background: var(--surface-2) !important; border: 1px solid var(--border) !important;
+  color: var(--text) !important; box-shadow: var(--nav-shadow);
+}
+
+/* scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--text) 18%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* assistant message card (CCC hardcodes a cyan terminal look) */
+.assistant-text {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-left: 3px solid var(--accent) !important;
+  border-radius: 6px 16px 16px 6px !important;
+  padding: 16px 20px !important;
+  box-shadow: 0 1px 0 var(--border);
+}
+.conv-pane .path-link, .conv-pane a { color: var(--accent) !important; border-color: transparent !important; text-decoration-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+.conv-pane .path-link { background: var(--nav-primary-soft) !important; border-radius: 5px; padding: 0 5px; }
+.drop-zone { border-color: var(--accent) !important; border-radius: 14px !important; }
+.conv-pane [class*="filter-btn"], .conv-pane [class*="-log-btn"], .conv-pane [class*="swatch"] { border-radius: 8px !important; }
+.event.assistant { padding-top: 18px; }
