@@ -128,4 +128,36 @@ python3 nav.py hide-group --repo standup --group scratch --dry-run
 python3 nav.py hide-group --repo standup --group scratch
 ```
 
+## Curate
+
+`curate` is the one command for cleaning up the list: it works out what is
+noise and proposes what to hide, at project, group and session level.
+
+Something is noise when it has been quiet for longer than `--older`, has no
+running process, is not waiting on the user, is not starred, and has no Orca
+agent that spoke inside that window. Everything else is signal and is left
+alone. A starred project, group or session is never proposed, and one that is
+proposed protects everything below it.
+
+```bash
+python3 nav.py curate                   # proposal only, nothing changes
+python3 nav.py curate --older 2d        # quiet for over two days counts as stale
+python3 nav.py curate --older 2d --apply
+python3 nav.py curate --older 2d --apply --star-active   # also star the live groups
+```
+
+The proposal is one JSON object with `hide_repos`, `hide_groups`,
+`hide_sessions` and `star_candidates`, each entry naming its exact key and the
+reason it was chosen. `--apply` posts the keys to the navigator and sets
+`applied` to true. Without `--apply` nothing is written.
+
+`--star-active` stars groups that are live now or have an Orca agent attached,
+so the things you are working on stay pinned to the top.
+
+## Auto-resurface
+
+Hides are tombstones, but they do not stay buried: a hidden session, group or
+project comes back on its own as soon as it is running again or waiting on the
+user. Set `CCC_NAV_RESURFACE=0` to turn that off.
+
 Connection failures print a JSON error to stderr and exit non-zero.

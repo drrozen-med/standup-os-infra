@@ -16,7 +16,30 @@ web app that reads CCC's API and shows the same sessions organised the way you a
   plus **Pi** sessions read from `~/.pi/agent/sessions` (CCC doesn't read Pi), plus **Orca** workspaces read
   from Orca's profile database.
 
-Nicknames and groups are stored in `~/.ccc-navigator/state.json`. CCC's and Orca's data are only read, never written.
+Nicknames, groups, stars and hides live in `~/.ccc-navigator/state.json`. CCC's and Orca's data are only
+read, never written.
+
+## Cleaning up the list
+
+Most of the value here is being able to see only what matters, so curation is a first-class feature:
+
+- **Star** a project, a group or a session and it sorts first, is never proposed for hiding, and is never
+  touched by a batch operation.
+- **Hide** anything, at any level. Hiding is a tombstone, not a delete: `unhide` brings it back, and the
+  **Show hidden** button reveals everything dimmed.
+- **Auto-resurface**: a hidden item comes back on its own the moment it is running again or waiting on
+  the user. Turn it off with `CCC_NAV_RESURFACE=0`.
+- **`nav.py curate`** proposes what to hide: anything quiet for longer than `--older`, with no running
+  process, not waiting on you, not starred, and with no Orca agent that spoke in that window. Dry-run by
+  default; `--apply` writes it.
+
+```bash
+python3 ccc-navigator/nav.py curate --older 2d          # show the proposal
+python3 ccc-navigator/nav.py curate --older 2d --apply  # do it
+```
+
+State is written atomically and snapshotted before every change: `state.json.bak` holds the previous
+version and `backups/state-YYYYMMDD.json` keeps one dated copy per day for 30 days.
 
 ## Run
 
