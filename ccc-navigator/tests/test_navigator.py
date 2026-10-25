@@ -240,5 +240,115 @@ class Pi(unittest.TestCase):
                          ("u1", "/code/proj", "systemd cleanup", "Tidy units"))
 
 
+class Resurface(unittest.TestCase):
+    """A hidden item that went live again comes back on its own."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def state(self, hidden):
+        return {"nicknames": {}, "groups": {}, "assign": {}, "hidden": hidden, "pinned": {}}
+
+    def build(self, rows, state, window="all"):
+        return navigator.build_tree(rows, state, window, [], "http://ccc")
+
+    def items(self, tree):
+        return [s for r in tree["repos"] for g in r["groups"] for s in g["items"]]
+
+    def test_hidden_live_session_resurfaces(self):
+        rows = [row("1", "/r/A", "Fixing the billing bug")]
+        rows[0]["is_live"] = True
+        t = self.build(rows, self.state({"claude:1": True}))
+        self.assertEqual(t["resurface"], ["claude:1"])
+        self.assertEqual(len(self.items(t)), 1)
+
+    def test_hidden_idle_session_stays_hidden(self):
+        rows = [row("1", "/r/A", "Fixing the billing bug", mins=60 * 24 * 30)]
+        t = self.build(rows, self.state({"claude:1": True}))
+        self.assertEqual(t["resurface"], [])
+        self.assertEqual(self.items(t), [])
+
+    def test_hidden_group_with_live_session_resurfaces(self):
+        rows = [row("1", "/r/A", "Fixing the billing bug")]
+        rows[0]["is_live"] = True
+        repo_key = self.build(rows, self.state({}))["repos"][0]["key"]
+        t = self.build(rows, self.state({"g:%s|" % repo_key: True}))
+        self.assertEqual(t["resurface"], ["g:%s|" % repo_key])
+        self.assertEqual(len(self.items(t)), 1)
+
+    def test_hidden_repo_with_live_session_resurfaces(self):
+        rows = [row("1", "/r/A", "Fixing the billing bug")]
+        rows[0]["is_live"] = True
+        repo_key = self.build(rows, self.state({}))["repos"][0]["key"]
+        t = self.build(rows, self.state({"r:%s" % repo_key: True}))
+        self.assertEqual(t["resurface"], ["r:%s" % repo_key])
+        self.assertEqual(len(self.items(t)), 1)
+
+    def test_waiting_on_you_counts_as_live(self):
+        rows = [row("1", "/r/A", "Fixing the billing bug")]
+        rows[0]["needs_approval"] = True
+        t = self.build(rows, self.state({"claude:1": True}))
+        self.assertEqual(t["resurface"], ["claude:1"])
+
+    def test_stale_hidden_stays_hidden_even_when_others_are_live(self):
+        rows = [
+            row("1", "/r/A", "Live work on the billing bug"),
+            row("2", "/r/A", "Old finished work", mins=60 * 24 * 30),
+        ]
+        rows[0]["is_live"] = True
+        t = self.build(rows, self.state({"claude:2": True}))
+        self.assertEqual(t["resurface"], [])
+        self.assertEqual([i["key"] for i in self.items(t)], ["claude:1"])
+
+
+class PinnedLevels(unittest.TestCase):
+    """Groups and projects are star-able, not just sessions."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def build(self, rows, pinned):
+        state = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {},
+                 "pinned": pinned}
+        return navigator.build_tree(rows, state, "all", [], "http://ccc")
+
+    def test_group_star_is_reported(self):
+        rows = [row("1", "/r/A", "Work on the billing bug")]
+        repo_key = self.build(rows, {})["repos"][0]["key"]
+        t = self.build(rows, {"g:%s|" % repo_key: True})
+        self.assertTrue(t["repos"][0]["groups"][0]["pinned"])
+
+    def test_repo_star_is_reported(self):
+        rows = [row("1", "/r/A", "Work on the billing bug")]
+        repo_key = self.build(rows, {})["repos"][0]["key"]
+        t = self.build(rows, {"r:%s" % repo_key: True})
+        self.assertTrue(t["repos"][0]["pinned"])
+
+    def test_starred_repo_sorts_first(self):
+        rows = [row("1", "/r/A", "Old work", mins=60 * 24),
+                row("2", "/r/B", "Fresh work")]
+        first = self.build(rows, {})
+        fresh, old = first["repos"][0]["key"], first["repos"][1]["key"]
+        t = self.build(rows, {"r:%s" % old: True})
+        self.assertEqual([r["key"] for r in t["repos"]], [old, fresh])
+
+    def test_starred_group_sorts_first(self):
+        rows = [row("1", "/r/A", "Old group work", mins=60 * 24),
+                row("2", "/r/A", "Fresh group work")]
+        repo_key = self.build(rows, {})["repos"][0]["key"]
+        state = {"nicknames": {}, "hidden": {}, "pinned": {},
+                 "groups": {},
+                 "assign": {"claude:1": {"repo": repo_key, "group": "zzz"},
+                            "claude:2": {"repo": repo_key, "group": "aaa"}}}
+        t = navigator.build_tree(rows, state, "all", [], "http://ccc")
+        self.assertEqual([g["name"] for g in t["repos"][0]["groups"]], ["aaa", "zzz"])
+        state["pinned"] = {"g:%s|zzz" % repo_key: True}
+        t2 = navigator.build_tree(rows, state, "all", [], "http://ccc")
+        self.assertEqual([g["name"] for g in t2["repos"][0]["groups"]], ["zzz", "aaa"])
+        self.assertTrue(t2["repos"][0]["groups"][0]["pinned"])
+
+
 if __name__ == "__main__":
     unittest.main()

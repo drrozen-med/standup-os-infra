@@ -143,10 +143,10 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 #menu button.danger{color:var(--danger)}
 #menu .sep{height:1px;background:var(--line);margin:4px 2px}
 #menu .hd{padding:5px 10px 3px;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.6px}
-.s .eye{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim);opacity:0}
-.s:hover .eye,.s[aria-current="true"] .eye{opacity:1}
-.s .eye:hover{background:var(--line2);color:var(--text)}
-.s.ishidden{opacity:.5}.s.ishidden .eye{opacity:1;color:var(--accent)}
+.eye{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim);opacity:0}
+.s:hover .eye,.s[aria-current="true"] .eye,.repo-h:hover .eye,.grp-h:hover .eye{opacity:1}
+.eye:hover{background:var(--line2);color:var(--text)}
+.s.ishidden,.grp-h.ishidden,.repo-h.ishidden{opacity:.5}.ishidden .eye{opacity:1;color:var(--accent)}
 .row1 .tools{display:flex;align-items:center;gap:8px}
 .iconbtn{background:transparent;border:1px solid var(--line2);border-radius:8px;width:28px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
 .iconbtn:hover{border-color:var(--line3);color:var(--text);background:var(--hover)}
@@ -308,8 +308,11 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     } finally { inflight = false; }
   }
 
+  // a session counts as starred when it, its group or its project is starred
+  const isStarred = (s, repo, group) => !!(s.pinned || group.pinned || repo.pinned);
+
   function matches(s, repo, group) {
-    if (ui.f.star && !s.pinned) return false;
+    if (ui.f.star && !isStarred(s, repo, group)) return false;
     if (ui.f.live && !s.live) return false;
     if (ui.f.needs && !s.needs_you) return false;
     const q = ui.query.trim().toLowerCase();
@@ -320,7 +323,11 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   const forceOpen = () => ui.query || ui.f.star || ui.f.live || ui.f.needs;
   function renderChips() {
     let st = 0, lv = 0, nd = 0;
-    for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) { if (s.pinned) st++; if (s.live) lv++; if (s.needs_you) nd++; }
+    for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
+      if (isStarred(s, r, g)) st++;
+      if (s.live) lv++;
+      if (s.needs_you) nd++;
+    }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>');
   }
@@ -356,29 +363,34 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
             <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}${esc(label(s))}</span>
-              <span class="meta"><span class="eng ${eng}">${esc(s.engine)}</span>
+              <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
                 ${s.needs_you ? '<span class="you">needs you</span>' : ''}</span></span>
+            <span class="eng ${eng}">${esc(s.engine)}</span>
             <span class="star-b ${s.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc(s.key)}" data-on="${s.pinned ? 1 : 0}" title="${s.pinned ? 'Unstar' : 'Star'}">${s.pinned ? STAR_ON : STAR}</span>
             <span class="eye" role="button" tabindex="0" data-hide="${esc(s.key)}" data-hidden="${s.hidden ? 1 : 0}" title="${s.hidden ? 'Unhide' : 'Hide'}">${s.hidden ? EYE_OFF : EYE}</span>
             <span class="ago">${ago(s.mtime)}</span><span class="dots" role="button" tabindex="0" data-menu="s" data-key="${esc(s.key)}" title="More actions" aria-label="More actions">${DOTS}</span></button>`;
         }
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
-          <button type="button" class="grp-h" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
+          <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
             ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}">${esc(g.name || 'Ungrouped')}</span>
             ${g.source === 'orca' ? '<span class="tag orca">Orca</span>' : ''}
-            <span class="cnt" style="margin-left:auto">${items.length}</span><span class="dots" role="button" tabindex="0" data-menu="g" data-repo="${esc(repo.key)}" data-group="${esc(g.name)}" title="Group actions" aria-label="Group actions">${DOTS}</span></button>
+            <span class="cnt" style="margin-left:auto">${items.length}</span>
+            <span class="star-b ${g.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc(gk)}" data-on="${g.pinned ? 1 : 0}" title="${g.pinned ? 'Unstar group' : 'Star group (never hidden, sorts first)'}">${g.pinned ? STAR_ON : STAR}</span>
+            <span class="eye" role="button" tabindex="0" data-hide="${esc('g:' + repo.key + '|' + g.name)}" data-hidden="${g.hidden ? 1 : 0}" title="${g.hidden ? 'Unhide group' : 'Hide group (stays hidden for new sessions)'}">${g.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="g" data-repo="${esc(repo.key)}" data-group="${esc(g.name)}" title="Group actions" aria-label="Group actions">${DOTS}</span></button>
           <div class="items">${rows}</div></div>`;
       }
       if (!repoCount) continue;
       const rOpen = forceOpen() || !ui.collapsed[repo.key];
       html += `<div class="${rOpen ? 'open' : ''}">
-        <button type="button" class="repo-h" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
+        <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
           ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name">${esc(repo.name)}</span>
           ${repoLive ? `<span class="livec" title="Live = a session with a running process (Claude, Codex), or a Devin session active in the last 10 minutes"><span class="dot live"></span>${repoLive} live</span>` : ''}
-          <span class="cnt">${repoCount}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
+          <span class="cnt">${repoCount}</span>
+          <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
+          <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
         <div class="groups">${groupsHtml}</div></div>`;
     }
     if (!html) html = `<div class="empty">${ui.query ? 'No sessions match “' + esc(ui.query) + '”.' : 'No sessions in this window.'}</div>`;
@@ -431,7 +443,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
         inp.className = 'ttl-in'; inp.value = s.nick || ''; inp.placeholder = s.original; inp.maxLength = 120;
         el.replaceWith(inp); inp.focus(); inp.select();
         let done = false;
-        const finish = (save) => { if (done) return; done = true; if (save && inp.value.trim() !== (s.nick || '')) post('/api/nickname', { key: s.key, name: inp.value }); else renderDetail(true); };
+        const finish = (save) => { if (done) return; done = true; if (save && inp.value.trim() !== (s.nick || '')) renameSession(s, inp.value); else renderDetail(true); };
         inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') finish(true); if (ev.key === 'Escape') finish(false); });
         inp.addEventListener('blur', () => finish(true));
       };
@@ -510,7 +522,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 
   function wireDetail(s, repo) {
     const nick = $('#nick');
-    const saveNick = () => { if (nick.value.trim() !== (s.nick || '')) post('/api/nickname', { key: s.key, name: nick.value }); };
+    const saveNick = () => { if (nick.value.trim() !== (s.nick || '')) renameSession(s, nick.value); };
     nick.addEventListener('keydown', e => { if (e.key === 'Enter') { nick.blur(); } if (e.key === 'Escape') { nick.value = s.nick || ''; nick.blur(); } });
     nick.addEventListener('blur', saveNick);
     wireGroupPicker(s, repo);
@@ -630,6 +642,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   document.addEventListener('click', e => { if (!menuEl.contains(e.target)) closeMenu(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   $('#list').addEventListener('scroll', closeMenu);
+  const renameSession = (s, name) => post('/api/rename', { kind: 'session', key: s.key, sid: s.sid, engine: s.engine, name });
   const frameSrc = (s) => { try { const u = new URL(s.open_url); return u.pathname + u.search; } catch (_) { return s.open_url; } };
   const DAY = 86400, nowS = () => Date.now() / 1000;
   const hideKeys = (keys, hidden = true) => keys.length && post('/api/hide', { keys, hidden });
@@ -660,7 +673,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
       if (!hit) return [];
       const { s } = hit;
       return [
-        { label: 'Rename…', fn: () => { const n = prompt('Nickname for this session (empty clears it):', s.nick || ''); if (n !== null) post('/api/nickname', { key: s.key, name: n }); } },
+        { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
         { label: 'Move to group…', fn: () => { select(s.key); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
@@ -683,7 +696,9 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
         '-',
         { label: 'Change icon…', fn: () => iconPicker(anchor, 'g:' + repo.key + '|' + g.name) },
         { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
-        ...(g.source === 'manual' && g.name ? [{ label: 'Rename group…', fn: () => { const n = prompt('Rename group “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/group', { repo: repo.key, action: 'rename', name: g.name, new_name: n.trim() }); } }] : []),
+        ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => { const n = prompt('Rename “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); } }] : []),
+        '-',
+        { label: g.hidden ? 'Unhide group' : 'Hide group (and future sessions)', fn: () => hideKeys(['g:' + repo.key + '|' + g.name], !!g.hidden) },
       ];
     }
     const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
@@ -694,6 +709,8 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
       { label: 'Hide older than 30 days', fn: () => hideKeys(older(vis, 30)) },
       { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
       '-',
+      { label: 'Rename project…', fn: () => { const n = prompt('Display name for this project (empty resets):', repo.name); if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); } },
+      { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !!repo.hidden) },
       { label: 'Change icon…', fn: () => iconPicker(anchor, 'r:' + repo.key) },
       { label: 'Collapse all groups', fn: () => collapseRepoGroups(repo, true) },
       { label: 'Expand all groups', fn: () => collapseRepoGroups(repo, false) },

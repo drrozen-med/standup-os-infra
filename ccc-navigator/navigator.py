@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 import http.client
+import shutil
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -38,6 +40,9 @@ HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
 WINDOWS = {"now": 3600, "1d": 86400, "7d": 7 * 86400, "all": None}
 UNGROUPED = ""
+# Auto-resurface lifts a tombstone whose subject is live again. Kill switch in
+# case it ever misfires: CCC_NAV_RESURFACE=0.
+RESURFACE = os.environ.get("CCC_NAV_RESURFACE", "1").strip().lower() not in ("0", "false", "no", "off")
 # Claude desktop throws away each scratch workspace in its own folder, named after
 # the project it was opened for with the slashes flattened to dashes. None of them
 # is a repo, so they all fold into this single pseudo-repo.
@@ -73,10 +78,25 @@ class State:
             "hidden": dict(d.get("hidden") or {}),
             "pinned": dict(d.get("pinned") or {}),
             "icons": dict(d.get("icons") or {}),
+            "repo_names": dict(d.get("repo_names") or {}),
         }
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # this file is the user's curation (hides, stars, names): keep the previous
+        # version plus one snapshot per day, so a bad write is never the only copy
+        try:
+            if self.path.exists():
+                bdir = self.path.parent / "backups"
+                bdir.mkdir(exist_ok=True)
+                shutil.copy2(self.path, self.path.with_suffix(".json.bak"))
+                snap = bdir / ("state-%s.json" % time.strftime("%Y%m%d"))
+                if not snap.exists():
+                    shutil.copy2(self.path, snap)
+                    for old in sorted(bdir.glob("state-*.json"))[:-30]:
+                        old.unlink()
+        except OSError:
+            pass
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, indent=1, sort_keys=True))
         os.replace(tmp, self.path)
@@ -104,6 +124,15 @@ class State:
                     groups.append(group)
             else:
                 self.data["assign"].pop(key, None)
+            self._save()
+
+    def set_repo_name(self, key, name):
+        with self.lock:
+            name = (name or "").strip()[:80]
+            if name:
+                self.data["repo_names"][key] = name
+            else:
+                self.data["repo_names"].pop(key, None)
             self._save()
 
     def set_icon(self, key, icon):
@@ -498,7 +527,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             # last path component: CCC's folder_label is often a dash-mangled path
             label = Path(cwd).name or r.get("folder_label") or "unknown"
             key, name, path = "folder:" + label, label, short(cwd)
-        repo = repos.setdefault(key, {"key": key, "name": name, "path": path, "items": []})
+        repo = repos.setdefault(key, {"key": key, "name": state.get("repo_names", {}).get(key) or name,
+                                      "orig_name": name, "path": path, "items": []})
         return repo, cwd, wt, ws
 
     def group_for(item_key, repo_key, ws):
@@ -530,6 +560,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "ccc_label": r.get("folder_label") or r.get("folder_label_chip") or "",
             "group": group, "group_source": gsrc,
             "orca_workspace": ws["name"] if ws else "",
+            "orca_path": (ws.get("path") or "") if ws else "",
+            "sid_raw": sid,
             "open_url": (f"{ccc_base}/?ccc_popout=conversation&conv={urllib.parse.quote(sid)}"
                          if engine != "pi" and sid else ""),
             "file": short(r.get("jsonl_path") or ""),
@@ -559,10 +591,39 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         repo["items"].append(item)
 
     user_hidden = 0
+    hmap = state.get("hidden", {})
+
+    # A hidden item that went live again (or is waiting on the user) is signal, not
+    # noise, so it comes back on its own. Hides stay as tombstones; this only lifts
+    # the ones whose subject became active again.
+    live_items, live_groups, live_repos = set(), set(), set()
+    for repo in repos.values():
+        for it in repo["items"]:
+            if not (it.get("live") or it.get("needs_you")):
+                continue
+            live_items.add(it["key"])
+            live_groups.add(repo["key"] + "|" + it["group"])
+            live_repos.add(repo["key"])
+            for run in it.get("runs") or []:
+                live_items.add("%s:%s" % (run.get("engine"), run.get("sid")))
+    resurface = []
+    for k in hmap:
+        if k.startswith("r:"):
+            if k[2:] in live_repos:
+                resurface.append(k)
+        elif k.startswith("g:"):
+            if k[2:] in live_groups:
+                resurface.append(k)
+        elif k in live_items:
+            resurface.append(k)
+    if resurface:
+        hmap = {k: v for k, v in hmap.items() if k not in set(resurface)}
+
     for repo in repos.values():
         kept = []
+        repo_hidden = bool(hmap.get("r:" + repo["key"]))
         for it in repo["items"]:
-            if state.get("hidden", {}).get(it["key"]):
+            if repo_hidden or hmap.get(it["key"]) or hmap.get("g:%s|%s" % (repo["key"], it["group"])):
                 user_hidden += 1
                 if not show_hidden:
                     continue
@@ -571,6 +632,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         repo["items"] = kept
 
     out_repos = []
+    pmap = state.get("pinned", {})
     for repo in repos.values():
         if not repo["items"]:
             continue
@@ -578,16 +640,22 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         by_group = collections.defaultdict(list)
         for it in repo["items"]:
             by_group[it["group"]].append(it)
-        names = sorted((g for g in by_group if g != UNGROUPED), key=str.lower)
+        names = sorted((g for g in by_group if g != UNGROUPED),
+                       key=lambda g: (not pmap.get("g:%s|%s" % (repo["key"], g)), g.lower()))
         groups = []
         for g in names + ([UNGROUPED] if UNGROUPED in by_group else []):
             items = sorted(by_group[g], key=lambda x: (not x["pinned"], -x["mtime"]))
             srcs = {x["group_source"] for x in items}
             groups.append({"name": g, "source": "manual" if "manual" in srcs or g in manual
-                           else ("orca" if "orca" in srcs else "none"), "items": items})
+                           else ("orca" if "orca" in srcs else "none"), "items": items,
+                           "hidden": bool(hmap.get("g:%s|%s" % (repo["key"], g))),
+                           "pinned": bool(pmap.get("g:%s|%s" % (repo["key"], g))),
+                           "orca_path": next((x["orca_path"] for x in items if x.get("orca_path")), "")})
         all_items = repo["items"]
         out_repos.append({
-            "key": repo["key"], "name": repo["name"], "path": repo["path"],
+            "key": repo["key"], "name": repo["name"], "orig_name": repo["orig_name"], "path": repo["path"],
+            "hidden": bool(hmap.get("r:" + repo["key"])),
+            "pinned": bool(pmap.get("r:" + repo["key"])),
             "count": len(all_items),
             "live": sum(1 for x in all_items if x["live"]),
             "cost": round(sum(x["cost"] for x in all_items), 2),
@@ -595,7 +663,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "groups": groups,
             "group_names": sorted(set(manual) | set(names), key=str.lower),
         })
-    out_repos.sort(key=lambda r: -r["latest"])
+    out_repos.sort(key=lambda r: (not r["pinned"], -r["latest"]))
 
     return {
         "window": window,
@@ -604,6 +672,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         "hidden": [{"label": k, "count": v} for k, v in hidden.most_common()],
         "hidden_total": sum(hidden.values()),
         "user_hidden": user_hidden,
+        "resurface": resurface,
         "icons": state.get("icons", {}),
         "diagnostics": {
             "resolution": dict(method_ct),
@@ -623,12 +692,54 @@ class App:
         self.ccc = CCCSource(args.ccc)
         self.state = State(Path(args.state).expanduser())
 
+    def rename(self, b):
+        """Rename a session / group / project and write it through to the tool that owns the name."""
+        kind, name = str(b.get("kind") or "session"), (b.get("name") or "").strip()
+        res = {"ok": True, "applied": []}
+        if kind == "session":
+            key = str(b.get("key") or "")
+            self.state.set_nickname(key, name)
+            res["applied"].append("navigator")
+            sid, engine = str(b.get("sid") or ""), str(b.get("engine") or "")
+            if sid and engine != "pi":
+                try:
+                    body = json.dumps({"session_id": sid, "name": name}).encode()
+                    base = urllib.parse.urlparse(self.ccc.base)
+                    c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=10)
+                    c.request("POST", "/api/conversations/%s/rename" % urllib.parse.quote(sid), body=body,
+                              headers={"Content-Type": "application/json", "Host": base.netloc})
+                    r = c.getresponse(); r.read(); c.close()
+                    res["applied"].append("ccc" if r.status < 300 else "ccc-failed:%d" % r.status)
+                except Exception as e:
+                    res["applied"].append("ccc-failed:%s" % e)
+        elif kind == "group":
+            repo, old, path = str(b.get("repo") or ""), str(b.get("group") or ""), str(b.get("orca_path") or "")
+            if path and name:
+                try:
+                    out = subprocess.run(["/usr/local/bin/orca", "worktree", "set", "--worktree", "path:" + path,
+                                          "--display-name", name], capture_output=True, text=True, timeout=25)
+                    res["applied"].append("orca" if out.returncode == 0 else "orca-failed:" + (out.stderr or out.stdout)[:120])
+                except Exception as e:
+                    res["applied"].append("orca-failed:%s" % e)
+            else:
+                self.state.rename_group(repo, old, name)
+                res["applied"].append("navigator")
+        elif kind == "repo":
+            self.state.set_repo_name(str(b.get("key") or ""), name)
+            res["applied"].append("navigator")
+        else:
+            return {"ok": False, "error": "unknown kind"}
+        self.ccc._at = 0.0  # re-read CCC so the new names show up at once
+        return res
+
     def tree(self, window, show_hidden=False):
         rows, ccc_meta = self.ccc.rows()
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden)
+        if t.get("resurface") and RESURFACE:
+            self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
@@ -656,7 +767,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    NAV_POST = {"/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -742,6 +853,8 @@ class Handler(BaseHTTPRequestHandler):
             st.set_nickname(str(body.get("key") or ""), body.get("name"))
         elif p == "/api/assign":
             st.assign(str(body.get("key") or ""), str(body.get("repo") or ""), body.get("group"))
+        elif p == "/api/rename":
+            return self._send(200, self.app.rename(body))
         elif p == "/api/icon":
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
         elif p == "/api/pin":
@@ -777,6 +890,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     Handler.app = App(args)
+    def _warm():  # the first full-history tree reads every transcript header; do it before anyone asks
+        for w in ("1d", "all"):
+            try:
+                Handler.app.tree(w, True)
+            except Exception:
+                pass
+    threading.Thread(target=_warm, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"CCC Navigator on {url}  (reading CCC at {args.ccc})")
