@@ -6,6 +6,8 @@
 <title>CCC Navigator</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/__nav/chat.css">
+<script src="/__nav/chat.js" defer></script>
 <script>try{var th=localStorage.getItem("ccc-nav-theme");if(th&&th!=="auto")document.documentElement.dataset.theme=JSON.parse(th)}catch(e){}</script>
 <style>
 :root{
@@ -283,7 +285,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     showMine: store.get('showMine', false),
     query: '',
   };
-  let tree = null, flat = [], lastDetailKey = null, inflight = false;
+  let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
 
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -427,16 +429,33 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     const { s, repo } = hit;
     if (chat) {
       const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
-      const bar = `<div class="chatbar"><span class="dot ${dotc}"></span><span class="ttl" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</span><span class="crumbs">${esc(repo.name)} › ${esc(s.group || 'Ungrouped')}</span><span class="eng">${esc(s.engine)}</span><button type="button" class="btn" id="toDetails">Details</button><a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener">New tab</a></div>`;
-      const fr = main.querySelector('iframe');
-      const fsrc = frameSrc(s);
-      if (fr && fr.dataset.src === fsrc) { main.querySelector('.chatbar').outerHTML = bar; }
-      else {
-        main.innerHTML = bar + `<div class="frame"><iframe data-src="${esc(fsrc)}" src="${esc(fsrc)}" title="Conversation"></iframe><div class="ld"><i></i>Loading conversation…</div></div>`;
-        const f = main.querySelector('iframe'), box = main.querySelector('.frame');
-        f.addEventListener('load', () => box.classList.add('ready'));
-        setTimeout(() => box.classList.add('ready'), 20000);
-      }
+      main.innerHTML = `<div class="chat-head">
+          <span class="dot ${dotc}"></span>
+          <div class="who">
+            <div class="title" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</div>
+            <div class="where">${esc(repo.name)} › ${esc(s.group || 'Ungrouped')}</div>
+          </div>
+          <span class="eng">${esc(s.engine)}</span>
+          <button type="button" class="btn" id="toDetails">Details</button>
+          <a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener">Open in CCC</a>
+        </div>
+        <div class="thread" id="thread"></div>
+        <div class="composer">
+          <span class="sr">Message</span>
+          <textarea id="cmp" rows="1" placeholder="Reply to ${esc(s.nick || s.original)}…"></textarea>
+          <button type="button" class="send" id="sendBtn" title="Send" aria-label="Send"></button>
+        </div>`;
+      const wire = () => {
+        if (!window.NavChat) { setTimeout(wire, 60); return; }
+        $('#sendBtn').innerHTML = '<svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M3 10h13M11 4.5L16.5 10 11 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        if (chatInst) chatInst.destroy();
+        chatInst = new NavChat.Conversation(main, {
+          sid: s.sid_raw || s.sid,
+          onEngine: () => {},
+          onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); }
+        });
+      };
+      wire();
       $('#toDetails').onclick = () => { ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); };
       $('#ttl').ondblclick = (e) => {
         const el = e.currentTarget, inp = document.createElement('input');
@@ -643,7 +662,6 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   $('#list').addEventListener('scroll', closeMenu);
   const renameSession = (s, name) => post('/api/rename', { kind: 'session', key: s.key, sid: s.sid, engine: s.engine, name });
-  const frameSrc = (s) => { try { const u = new URL(s.open_url); return u.pathname + u.search; } catch (_) { return s.open_url; } };
   const DAY = 86400, nowS = () => Date.now() / 1000;
   const hideKeys = (keys, hidden = true) => keys.length && post('/api/hide', { keys, hidden });
   const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);

@@ -457,6 +457,23 @@ def clean(text, n=90):
     return t[:n] + ("…" if len(t) > n else "")
 
 
+def static_asset(name):
+    """Resolve one file under static/ as (bytes, content-type), or None.
+
+    Only the basename is ever used and only if the file exists, so a request
+    for /__nav/../../etc/passwd can never leave the folder.
+    """
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return None
+    f = HERE / "static" / name
+    if not f.is_file():
+        return None
+    ctype = {"css": "text/css; charset=utf-8",
+             "js": "application/javascript; charset=utf-8",
+             "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "text/plain; charset=utf-8")
+    return f.read_bytes(), ctype
+
+
 def short(path):
     return path.replace(HOME, "~", 1) if path else ""
 
@@ -767,6 +784,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _static(self, name):
+        """Serve one file from static/; nothing else is ever read from disk."""
+        got = static_asset(name)
+        if not got:
+            return self._send(404, {"error": "not found"})
+        return self._send(200, got[0], got[1])
+
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -821,8 +845,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
         u = urllib.parse.urlparse(self.path)
-        if u.path == "/__nav/skin.css":
-            return self._send(200, (HERE / "static" / "ccc-skin.css").read_bytes(), "text/css; charset=utf-8")
+        if u.path.startswith("/__nav/"):
+            return self._static(u.path.rsplit("/", 1)[-1])
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
             return self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
         if u.path != "/api/tree":

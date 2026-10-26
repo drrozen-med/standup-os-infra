@@ -350,5 +350,26 @@ class PinnedLevels(unittest.TestCase):
         self.assertTrue(t2["repos"][0]["groups"][0]["pinned"])
 
 
+class StaticAssets(unittest.TestCase):
+    """The chat lives in static/; requests must never read outside it."""
+
+    def test_chat_assets_resolve_with_their_type(self):
+        css = navigator.static_asset("chat.css")
+        js = navigator.static_asset("chat.js")
+        self.assertTrue(css[0].lstrip().startswith(b"/*"))
+        self.assertEqual(css[1], "text/css; charset=utf-8")
+        self.assertIn(b"NavChat", js[0])
+        self.assertEqual(js[1], "application/javascript; charset=utf-8")
+
+    def test_unknown_name_is_refused(self):
+        self.assertIsNone(navigator.static_asset("nope.css"))
+        self.assertIsNone(navigator.static_asset(""))
+
+    def test_traversal_cannot_leave_the_folder(self):
+        for name in ("../navigator.py", "..", "/etc/passwd", "sub/chat.css",
+                     "chat.css/..", "..\\navigator.py", ".hidden"):
+            self.assertIsNone(navigator.static_asset(name), name)
+
+
 if __name__ == "__main__":
     unittest.main()
