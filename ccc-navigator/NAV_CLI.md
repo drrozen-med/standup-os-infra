@@ -161,3 +161,74 @@ project comes back on its own as soon as it is running again or waiting on the
 user. Set `CCC_NAV_RESURFACE=0` to turn that off.
 
 Connection failures print a JSON error to stderr and exit non-zero.
+
+## Titler
+
+`titler.py` is a standalone background worker (python3 stdlib only) that gives
+every visible session a short, sensible name. It runs server-side, not in the
+UI: it asks the navigator for the sessions it is already showing, flattens
+each transcript into a short excerpt, asks a small model for a two-to-five
+word title, and writes the title back through the navigator's rename
+endpoint. The sidebar then shows names instead of truncated prompts.
+
+```bash
+cd ccc-navigator
+
+# One pass over the visible sessions (this is also the default).
+python3 titler.py
+
+# See what it would name, without touching anything.
+python3 titler.py --dry-run --max 2
+
+# Keep it running: a cycle every ten minutes.
+python3 titler.py --loop
+python3 titler.py --loop 300
+```
+
+Options:
+
+- `--once` runs a single cycle and exits (default).
+- `--loop [SECONDS]` keeps running, sleeping between cycles (default 600
+  when the value is omitted). When the navigator cannot be reached the worker
+  backs off for five minutes instead of hammering it.
+- `--dry-run` prints the proposed titles as JSON and changes nothing: no
+  rename is posted and the state file is not written.
+- `--max N` renames at most N sessions per cycle (default 20). Sessions that
+  cannot be titled (too few messages, no growth, a failed model call) do not
+  use up that budget.
+- `--retitle` also reconsiders sessions the worker named before, but only
+  when their transcript grew by 40% or more since it named them.
+- `--url URL` points the worker at another navigator (default
+  `http://127.0.0.1:8095`, env `CCC_NAV_URL`).
+
+Every cycle prints one JSON line with the visible count, the candidates, the
+titles that were applied (`proposals`), the sessions that were skipped and
+why, and any errors. The exit code is 0 even when individual sessions fail.
+
+Safety rules the worker follows:
+
+- only sessions the navigator already shows are considered, so hidden
+  sessions are never touched, and batched sessions (several runs sharing one
+  prompt) are skipped;
+- a title the user typed by hand is NEVER overwritten -- the worker only
+  re-titles sessions it named itself;
+- transcripts are truncated to the first user message plus the last three
+  messages, and obvious secrets (API keys such as `sk-...`, `Bearer` tokens,
+  long hex or base64 blobs) are stripped before the excerpt leaves the
+  machine;
+- a reply is accepted only when it is a single line of at most 7 words and 40
+  characters, with markdown, quotes and trailing punctuation removed.
+
+The model is called through `droid exec -m custom:MiniMax-M3-direct --auto
+low '<prompt>'` (the user's paid, non-training subscription). `TITLER_CMD`
+replaces that command, with the prompt passed as the last argument, which is
+how the tests run it against a stub:
+
+```bash
+TITLER_CMD="python3 my_stub.py" python3 titler.py --dry-run
+```
+
+The worker remembers what it named in `~/.ccc-navigator/titler.json` (one
+entry per session with the title, a timestamp and the event count at the
+time). `TITLER_STATE` points that file somewhere else. The file is written
+atomically.

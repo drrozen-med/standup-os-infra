@@ -134,6 +134,8 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .vrow{display:flex!important;align-items:center;gap:10px}
 .vrow .box{flex:none;width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line3);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--primary-fg)}
 .vrow.on .box{background:var(--primary);border-color:var(--primary)}
+.chat-more{display:block;margin:6px auto 12px;background:var(--primary-soft);border:1px solid var(--line2);color:var(--text);border-radius:999px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.chat-more:hover{border-color:var(--primary-hi)}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line2);border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer}
 .chip:hover{border-color:var(--line3);color:var(--text)}
@@ -659,11 +661,11 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     document.addEventListener('keydown', key, true);
   }
 
-  function render() { renderWin(); renderStatus(); renderChips(); renderList(); renderDetail(false); }
+  function render() { renderWin(); renderStatus(); renderChips(); warmOnIdle(); renderList(); renderDetail(false); }
 
   function select(key) {
     ui.selected = key; store.set('selected', key);
-    renderList(); renderDetail(true);
+    renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
     if (el) el.scrollIntoView({ block: 'nearest' });
   }
@@ -698,6 +700,26 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   document.addEventListener('click', e => { if (!menuEl.contains(e.target)) closeMenu(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   $('#list').addEventListener('scroll', closeMenu);
+  // ---- prefetch: warm conversations before they are clicked
+  const itemByKey = (key) => { for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) if (s.key === key) return s; return null; };
+  const warm = (s) => { if (s && s.sid && !s.batch && window.NavChat && NavChat.prefetch) NavChat.prefetch(s.sid, s.engine); };
+  let hoverT = null;
+  document.addEventListener('mouseover', e => {
+    const row = e.target.closest && e.target.closest('.s'); if (!row || !tree) return;
+    clearTimeout(hoverT); hoverT = setTimeout(() => warm(itemByKey(row.dataset.key)), 90);
+  });
+  function warmNeighbours() {
+    const i = flat.indexOf(ui.selected); if (i < 0) return;
+    for (const k of [flat[i + 1], flat[i - 1], flat[i + 2]]) if (k) warm(itemByKey(k));
+  }
+  let idleDone = false;
+  function warmOnIdle() {
+    if (idleDone || !tree) return; idleDone = true;
+    const picks = [];
+    for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) if (s.live || s.pinned || s.needs_you) picks.push(s);
+    for (const k of flat.slice(0, 6)) { const s = itemByKey(k); if (s) picks.push(s); }
+    picks.slice(0, 14).forEach((s, i) => setTimeout(() => warm(s), 400 + i * 350));
+  }
   const renameSession = (s, name) => post('/api/rename', { kind: 'session', key: s.key, sid: s.sid, engine: s.engine, name });
   const DAY = 86400, nowS = () => Date.now() / 1000;
   const hideKeys = (keys, hidden = true) => keys.length && post('/api/hide', { keys, hidden });

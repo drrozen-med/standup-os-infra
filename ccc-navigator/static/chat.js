@@ -131,8 +131,42 @@
     send: '<svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M3 10h13M11 4.5L16.5 10 11 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
   };
 
-  function render(events, thread) {
+  // ---- fast switching: cache of recent conversations + prefetch
+  var TAIL = 80, CACHE_MAX = 24, FRESH_MS = 15000;
+  var cache = new Map(), inflight = new Map();
+  function urlFor(sid, engine) {
+    return engine === 'pi' ? '/api/pi/transcript?sid=' + encodeURIComponent(sid) : '/api/conversations/' + encodeURIComponent(sid);
+  }
+  function fetchConv(sid, engine) {
+    if (inflight.has(sid)) return inflight.get(sid);
+    var p = fetch(urlFor(sid, engine))
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (d) {
+        cache.delete(sid); cache.set(sid, { data: d, at: Date.now() });
+        while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+        inflight.delete(sid); return d;
+      })
+      .catch(function (e) { inflight.delete(sid); throw e; });
+    inflight.set(sid, p); return p;
+  }
+  function prefetch(sid, engine) {
+    var c = cache.get(sid);
+    if (!sid || inflight.has(sid) || (c && Date.now() - c.at < FRESH_MS)) return;
+    fetchConv(sid, engine).catch(function () {});
+  }
+  function sig(events) { var l = events[events.length - 1]; return events.length + ':' + (l ? JSON.stringify(l).length : 0); }
+
+  function render(events, thread, showAll) {
     thread.innerHTML = '';
+    var hidden = 0;
+    if (!showAll && events.length > TAIL) { hidden = events.length - TAIL; events = events.slice(-TAIL); }
+    if (hidden) {
+      var more = document.createElement('button');
+      more.type = 'button'; more.className = 'chat-more';
+      more.textContent = 'Show ' + hidden + ' earlier messages';
+      more.setAttribute('data-more', '1');
+      thread.appendChild(more);
+    }
     if (!events.length) {
       thread.innerHTML = '<div class="chat-empty">Nothing here yet.<br>Start the conversation below.</div>';
       return;
@@ -156,22 +190,31 @@
       if (send) send.disabled = true;
     }
 
+    var showAll = false, lastSig = null, current = null;
+    function paint(d, scroll) {
+      var ev = d.events || [];
+      var s = sig(ev) + ':' + showAll;
+      if (s === lastSig) return;                       // nothing new: leave the DOM (and scroll) alone
+      var atEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
+      var keep = thread.scrollTop;
+      lastSig = s; render(ev, thread, showAll); current = ev;
+      if (scroll !== false && (atEnd || keep === 0)) thread.scrollTop = thread.scrollHeight; else thread.scrollTop = keep;
+      if (opts.onEngine) opts.onEngine(d.engine || '');
+    }
     function load(scroll) {
-      var url = isPi
-        ? '/api/pi/transcript?sid=' + encodeURIComponent(sid)
-        : '/api/conversations/' + encodeURIComponent(sid);
-      fetch(url)
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-        .then(function (d) {
-          render(d.events || [], thread);
-          if (scroll !== false) thread.scrollTop = thread.scrollHeight;
-          if (opts.onEngine) opts.onEngine(d.engine || '');
-        })
+      var c = cache.get(sid);
+      if (c && !lastSig) { paint(c.data, true); thread.scrollTop = thread.scrollHeight; }   // instant from cache
+      if (c && Date.now() - c.at < 1500 && lastSig) return;
+      fetchConv(sid, engine)
+        .then(function (d) { paint(d, scroll); })
         .catch(function () {
-          thread.innerHTML = '<div class="chat-empty">This conversation could not be loaded.<br>' +
+          if (!lastSig) thread.innerHTML = '<div class="chat-empty">This conversation could not be loaded.<br>' +
             'Open it in CCC instead.</div>';
         });
     }
+    thread.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('[data-more]')) { showAll = true; lastSig = null; if (current) paint({ events: current }, false); var top = thread.scrollTop; thread.scrollTop = top; }
+    });
 
     function post() {
       var text = box.value.trim();
@@ -187,7 +230,7 @@
           if (d && d.ok === false) throw new Error(d.error || 'send failed');
           box.value = '';
           autoGrow();
-          load();
+          cache.delete(sid); lastSig = null; load();
         })
         .catch(function (e) {
           if (opts.onError) opts.onError(e.message || 'Could not send');
@@ -215,5 +258,5 @@
     load();
   }
 
-  window.NavChat = { Conversation: Conversation, md: md, render: render, size: size };
+  window.NavChat = { prefetch: prefetch, Conversation: Conversation, md: md, render: render, size: size };
 })();
