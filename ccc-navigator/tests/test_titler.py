@@ -433,5 +433,53 @@ class TitlerCycle(unittest.TestCase):
         self.assertEqual(FakeHandler.renames, [])
 
 
+class PrivacyDefaultsTest(unittest.TestCase):
+    """Nothing leaves the machine unless the owner opts in."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in ("TITLER_CMD", "TITLER_ALLOW_EXTERNAL")}
+
+    def tearDown(self):
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_external_model_is_off_by_default(self):
+        self.assertFalse(titler.external_allowed())
+
+    def test_explicit_opt_in_or_command_enables_it(self):
+        os.environ["TITLER_ALLOW_EXTERNAL"] = "1"
+        self.assertTrue(titler.external_allowed())
+        del os.environ["TITLER_ALLOW_EXTERNAL"]
+        self.assertTrue(titler.external_allowed("python3 stub.py"))
+
+    def test_default_run_never_calls_the_model(self):
+        calls = []
+        original = titler.call_model
+        titler.call_model = lambda *a, **k: calls.append(a) or "Should Not Happen"
+        try:
+            client = type("C", (), {"transcript": lambda self, e, s: {"events": [
+                {"type": "user", "text": "Fix the login page for the airline demo"},
+                {"type": "assistant", "text": "On it."}]}})()
+            opts = titler.Options(dry_run=True)
+            result = titler.title_candidate(client, {"key": "k", "item": {"sid": "s", "engine": "e"}, "prior": None}, opts, {})
+        finally:
+            titler.call_model = original
+        self.assertEqual(calls, [])
+        self.assertEqual(result["status"], "proposed")
+        self.assertEqual(result["title"], "Fix Login Page Airline Demo")
+
+    def test_local_title_needs_real_words(self):
+        self.assertEqual(titler.local_title([("user", "ok")]), "")
+
+    def test_personal_data_is_redacted(self):
+        text = "Mail dr.who@example.com, call +972 54-123-4567, see https://x.example/secret?id=1 id 123456789"
+        cleaned = titler.strip_secrets(text)
+        for leaked in ("dr.who@example.com", "054", "4567", "https://", "123456789"):
+            self.assertNotIn(leaked, cleaned)
+
+
 if __name__ == "__main__":
     unittest.main()

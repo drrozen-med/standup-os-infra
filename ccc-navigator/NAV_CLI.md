@@ -171,6 +171,13 @@ each transcript into a short excerpt, asks a small model for a two-to-five
 word title, and writes the title back through the navigator's rename
 endpoint. The sidebar then shows names instead of truncated prompts.
 
+**Privacy: by default nothing leaves your machine.** Sessions can hold medical,
+business and personal content. Out of the box the titler builds names locally
+from the first message (rule-based, no network). An outside model is used only
+if you opt in with `TITLER_ALLOW_EXTERNAL=1` or point `TITLER_CMD` at a command
+you chose. Emails, links, phone numbers, long ID numbers and API keys are
+removed from any excerpt before it is handed to a model.
+
 ```bash
 cd ccc-navigator
 
@@ -213,16 +220,17 @@ Safety rules the worker follows:
 - a title the user typed by hand is NEVER overwritten -- the worker only
   re-titles sessions it named itself;
 - transcripts are truncated to the first user message plus the last three
-  messages, and obvious secrets (API keys such as `sk-...`, `Bearer` tokens,
-  long hex or base64 blobs) are stripped before the excerpt leaves the
-  machine;
+  messages, and obvious secrets and personal data (API keys, `Bearer` tokens,
+  long hex or base64 blobs, emails, links, phone numbers, long digit runs) are
+  stripped before an excerpt is handed to any model;
 - a reply is accepted only when it is a single line of at most 7 words and 40
   characters, with markdown, quotes and trailing punctuation removed.
 
-The model is called through `droid exec -m custom:MiniMax-M3-direct --auto
-low '<prompt>'` (the user's paid, non-training subscription). `TITLER_CMD`
-replaces that command, with the prompt passed as the last argument, which is
-how the tests run it against a stub:
+When the outside model is enabled it is called through `droid exec -m
+custom:MiniMax-M3-direct --auto low '<prompt>'`. Whether that lane is
+non-training has not been verified, so it stays off unless you opt in.
+`TITLER_CMD` replaces that command, with the prompt passed as the last
+argument, which is how the tests run it against a stub:
 
 ```bash
 TITLER_CMD="python3 my_stub.py" python3 titler.py --dry-run
