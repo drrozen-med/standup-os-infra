@@ -144,13 +144,23 @@
 
   function Conversation(root, opts) {
     var sid = opts.sid;
+    var engine = opts.engine || '';
+    var isPi = engine === 'pi';
     var thread = root.querySelector('.thread');
     var box = root.querySelector('.composer textarea');
     var send = root.querySelector('.composer .send');
     var timer = null;
 
+    if (isPi) {
+      if (box) { box.disabled = true; box.placeholder = 'Pi sessions are read-only here.'; }
+      if (send) send.disabled = true;
+    }
+
     function load(scroll) {
-      fetch('/api/conversations/' + encodeURIComponent(sid))
+      var url = isPi
+        ? '/api/pi/transcript?sid=' + encodeURIComponent(sid)
+        : '/api/conversations/' + encodeURIComponent(sid);
+      fetch(url)
         .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
         .then(function (d) {
           render(d.events || [], thread);

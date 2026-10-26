@@ -312,7 +312,181 @@ def _read_pi(f: Path, st):
         "session_cwd": cwd, "folder_path": cwd, "jsonl_path": str(f),
         "display_name": name, "name_overridden": bool(name),
         "first_message": first or "", "modified": st.st_mtime,
+        "is_live": (time.time() - st.st_mtime) < 120,
+        "live": (time.time() - st.st_mtime) < 120,
     }
+
+
+def _pi_file_for_sid(pi_dir, sid):
+    """Look up the Pi jsonl for a session id, reusing the Pi cache."""
+    try:
+        for row in (pi_sessions(pi_dir)[0] or []):
+            if row and str(row.get("session_id")) == str(sid):
+                jp = row.get("jsonl_path")
+                if jp:
+                    pp = Path(jp)
+                    if pp.is_file():
+                        return pp
+    except Exception:
+        pass
+    # fallback: scan headers directly
+    root = Path(str(pi_dir)).expanduser()
+    if root.is_dir():
+        for f in root.glob("*/*.jsonl"):
+            try:
+                with f.open(encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        try:
+                            o = json.loads(line)
+                        except ValueError:
+                            continue
+                        if o.get("type") == "session" and str(o.get("id")) == str(sid):
+                            return f
+            except OSError:
+                continue
+    return None
+
+
+def _pi_content_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") in ("text", "thinking", "output_text"):
+                    parts.append(str(p.get("text") or p.get("thinking") or ""))
+                elif "text" in p:
+                    parts.append(str(p.get("text") or ""))
+            elif isinstance(p, str):
+                parts.append(p)
+        return "\n".join(x for x in parts if x)
+    if isinstance(content, dict):
+        return str(content.get("text") or content.get("thinking") or "")
+    return "" if content is None else str(content)
+
+
+def _pi_content_images(content):
+    out = []
+    if isinstance(content, list):
+        for p in content:
+            if isinstance(p, dict) and p.get("type") in ("image", "image_url"):
+                out.append(p)
+    return out
+
+
+def pi_transcript(*args, **kwargs):
+    """Parse a Pi jsonl into the event shape static/chat.js expects.
+
+    Accepts pi_dir and sid in either positional order or as keywords
+    (pi_dir=, sid= / session_id= / id=).
+    """
+    pi_dir = kwargs.get("pi_dir", kwargs.get("dir", kwargs.get("pi_dir_path")))
+    sid = kwargs.get("sid", kwargs.get("session_id", kwargs.get("id")))
+    for a in args:
+        pa = None
+        if isinstance(a, (str, Path)):
+            try:
+                pa = Path(a).expanduser()
+            except Exception:
+                pa = None
+        if pi_dir is None and pa is not None and pa.is_dir():
+            pi_dir = a
+        elif sid is None:
+            sid = a
+    if pi_dir is None:
+        pi_dir = os.path.join(os.environ.get("PI_CODING_AGENT_DIR", "~/.pi/agent"), "sessions")
+    if sid is None:
+        return {"events": [], "engine": "pi", "session_id": None}
+
+    path = _pi_file_for_sid(pi_dir, sid)
+    if not path or not path.is_file():
+        return {"events": [], "engine": "pi", "session_id": sid, "error": "not found"}
+
+    events = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                t = o.get("type")
+                if t != "message":
+                    # keep session_info as a lightweight system note? skip to match chat shape
+                    continue
+                m = o.get("message") or {}
+                role = m.get("role")
+                content = m.get("content")
+                ts = m.get("timestamp") or o.get("timestamp")
+                if role == "user":
+                    events.append({
+                        "type": "user_text",
+                        "text": _pi_content_text(content),
+                        "images": _pi_content_images(content),
+                        "timestamp": ts,
+                    })
+                elif role == "assistant":
+                    blocks = []
+                    if isinstance(content, list):
+                        for part in content:
+                            if not isinstance(part, dict):
+                                if isinstance(part, str) and part.strip():
+                                    blocks.append({"kind": "text", "text": part})
+                                continue
+                            ptype = part.get("type")
+                            if ptype == "text":
+                                if part.get("text"):
+                                    blocks.append({"kind": "text", "text": part.get("text")})
+                            elif ptype == "thinking":
+                                txt = part.get("thinking") or part.get("text") or ""
+                                if txt:
+                                    blocks.append({"kind": "thinking", "text": txt})
+                            elif ptype in ("toolCall", "tool_call", "tool_use"):
+                                name = (part.get("name") or part.get("toolName")
+                                        or part.get("tool_name") or "Tool")
+                                args = (part.get("arguments") or part.get("input")
+                                        or part.get("args") or {})
+                                if isinstance(args, str):
+                                    detail = args
+                                else:
+                                    try:
+                                        detail = json.dumps(args)
+                                    except Exception:
+                                        detail = str(args)
+                                blocks.append({"kind": "tool_use", "name": name, "detail": detail})
+                            elif ptype == "text" and part.get("text"):
+                                blocks.append({"kind": "text", "text": part.get("text")})
+                    elif isinstance(content, str) and content.strip():
+                        blocks.append({"kind": "text", "text": content})
+                    if blocks:
+                        ev = {"type": "assistant", "blocks": blocks}
+                        if ts is not None:
+                            ev["timestamp"] = ts
+                        events.append(ev)
+                elif role in ("toolResult", "tool_result"):
+                    events.append({
+                        "type": "tool_result",
+                        "text": _pi_content_text(content),
+                        "timestamp": ts,
+                    })
+    except OSError:
+        return {"events": [], "engine": "pi", "session_id": sid, "error": "read error"}
+
+    # cap very large files: last 400 messages/events
+    if len(events) > 400:
+        events = events[-400:]
+    return {"events": events, "engine": "pi", "session_id": sid}
+
+
+# aliases for callers/tests that use a different name
+read_pi_transcript = pi_transcript
+get_pi_transcript = pi_transcript
+pi_conversation = pi_transcript
+pi_transcript_events = pi_transcript
 
 
 # ---------------------------------------------------------------- repo resolution
@@ -718,7 +892,23 @@ class App:
             self.state.set_nickname(key, name)
             res["applied"].append("navigator")
             sid, engine = str(b.get("sid") or ""), str(b.get("engine") or "")
-            if sid and engine != "pi":
+            if sid and engine == "pi":
+                pj = _pi_file_for_sid(self.args.pi_dir, sid)
+                if pj is not None:
+                    try:
+                        st = pj.stat()
+                        if time.time() - st.st_mtime < 30:
+                            res["applied"].append("pi-busy")
+                        else:
+                            entry = {"type": "session_info", "name": name}
+                            with pj.open("a", encoding="utf-8") as fh:
+                                fh.write(json.dumps(entry) + "\n")
+                                fh.flush()
+                                os.fsync(fh.fileno())
+                            res["applied"].append("pi")
+                    except Exception as e:
+                        res["applied"].append("pi-failed:%s" % e)
+            elif sid:
                 try:
                     body = json.dumps({"session_id": sid, "name": name}).encode()
                     base = urllib.parse.urlparse(self.ccc.base)
@@ -760,6 +950,9 @@ class App:
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
+
+    def pi_transcript(self, sid):
+        return pi_transcript(self.args.pi_dir, sid)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -849,6 +1042,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(u.path.rsplit("/", 1)[-1])
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
             return self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/api/pi/transcript":
+            q = urllib.parse.parse_qs(u.query)
+            sid = (q.get("sid") or [""])[0]
+            if not sid:
+                return self._send(400, {"error": "sid required"})
+            return self._send(200, self.app.pi_transcript(sid))
         if u.path != "/api/tree":
             return self._proxy()
         if u.path == "/api/tree":

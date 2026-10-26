@@ -373,3 +373,111 @@ class StaticAssets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PiTranscript(unittest.TestCase):
+    def setUp(self):
+        navigator._pi_cache.clear()
+
+    def make(self, entries):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        (sd / "s.jsonl").write_text("\n".join(json.dumps(o) for o in entries) + "\n")
+        return d.name, None
+
+    def test_transcript_shape(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        sid = "u1"
+        entries = [
+            {"type": "session", "id": sid, "cwd": "/code/proj"},
+            {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+            {"type": "message", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "thought"},
+                {"type": "text", "text": "hello"},
+                {"type": "toolCall", "name": "bash", "arguments": {"cmd": "ls"}},
+            ]}},
+            {"type": "message", "message": {"role": "toolResult", "content": [{"type": "text", "text": "out"}]}},
+        ]
+        (sd / "s.jsonl").write_text("\n".join(json.dumps(o) for o in entries) + "\n")
+        data = navigator.pi_transcript(d.name, sid)
+        self.assertEqual(data["engine"], "pi")
+        evs = data["events"]
+        self.assertEqual([e["type"] for e in evs], ["user_text", "assistant", "tool_result"])
+        self.assertEqual(evs[0]["text"], "hi")
+        kinds = [b["kind"] for b in evs[1]["blocks"]]
+        self.assertEqual(kinds, ["thinking", "text", "tool_use"])
+        self.assertEqual(evs[1]["blocks"][2]["name"], "bash")
+        self.assertEqual(evs[2]["text"], "out")
+
+    def test_transcript_cap_400(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        sid = "u2"
+        entries = [{"type": "session", "id": sid, "cwd": "/code/proj"}]
+        for i in range(500):
+            entries.append({"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": str(i)}]}})
+        (sd / "s.jsonl").write_text("\n".join(json.dumps(o) for o in entries) + "\n")
+        data = navigator.pi_transcript(d.name, sid)
+        self.assertEqual(len(data["events"]), 400)
+        self.assertEqual(data["events"][0]["text"], "100")
+        self.assertEqual(data["events"][-1]["text"], "499")
+
+    def test_pi_live_under_120s(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        (sd / "s.jsonl").write_text(json.dumps({"type": "session", "id": "u3", "cwd": "/code/proj"}) + "\n")
+        rows, meta = navigator.pi_sessions(d.name)
+        self.assertTrue(rows[0]["is_live"])
+
+    def test_pi_rename_appends_session_info(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        sid = "u4"
+        (sd / "s.jsonl").write_text(json.dumps({"type": "session", "id": sid, "cwd": "/code/proj"}) + "\n")
+        # make file old enough
+        p = sd / "s.jsonl"
+        old_mtime = time.time() - 60
+        os.utime(p, (old_mtime, old_mtime))
+        navigator._pi_cache.clear()
+        args = type("A", (), {})()
+        args.pi_dir = d.name
+        args.ccc = "http://localhost:8090"
+        args.state = str(Path(d.name) / "state.json")
+        args.orca_dir = None
+        args.verbose = False
+        app = navigator.App(args)
+        res = app.rename({"kind": "session", "key": "pi:u4", "sid": sid, "engine": "pi", "name": "new name"})
+        self.assertIn("pi", res["applied"])
+        # re-read pi
+        navigator._pi_cache.clear()
+        rows, meta = navigator.pi_sessions(d.name)
+        self.assertEqual(rows[0]["display_name"], "new name")
+
+    def test_pi_rename_busy_skips(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        sd = Path(d.name) / "--proj--"
+        sd.mkdir()
+        sid = "u5"
+        (sd / "s.jsonl").write_text(json.dumps({"type": "session", "id": sid, "cwd": "/code/proj"}) + "\n")
+        navigator._pi_cache.clear()
+        args = type("A", (), {})()
+        args.pi_dir = d.name
+        args.ccc = "http://localhost:8090"
+        args.state = str(Path(d.name) / "state.json")
+        args.orca_dir = None
+        args.verbose = False
+        app = navigator.App(args)
+        res = app.rename({"kind": "session", "key": "pi:u5", "sid": sid, "engine": "pi", "name": "new name"})
+        self.assertIn("pi-busy", res["applied"])
