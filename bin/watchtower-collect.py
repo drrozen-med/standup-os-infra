@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
 """watchtower-collect.py - read-only portfolio snapshot.
 
-Reads watchtower/lanes.json and watchtower/decisions.json, queries the GitHub
-REST API for every repo (open PRs, CI on default branch and PR heads, blocker
-issues), and writes:
+Two layers, live first:
+
+  1. Live: what every agent session is doing right now, read from the local
+     CCC Navigator (status labels kept fresh by its triage worker: working,
+     needs-you, blocked, done, plus your notes). Seconds old.
+  2. GitHub: CI on the default branch, open PRs, blocker issues. Slow and
+     rate-limited, so it is refreshed at most every WATCHTOWER_GITHUB_EVERY
+     seconds (default 3600) and reused from the cache in between.
+
+Sessions are mapped to lanes by project name (`repos` plus `match` substrings
+in lanes.json); anything unmatched lands under "Other".
+
+Writes:
 
   $WATCHTOWER_STATE_DIR/latest.json   machine-readable snapshot
   $WATCHTOWER_STATE_DIR/brief.md      one-page brief, open decisions first
 
-Never writes to GitHub. A repo the token cannot see is reported as
-"no access", not skipped silently.
+Never writes to GitHub or to any session. A repo the token cannot see is
+reported as "no access", not skipped silently. Nothing leaves the machine
+except the read-only GitHub calls.
 
 Env:
   GITHUB_TOKEN           read-only token (fine-grained: Contents, Pull requests,
@@ -17,10 +28,19 @@ Env:
                          public repos.
   WATCHTOWER_CONFIG_DIR  default: <repo>/watchtower
   WATCHTOWER_STATE_DIR   default: $STANDUP_OS_ROOT/watchtower-state or ./state
+  WATCHTOWER_NAV_URL     default: http://127.0.0.1:8095 (the navigator)
+  WATCHTOWER_WINDOW      sessions active within: now | 1d | 7d (default 7d)
+  WATCHTOWER_GITHUB      0 turns the GitHub layer off
+  WATCHTOWER_GITHUB_EVERY  seconds between GitHub refreshes (default 3600)
+
+Without GITHUB_TOKEN the GitHub layer uses the `gh` CLI if it is signed in.
 """
 import json
 import os
+import shutil
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -40,6 +60,12 @@ STATE_DIR = Path(
     )
 )
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+NAV_URL = os.environ.get("WATCHTOWER_NAV_URL", "http://127.0.0.1:8095").rstrip("/")
+WINDOW = os.environ.get("WATCHTOWER_WINDOW", "7d")
+GITHUB_ON = os.environ.get("WATCHTOWER_GITHUB", "1") != "0"
+GITHUB_EVERY = int(os.environ.get("WATCHTOWER_GITHUB_EVERY", "3600"))
+GH = shutil.which("gh") if not TOKEN else None
+ATTENTION = ("needs-you", "blocked")
 
 
 class NoAccess(Exception):
@@ -47,6 +73,11 @@ class NoAccess(Exception):
 
 
 def api(path):
+    if GH:
+        r = subprocess.run([GH, "api", path], capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise NoAccess((r.stderr.strip().splitlines() or ["gh api failed"])[-1][:120])
+        return json.loads(r.stdout)
     req = urllib.request.Request(API + path)
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("User-Agent", "standup-os-watchtower")
@@ -131,16 +162,108 @@ def collect_repo(owner, name, cfg, now):
     return out
 
 
+def lane_for(project, lanes):
+    name = project.lower()
+    for lane_id, lane in lanes.items():
+        if name in (r.lower() for r in lane["repos"]) or any(m.lower() in name for m in lane.get("match", [])):
+            return lane_id
+    return "other"
+
+
+def collect_live(lanes):
+    """Every visible session from the navigator, with its live label, by lane."""
+    url = f"{NAV_URL}/api/tree?window={WINDOW}"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            tree = json.load(resp)
+    except Exception as e:  # navigator down: say so, keep the rest of the brief
+        return {"ok": False, "error": f"navigator unreachable at {NAV_URL}: {e}", "lanes": {}}
+    out = {}
+    for repo in tree.get("repos") or []:
+        project = repo.get("name") or repo.get("key") or "?"
+        for group in repo.get("groups") or []:
+            for it in group.get("items") or []:
+                if it.get("hidden"):
+                    continue
+                if it.get("live"):
+                    label = "working"
+                elif it.get("needs_you"):
+                    label = "needs-you"
+                else:
+                    label = it.get("triage") or "idle"
+                lane = out.setdefault(lane_for(project, lanes), {"counts": {}, "attention": [], "working": []})
+                lane["counts"][label] = lane["counts"].get(label, 0) + 1
+                row = {"key": it.get("key"), "project": project, "group": group.get("name") or "",
+                       "title": it.get("nick") or it.get("original") or "", "engine": it.get("engine"),
+                       "why": it.get("triage_reason") or "", "note": it.get("last_note") or "",
+                       "marked_by_you": it.get("triage_by") == "you", "mtime": it.get("mtime")}
+                if label in ATTENTION:
+                    lane["attention"].append(dict(row, label=label))
+                elif label == "working":
+                    lane["working"].append(row)
+    for lane in out.values():
+        lane["attention"].sort(key=lambda r: (ATTENTION.index(r["label"]), -(r["mtime"] or 0)))
+    return {"ok": True, "window": WINDOW, "lanes": out}
+
+
+def _safe_repo(owner, name, cfg, now):
+    try:
+        return collect_repo(owner, name, cfg, now)
+    except NoAccess as e:  # e.g. an empty repo (HTTP 409): report it, keep going
+        return {"repo": f"{owner}/{name}", "access": True, "flags": [f"unreadable: {e}"]}
+
+
+def collect_github(cfg, now):
+    """GitHub layer, from cache unless it is older than GITHUB_EVERY."""
+    cache = STATE_DIR / "github.json"
+    try:
+        cached = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        cached = None
+    if not GITHUB_ON:
+        return cached
+    if cached and time.time() - cached.get("fetched", 0) < GITHUB_EVERY:
+        return cached
+    fresh = {"fetched": time.time(), "generated_at": now.isoformat(), "lanes": {}}
+    try:
+        for lane_id, lane in cfg["lanes"].items():
+            fresh["lanes"][lane_id] = [_safe_repo(cfg["owner"], n, cfg, now) for n in lane["repos"]]
+    except Exception as e:  # network trouble: keep the last good copy
+        if cached:
+            cached["stale_error"] = str(e)[:200]
+            return cached
+        return {"fetched": 0, "error": str(e)[:200], "lanes": {}}
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(fresh, indent=2))
+    return fresh
+
+
+def _ago(ts):
+    if not ts:
+        return ""
+    mins = int((time.time() - ts) // 60)
+    return f"{mins}m ago" if mins < 90 else f"{mins // 60}h ago" if mins < 2880 else f"{mins // 1440}d ago"
+
+
 def render(snapshot, decisions, now):
     today = now.date()
-    lines = [f"# Watchtower brief - {now:%Y-%m-%d %H:%MZ}", ""]
+    live, gh = snapshot["live"], snapshot.get("github") or {}
+    titles = dict(snapshot["lane_titles"], other="Other projects")
+    tot = {}
+    for lane in live["lanes"].values():
+        for k, v in lane["counts"].items():
+            tot[k] = tot.get(k, 0) + v
+    lines = [f"# Watchtower - {now.astimezone():%Y-%m-%d %H:%M}", ""]
+    if live["ok"]:
+        lines.append(f"**Right now:** {tot.get('needs-you', 0)} need you, {tot.get('blocked', 0)} blocked, "
+                     f"{tot.get('working', 0)} working, {tot.get('done', 0)} done "
+                     f"(sessions active in the last {live['window']}).")
+    else:
+        lines.append(f"**Live sessions unavailable:** {live['error']}")
+    lines.append("")
 
     open_dec = [d for d in decisions if d.get("status") == "open"]
-
-    def sort_key(d):
-        return (d["priority"], d["deadline"] or "9999")
-
-    open_dec.sort(key=sort_key)
+    open_dec.sort(key=lambda d: (d["priority"], d["deadline"] or "9999"))
     lines.append(f"## Decisions waiting on you ({len(open_dec)})")
     lines.append("")
     for d in open_dec:
@@ -151,21 +274,42 @@ def render(snapshot, decisions, now):
         lines.append(f"- **P{d['priority']}** `{d['id']}` ({d['lane']}){due}: {d['question']} Options: {' / '.join(d['options'])}")
     lines.append("")
 
-    for lane_id, lane in snapshot["lanes"].items():
-        lines.append(f"## {lane['title']}")
+    order = list(snapshot["lane_titles"]) + ["other"]
+    quiet = []
+    for lane_id in order:
+        lane = live["lanes"].get(lane_id)
+        repos = (gh.get("lanes") or {}).get(lane_id) or []
+        gh_flags = [(r["repo"], f) for r in repos for f in r["flags"]]
+        c = (lane or {}).get("counts", {})
+        summary = ", ".join(f"{k} {c[k]}" for k in ("needs-you", "blocked", "working", "done", "idle", "stale") if c.get(k))
+        if not (lane or {}).get("attention") and not (lane or {}).get("working") and not gh_flags:
+            quiet.append(titles.get(lane_id, lane_id) + (f" ({summary})" if summary else ""))
+            continue
+        lines.append(f"## {titles.get(lane_id, lane_id)}" + (f"  ({summary})" if summary else ""))
         lines.append("")
-        for r in lane["repos"]:
-            if not r["access"]:
-                lines.append(f"- `{r['repo']}`: NO ACCESS - {r['flags'][0]}")
-                continue
-            prs = r["open_prs"]
-            lines.append(
-                f"- `{r['repo']}`: default CI **{r['default_ci']}**, "
-                f"{len(prs)} open PR(s), {len(r['blockers'])} blocker issue(s)"
-            )
-            for f in r["flags"]:
-                lines.append(f"  - FLAG: {f}")
+        for r in (lane or {}).get("attention", []):
+            who = " (marked by you)" if r["marked_by_you"] else ""
+            lines.append(f"- **{r['label'].upper()}**{who} {r['title']} [{r['project']}, {r['engine']}, {_ago(r['mtime'])}]")
+            if r["why"]:
+                lines.append(f"  - {r['why']}")
+            if r["note"]:
+                lines.append(f"  - note: {r['note']}")
+        for r in (lane or {}).get("working", []):
+            lines.append(f"- working: {r['title']} [{r['project']}, {r['engine']}]")
+        for repo, f in gh_flags:
+            lines.append(f"- GitHub `{repo}`: {f}")
         lines.append("")
+
+    if quiet:
+        lines.append("**Quiet:** " + "; ".join(quiet))
+        lines.append("")
+    if gh.get("fetched"):
+        note = f"GitHub layer from {_ago(gh['fetched'])}"
+        if gh.get("stale_error"):
+            note += f" (last refresh failed: {gh['stale_error']})"
+        lines.append(f"_{note}._")
+    elif GITHUB_ON:
+        lines.append(f"_GitHub layer unavailable: {gh.get('error', 'not fetched yet')}._")
     return "\n".join(lines)
 
 
@@ -174,10 +318,12 @@ def main():
     decisions = json.loads((CONFIG_DIR / "decisions.json").read_text())
     now = datetime.now(timezone.utc)
 
-    snapshot = {"generated_at": now.isoformat(), "lanes": {}}
-    for lane_id, lane in cfg["lanes"].items():
-        repos = [collect_repo(cfg["owner"], n, cfg, now) for n in lane["repos"]]
-        snapshot["lanes"][lane_id] = {"title": lane["title"], "repos": repos}
+    snapshot = {
+        "generated_at": now.isoformat(),
+        "lane_titles": {k: v["title"] for k, v in cfg["lanes"].items()},
+        "live": collect_live(cfg["lanes"]),
+        "github": collect_github(cfg, now),
+    }
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / "latest.json").write_text(json.dumps(snapshot, indent=2))

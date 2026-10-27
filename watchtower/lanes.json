@@ -1,23 +1,73 @@
 {
   "owner": "drrozen-med",
   "stale_pr_days": 7,
-  "blocker_labels": ["release-blocker", "security", "P0"],
+  "blocker_labels": [
+    "release-blocker",
+    "security",
+    "P0"
+  ],
   "lanes": {
     "aba-cdl-launch": {
       "title": "ABA + CDL launch",
-      "repos": ["boardsBridge", "cdl-bridge"]
+      "repos": [
+        "boardsBridge",
+        "cdl-bridge"
+      ],
+      "match": [
+        "boardsbridge",
+        "cdl",
+        "bb-"
+      ]
     },
     "airlinebridge": {
       "title": "AirlineBridge release",
-      "repos": ["airline"]
+      "repos": [
+        "airline"
+      ],
+      "match": [
+        "airline"
+      ]
+    },
+    "shlav-bet": {
+      "title": "Shlav Bet",
+      "repos": [
+        "shlav-bet-family"
+      ],
+      "match": [
+        "shlav"
+      ]
+    },
+    "run-residency": {
+      "title": "Run Residency",
+      "repos": [
+        "run-residency"
+      ],
+      "match": [
+        "run-residency"
+      ]
     },
     "gtm-crm": {
       "title": "GTM / CRM",
-      "repos": ["shared-marketing", "sleepySounds_love", "run-residency"]
+      "repos": [
+        "shared-marketing",
+        "sleepySounds_love"
+      ],
+      "match": [
+        "marketing",
+        "sleepysounds"
+      ]
     },
     "platform-cost": {
       "title": "Platform and cost",
-      "repos": ["standup-os-infra", "standup-os-core", "standup-os-api", "standup-os-api-backend"]
+      "repos": [
+        "standup-os-infra",
+        "standup-os-core",
+        "standup-os-api",
+        "standup-os-api-backend"
+      ],
+      "match": [
+        "standup-os"
+      ]
     }
   }
 }

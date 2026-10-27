@@ -10,14 +10,46 @@ bin/watchtower-collect.py  reads GitHub, writes latest.json + brief.md
 
 ## What it does
 
-For every repo in `lanes.json`: default-branch CI, open PRs (CI state, idle
-days), open issues labelled `release-blocker` / `security` / `P0`. A repo the
-token cannot see is reported as `NO ACCESS`, never skipped. `brief.md` lists open
-decisions first (priority, then deadline, with days left), then one section per lane.
+Two layers, live first.
 
-It never writes to GitHub and never merges, deploys, spends or messages anyone.
+**Live (seconds old):** every agent session active in the last 7 days, read from
+the local CCC Navigator. Its triage worker labels each session every two minutes
+from local rules (nothing leaves the Mac): `working`, `needs-you` (approval
+waiting, or its last message asks you something), `blocked`, `done`, `idle`,
+`stale`. The brief shows, per lane, who needs you and why (the agent's own
+question), what is blocked, what is running, and your notes on those sessions.
+Sessions map to lanes by project name: `repos` plus the `match` substrings in
+`lanes.json`; anything else is listed under "Other projects".
 
-## Deploy
+**GitHub (refreshed at most hourly, cached in between):** default-branch CI,
+open PRs (CI state, idle days), open issues labelled `release-blocker` /
+`security` / `P0`. A repo that cannot be read is flagged, never skipped.
+
+`brief.md` lists open decisions first (priority, then deadline, with days left),
+then one section per lane with the live picture and GitHub flags together.
+
+It never writes to GitHub or to any session, and never merges, deploys, spends
+or messages anyone.
+
+## Run on the Mac (live mode, the default)
+
+The live layer needs the navigator, so Watchtower runs where the sessions run:
+
+```bash
+# launchd job, every 3 minutes: ~/Library/LaunchAgents/com.standup-os.watchtower.plist
+launchctl kickstart -k gui/$(id -u)/com.standup-os.watchtower
+cat ~/.ccc-navigator/watchtower/brief.md        # the brief
+python3 ccc-navigator/nav.py brief --table      # same live layer, instant
+```
+
+GitHub is read with `GITHUB_TOKEN` if set, otherwise through the signed-in `gh`
+CLI. `WATCHTOWER_GITHUB=0` turns that layer off; `WATCHTOWER_GITHUB_EVERY`
+changes the refresh interval (seconds, default 3600).
+
+## Deploy on a server (GitHub layer only)
+
+A server cannot see the Mac's sessions, so there the brief has decisions and
+GitHub only.
 
 ```bash
 sudo install -m755 bin/watchtower-collect.py bin/watchtower-run.sh /usr/local/libexec/
@@ -59,6 +91,5 @@ delete branches or data, or send outreach to a person. They raise a decision ins
 ## Session hygiene
 
 Any session above 80% context hands off to a fresh session with a written summary.
-Session-level state (blocked, review-ready, context use) comes from the daily
-"Portfolio morning brief" routine, which reads Claude Code sessions; this collector
-covers GitHub only.
+Session-level state (working, needs-you, blocked, done) comes from the live
+layer above.
