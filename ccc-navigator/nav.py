@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import time
 import os
 import re
 import subprocess
@@ -535,6 +536,46 @@ def build_parser():
     _add_global_options(groups, subcommand=True)
     groups.add_argument("--repo", required=True, help="repo key or substring")
 
+    send = subparsers.add_parser("send", help="send a message into a session (through CCC) and optionally wait for the reply")
+    _add_global_options(send, subcommand=True)
+    send.add_argument("target", help="session key (engine:id), session id, or a unique id prefix")
+    send.add_argument("text", help="message to send")
+    send.add_argument("--wait", type=int, default=0, metavar="SECONDS", help="wait up to this long for the agent's reply")
+    send.add_argument("--dry-run", action="store_true", help="resolve the target and show what would be sent")
+
+    read = subparsers.add_parser("read", help="print the latest messages of a session as plain text")
+    _add_global_options(read, subcommand=True)
+    read.add_argument("target", help="session key (engine:id), session id, or a unique id prefix")
+    read.add_argument("--last", type=int, default=10, help="how many messages (default 10)")
+    read.add_argument("--chars", type=int, default=1200, help="max characters per message (default 1200)")
+
+    note = subparsers.add_parser("note", help="add a note to a session (or --rm N to delete one)")
+    _add_global_options(note, subcommand=True)
+    note.add_argument("target", help="session key (engine:id), session id, or a unique id prefix")
+    note.add_argument("text", nargs="?", default="", help="the note")
+    note.add_argument("--rm", type=int, default=None, metavar="N", help="delete note number N (from `notes`)")
+    note.add_argument("--by", default="you", help="who wrote it (default: you)")
+
+    notes = subparsers.add_parser("notes", help="list notes for one session, or every session with notes")
+    _add_global_options(notes, subcommand=True)
+    notes.add_argument("target", nargs="?", default="", help="session key, id or prefix (omit for all)")
+
+    mark = subparsers.add_parser("mark", help="set a session's triage label yourself (the sorter will not override it)")
+    _add_global_options(mark, subcommand=True)
+    mark.add_argument("target", help="session key (engine:id), session id, or a unique id prefix")
+    mark.add_argument("label", help="working | needs-you | blocked | done | idle | stale | any word, or 'clear'")
+    mark.add_argument("--reason", default="", help="why")
+
+    triage = subparsers.add_parser("triage", help="sort visible sessions into working / needs-you / blocked / done / idle / stale")
+    _add_global_options(triage, subcommand=True)
+    triage.add_argument("--window", default="7d", choices=["now", "1d", "7d", "all"])
+    triage.add_argument("--dry-run", action="store_true", help="show labels without saving them")
+    triage.add_argument("--only", default="", help="print only these labels, comma-separated (e.g. needs-you,blocked)")
+
+    brief = subparsers.add_parser("brief", help="live snapshot: per project, what is running, waiting on you, blocked or done")
+    _add_global_options(brief, subcommand=True)
+    brief.add_argument("--window", default="7d", choices=["now", "1d", "7d", "all"])
+
     status = subparsers.add_parser("status", help="show navigator and CCC status")
     _add_global_options(status, subcommand=True)
 
@@ -577,12 +618,13 @@ def print_items_table(items):
                 item.get("repo_name") or item.get("repo", ""),
                 item.get("group") or "(ungrouped)",
                 item.get("engine", ""),
+                item.get("triage", ""),
                 "yes" if item.get("live") else "",
                 "yes" if item.get("hidden") else "",
                 _display_time(item.get("mtime")),
             ]
         )
-    print_table(["KEY", "TITLE", "REPO", "GROUP", "ENGINE", "LIVE", "HIDDEN", "MTIME"], rows)
+    print_table(["KEY", "TITLE", "REPO", "GROUP", "ENGINE", "TRIAGE", "LIVE", "HIDDEN", "MTIME"], rows)
 
 
 def print_mutation_table(result):
@@ -1278,6 +1320,212 @@ def cmd_curate(args, client):
     return 0
 
 
+def resolve_session(client, target):
+    """(sid, engine, item) for a key, a session id or a unique id prefix.
+    Sessions the navigator never lists (headless runs) still work by raw id."""
+    target = str(target or "").strip()
+    if not target:
+        raise UsageError("a session key or id is required")
+    items = flatten_tree(client.tree())
+    exact = [i for i in items if target in (str(i.get("key")), str(i.get("sid")))]
+    if not exact:
+        exact = [i for i in items if str(i.get("sid") or "").startswith(target)
+                 or str(i.get("key") or "").startswith(target)]
+    if len(exact) > 1:
+        raise UsageError("%r matches %d sessions; use the full key" % (target, len(exact)))
+    if exact:
+        it = exact[0]
+        return str(it.get("sid") or ""), str(it.get("engine") or ""), it
+    if ":" in target:
+        engine, sid = target.split(":", 1)
+        return sid, engine, None
+    return target, "", None
+
+
+def flatten_events(events):
+    """[(role, text)] from a conversation payload, tools and thinking folded to one line."""
+    out = []
+    for ev in events or []:
+        role = str(ev.get("type") or ev.get("role") or "event")
+        parts = []
+        if isinstance(ev.get("text"), str):
+            parts.append(ev["text"])
+        for b in ev.get("blocks") or []:
+            kind = str(b.get("kind") or b.get("type") or "")
+            txt = b.get("text") if isinstance(b.get("text"), str) else ""
+            if kind in ("text", "markdown", "") and txt:
+                parts.append(txt)
+            elif kind in ("tool", "tool_use", "tool_call", "command"):
+                parts.append("[tool] " + str(b.get("name") or b.get("title") or txt)[:120])
+        text = "\n".join(p for p in parts if p).strip()
+        if text:
+            out.append((role, text))
+    return out
+
+
+def fetch_events(client, sid, engine):
+    path = ("/api/pi/transcript?sid=" + urllib.parse.quote(sid)) if engine == "pi" \
+        else ("/api/conversations/" + urllib.parse.quote(sid))
+    return client._request(path).get("events") or []
+
+
+def cmd_read(args, client):
+    sid, engine, item = resolve_session(client, args.target)
+    msgs = flatten_events(fetch_events(client, sid, engine))[-max(1, args.last):]
+    if args.table:
+        for role, text in msgs:
+            print("%s: %s\n" % (role.upper(), text[:args.chars]))
+        return 0
+    print_json({"sid": sid, "engine": engine, "title": (item or {}).get("nick") or (item or {}).get("original"),
+                "messages": [{"role": r, "text": x[:args.chars]} for r, x in msgs]})
+    return 0
+
+
+def cmd_send(args, client):
+    sid, engine, item = resolve_session(client, args.target)
+    if engine == "pi":
+        raise UsageError("Pi sessions are read-only: Pi has no remote input")
+    text = args.text.strip()
+    if not text:
+        raise UsageError("empty message")
+    title = (item or {}).get("nick") or (item or {}).get("original") or ""
+    if args.dry_run:
+        print_json({"dry_run": True, "sid": sid, "engine": engine, "title": title, "text": text})
+        return 0
+    before = len(fetch_events(client, sid, engine)) if args.wait else 0
+    res = client.post("/api/inject-input", {"session_id": sid, "text": text})
+    if res.get("ok") is False:
+        raise NavError("CCC refused the message: %s" % (res.get("error") or res))
+    out = {"sent": True, "sid": sid, "engine": engine, "title": title, "ccc": res}
+    if args.wait:
+        deadline = time.time() + args.wait
+        reply = None
+        while time.time() < deadline and reply is None:
+            time.sleep(3)
+            try:
+                msgs = flatten_events(fetch_events(client, sid, engine)[before:])
+            except NavError:
+                continue
+            seen_user = False
+            for role, x in msgs:
+                if role.startswith("user") and text[:40] in x:
+                    seen_user = True
+                elif seen_user and role == "assistant" and not x.startswith("[tool]"):
+                    reply = x
+        out["reply"] = reply
+        out["waited"] = True
+        if reply is None:
+            out["note"] = "no reply within %ds (it may still be working)" % args.wait
+    print_json(out)
+    return 0
+
+
+def _note_key(client, target):
+    sid, engine, item = resolve_session(client, target)
+    if item:
+        return item["key"], item
+    if not engine:
+        raise UsageError("%r is not a listed session; use engine:id" % target)
+    return "%s:%s" % (engine, sid), None
+
+
+def cmd_note(args, client):
+    key, item = _note_key(client, args.target)
+    if args.rm is not None:
+        res = client.post("/api/note", {"key": key, "remove": args.rm - 1})
+        print_json({"key": key, "removed": args.rm, "ok": res.get("ok")})
+        return 0
+    if not args.text.strip():
+        raise UsageError("empty note")
+    res = client.post("/api/note", {"key": key, "text": args.text, "by": args.by})
+    print_json({"key": key, "title": (item or {}).get("nick") or (item or {}).get("original"), "note": res.get("note")})
+    return 0
+
+
+def cmd_notes(args, client):
+    if args.target:
+        key, item = _note_key(client, args.target)
+        notes = {key: client._request("/api/notes?key=" + urllib.parse.quote(key)).get("notes") or []}
+    else:
+        notes = client._request("/api/notes").get("notes") or {}
+    if args.table:
+        for key, lst in notes.items():
+            print(key)
+            for n, note in enumerate(lst, 1):
+                print("  %d. [%s %s] %s" % (n, _display_time(note.get("ts")), note.get("by", ""), note.get("text", "")))
+        return 0
+    print_json(notes)
+    return 0
+
+
+def cmd_mark(args, client):
+    key, item = _note_key(client, args.target)
+    label = "" if args.label.lower() == "clear" else args.label.lower()
+    # clearing must go through as the owner, then the sorter is free to label it again
+    client.post("/api/triage", {"entries": {key: {"label": label, "reason": args.reason, "by": "you"}}})
+    print_json({"key": key, "label": label or None, "by": "you"})
+    return 0
+
+
+def cmd_triage(args, client):
+    import triage
+    res = triage.run_pass(client, args.window, args.dry_run)
+    only = {x.strip() for x in args.only.split(",") if x.strip()}
+    if only:
+        res["results"] = [r for r in res["results"] if r.get("label") in only]
+    if args.table:
+        print("counts: " + ", ".join("%s %d" % kv for kv in sorted(res["counts"].items())))
+        order = {k: i for i, k in enumerate(["needs-you", "blocked", "working", "done", "idle", "stale"])}
+        rows = sorted(res["results"], key=lambda r: order.get(r.get("label"), 9))
+        print_table(["LABEL", "KEY", "TITLE", "WHY"],
+                    [[r.get("label"), r["key"], (r.get("title") or "")[:40], (r.get("reason") or "")[:70]] for r in rows])
+        return 0
+    print_json(res)
+    return 0
+
+
+BRIEF_ORDER = ["needs-you", "blocked", "working", "done", "idle", "stale"]
+
+
+def cmd_brief(args, client):
+    """The live picture, from labels the triage worker already saved: no transcript reads."""
+    tree = client._request("/api/tree?window=%s" % args.window)
+    projects = {}
+    for it in flatten_tree(tree):
+        if it.get("hidden"):
+            continue
+        label = "working" if it.get("live") else ("needs-you" if it.get("needs_you") else (it.get("triage") or "idle"))
+        p = projects.setdefault(it.get("repo_name") or it.get("repo") or "?", {"counts": {}, "attention": [], "working": []})
+        p["counts"][label] = p["counts"].get(label, 0) + 1
+        row = {"key": it["key"], "title": it.get("nick") or it.get("original"), "group": it.get("group") or "",
+               "why": it.get("triage_reason") or "", "note": it.get("last_note") or "", "by": it.get("triage_by") or ""}
+        if label in ("needs-you", "blocked"):
+            p["attention"].append(dict(row, label=label))
+        elif label == "working":
+            p["working"].append(row)
+    rank = lambda kv: (-len(kv[1]["attention"]), -len(kv[1]["working"]), kv[0].lower())
+    out = {"at": time.strftime("%Y-%m-%d %H:%M"), "window": args.window,
+           "totals": {k: sum(p["counts"].get(k, 0) for p in projects.values()) for k in BRIEF_ORDER},
+           "projects": dict(sorted(projects.items(), key=rank))}
+    if not args.table:
+        print_json(out)
+        return 0
+    t = out["totals"]
+    print("%s  |  %d need you, %d blocked, %d working, %d done" % (out["at"], t["needs-you"], t["blocked"], t["working"], t["done"]))
+    for name, p in out["projects"].items():
+        if not p["attention"] and not p["working"]:
+            continue
+        counts = ", ".join("%s %d" % (k, p["counts"][k]) for k in BRIEF_ORDER if p["counts"].get(k))
+        print("\n%s  (%s)" % (name, counts))
+        for r in p["attention"]:
+            print("  ! %-9s %s  -- %s" % (r["label"], (r["title"] or "")[:50], (r["why"] or "")[:90]))
+            if r["note"]:
+                print("              note: %s" % r["note"][:100])
+        for r in p["working"]:
+            print("  > working   %s" % (r["title"] or "")[:60])
+    return 0
+
+
 def cmd_nick(args, client):
     client.post("/api/nickname", {"key": args.key, "name": args.name})
     result = {"key": args.key, "name": args.name}
@@ -1394,6 +1642,20 @@ def main(argv=None):
             return cmd_groups(args, client)
         if args.command == "status":
             return cmd_status(args, client)
+        if args.command == "send":
+            return cmd_send(args, client)
+        if args.command == "read":
+            return cmd_read(args, client)
+        if args.command == "note":
+            return cmd_note(args, client)
+        if args.command == "notes":
+            return cmd_notes(args, client)
+        if args.command == "mark":
+            return cmd_mark(args, client)
+        if args.command == "triage":
+            return cmd_triage(args, client)
+        if args.command == "brief":
+            return cmd_brief(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2

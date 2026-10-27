@@ -240,3 +240,47 @@ The worker remembers what it named in `~/.ccc-navigator/titler.json` (one
 entry per session with the title, a timestamp and the event count at the
 time). `TITLER_STATE` points that file somewhere else. The file is written
 atomically.
+
+## Talking to sessions
+
+```bash
+python3 nav.py read <session> --last 10 --table      # latest messages, plain text
+python3 nav.py send <session> "message" --wait 90    # deliver through CCC, wait for the reply
+```
+
+`<session>` is a key (`claude:<id>`), a session id, or a unique id prefix. Pi
+sessions can be read but not sent to. CCC refuses sessions whose folder it does
+not know (`repo_not_allowed`).
+
+## Notes
+
+```bash
+python3 nav.py note <session> "decide pricing after the ASO check"
+python3 nav.py note <session> "checked, still waiting" --by copilot
+python3 nav.py notes <session> --table      # numbered list
+python3 nav.py notes                        # every session that has notes
+python3 nav.py note <session> --rm 2        # delete note 2
+```
+
+Notes live in `state.json` (`notes`), show as ✎ N on the row (hover for the
+latest), and in the row's ⋯ menu (Add note, Notes).
+
+## Triage (live status of every session)
+
+`triage.py` labels every visible session from local rules only (nothing leaves
+the machine): `working` (running now), `needs-you` (approval waiting, or its
+last message asks you something), `blocked`, `done`, `idle`, `stale` (quiet
+over 3 days). It re-reads a transcript only when the session changed. The
+launchd job `com.standup-os.triage` runs it every two minutes
+(log `/tmp/standup-triage.log`).
+
+```bash
+python3 nav.py triage --table                       # run a pass now, show it
+python3 nav.py triage --table --only needs-you,blocked
+python3 nav.py mark <session> done --reason "shipped"   # your label; the sorter never overrides it
+python3 nav.py mark <session> clear                     # hand it back to the sorter
+python3 nav.py brief --table                            # the live snapshot, per project
+```
+
+The "Needs you" chip counts the sorter's `needs-you` too. The row shows the
+label (hover for why); idle and working are not labelled to keep rows quiet.

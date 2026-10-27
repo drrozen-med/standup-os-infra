@@ -121,6 +121,8 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .s .meta{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden}
 .s .wt{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis}
 .s .you{color:var(--accent);font-weight:600}
+.tri{font-weight:600}.tri.needs-you{color:var(--accent)}.tri.blocked{color:var(--danger)}.tri.done{color:var(--live)}.tri.stale{color:var(--dim)}
+.note-m{color:var(--info)}
 .s .ago{color:var(--dim);font-size:11px;flex:none}
 .v-off-orca .grp-h .tag.orca{display:none}
 .v-off-wt .s .wt{display:none}
@@ -326,12 +328,13 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   }
 
   // a session counts as starred when it, its group or its project is starred
+  const needsYou = s => !!(s.needs_you || s.triage === 'needs-you');
   const isStarred = (s, repo, group) => !!(s.pinned || group.pinned || repo.pinned);
 
   function matches(s, repo, group) {
     if (ui.f.star && !isStarred(s, repo, group)) return false;
     if (ui.f.live && !s.live) return false;
-    if (ui.f.needs && !s.needs_you) return false;
+    if (ui.f.needs && !needsYou(s)) return false;
     const q = ui.query.trim().toLowerCase();
     if (!q) return true;
     return [s.nick, s.original, repo.name, group.name, s.engine, s.wt, s.orca_workspace].join(' ').toLowerCase().includes(q);
@@ -364,7 +367,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
       if (isStarred(s, r, g)) st++;
       if (s.live) lv++;
-      if (s.needs_you) nd++;
+      if (needsYou(s)) nd++;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
@@ -398,14 +401,17 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
           repoCount++; if (s.live) repoLive++;
           if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
           const eng = ENGINES.has(s.engine) ? s.engine : 'other';
-          const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
+          const dot = s.live ? (s.needs_you ? 'you' : 'live') : (needsYou(s) ? 'you' : '');
+          const tri = s.triage && !['idle', 'working'].includes(s.triage) && !s.needs_you ? s.triage : '';
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
             <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}${esc(label(s))}</span>
               <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
-                ${s.needs_you ? '<span class="you">needs you</span>' : ''}</span></span>
+                ${s.needs_you ? '<span class="you">needs you</span>' : ''}
+                ${tri ? `<span class="tri ${esc(tri)}" title="${esc((s.triage_by === 'you' ? 'Marked by you' : 'Sorter') + (s.triage_reason ? ': ' + s.triage_reason : ''))}">${esc(tri.replace('-', ' '))}</span>` : ''}
+                ${s.notes ? `<span class="note-m" title="${esc(s.last_note)}">✎ ${s.notes}</span>` : ''}</span></span>
             <span class="eng ${eng}">${esc(s.engine)}</span>
             <span class="star-b ${s.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc(s.key)}" data-on="${s.pinned ? 1 : 0}" title="${s.pinned ? 'Unstar' : 'Star'}">${s.pinned ? STAR_ON : STAR}</span>
             <span class="eye" role="button" tabindex="0" data-hide="${esc(s.key)}" data-hidden="${s.hidden ? 1 : 0}" title="${s.hidden ? 'Unhide' : 'Hide'}">${s.hidden ? EYE_OFF : EYE}</span>
@@ -743,6 +749,13 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     menuEl.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
     setTimeout(() => inp.focus(), 0);
   }
+  async function showNotes(s) {
+    const r = await fetch('/api/notes?key=' + encodeURIComponent(s.key)).then(x => x.json()).catch(() => ({ notes: [] }));
+    const lines = (r.notes || []).map((n, i) => `${i + 1}. ${new Date(n.ts * 1000).toLocaleString()} (${n.by}): ${n.text}`);
+    const pick = prompt(lines.join('\n\n') + '\n\nType a number to delete that note, or Cancel:');
+    const i = parseInt(pick, 10);
+    if (i >= 1 && i <= lines.length) post('/api/note', { key: s.key, remove: i - 1 });
+  }
   function menuFor(anchor) {
     const kind = anchor.dataset.menu;
     if (kind === 's') {
@@ -753,6 +766,12 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
         { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
         { label: 'Move to group…', fn: () => { select(s.key); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
+        '-',
+        { label: 'Add note…', fn: () => { const t = prompt('Note on “' + label(s) + '”:'); if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); } },
+        ...(s.notes ? [{ label: `Notes (${s.notes})…`, fn: () => showNotes(s) }] : []),
+        { hd: 'Mark as' + (s.triage ? ' · now: ' + s.triage + (s.triage_by === 'you' ? ' (you)' : '') : '') },
+        ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => post('/api/triage', { entries: { [s.key]: { label: l, by: 'you' } } }) })),
+        ...(s.triage_by === 'you' ? [{ label: 'Let the sorter decide', fn: () => post('/api/triage', { entries: { [s.key]: { label: '', by: 'you' } } }) }] : []),
         '-',
         { label: s.hidden ? 'Unhide' : 'Hide', fn: () => hideKeys([s.key], !s.hidden) },
         '-',

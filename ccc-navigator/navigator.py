@@ -79,6 +79,8 @@ class State:
             "pinned": dict(d.get("pinned") or {}),
             "icons": dict(d.get("icons") or {}),
             "repo_names": dict(d.get("repo_names") or {}),
+            "notes": {k: list(v) for k, v in (d.get("notes") or {}).items()},
+            "triage": dict(d.get("triage") or {}),
         }
 
     def _save(self):
@@ -143,6 +145,51 @@ class State:
             else:
                 self.data["icons"].pop(key, None)
             self._save()
+
+    def add_note(self, key, text, by="you"):
+        with self.lock:
+            text = (text or "").strip()[:4000]
+            if not key or not text:
+                return None
+            note = {"ts": time.time(), "text": text, "by": (by or "you")[:40]}
+            self.data["notes"].setdefault(key, []).append(note)
+            self._save()
+            return note
+
+    def remove_note(self, key, index):
+        with self.lock:
+            notes = self.data["notes"].get(key) or []
+            if not 0 <= index < len(notes):
+                return False
+            notes.pop(index)
+            if not notes:
+                self.data["notes"].pop(key, None)
+            self._save()
+            return True
+
+    def set_triage(self, entries):
+        """entries: {key: {"label", "reason", "by"}}. A label set by the owner
+        ("by": "you") is never overwritten by the sorter; label "" clears it."""
+        with self.lock:
+            changed = 0
+            for key, e in entries.items():
+                cur = self.data["triage"].get(key) or {}
+                by = (e.get("by") or "sorter")[:40]
+                if by != "you" and cur.get("by") == "you":
+                    continue
+                label = (e.get("label") or "").strip()[:30]
+                if not label:
+                    changed += key in self.data["triage"]
+                    self.data["triage"].pop(key, None)
+                    continue
+                new = {"label": label, "reason": (e.get("reason") or "").strip()[:300], "by": by,
+                       "ts": cur.get("ts") if cur.get("label") == label and cur.get("by") == by else time.time()}
+                if cur != new:
+                    self.data["triage"][key] = new
+                    changed += 1
+            if changed:
+                self._save()
+            return changed
 
     def set_pinned(self, key, pinned):
         with self.lock:
@@ -743,6 +790,11 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "nick": nick.get(item_key) or "",
             "live": is_running(r),
             "pinned": bool(state.get("pinned", {}).get(item_key)),
+            "notes": len(state.get("notes", {}).get(item_key) or []),
+            "last_note": ((state.get("notes", {}).get(item_key) or [{}])[-1].get("text") or "")[:200],
+            "triage": (state.get("triage", {}).get(item_key) or {}).get("label") or "",
+            "triage_reason": (state.get("triage", {}).get(item_key) or {}).get("reason") or "",
+            "triage_by": (state.get("triage", {}).get(item_key) or {}).get("by") or "",
             "needs_you": bool(r.get("needs_approval") or r.get("question_waiting")),
             "mtime": mtime_of(r),
             "cost": float(r.get("cost_usd") or 0),
@@ -984,7 +1036,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1048,6 +1100,10 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._send(400, {"error": "sid required"})
             return self._send(200, self.app.pi_transcript(sid))
+        if u.path == "/api/notes":
+            key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
+            notes = self.app.state.snapshot()["notes"]
+            return self._send(200, {"key": key, "notes": notes.get(key, [])} if key else {"notes": notes})
         if u.path != "/api/tree":
             return self._proxy()
         if u.path == "/api/tree":
@@ -1080,6 +1136,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.rename(body))
         elif p == "/api/icon":
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
+        elif p == "/api/note":
+            key = str(body.get("key") or "")
+            if body.get("remove") is not None:
+                try:
+                    ok = st.remove_note(key, int(body.get("remove")))
+                except (TypeError, ValueError):
+                    ok = False
+                return self._send(200 if ok else 404, {"ok": ok})
+            note = st.add_note(key, body.get("text"), body.get("by"))
+            if note is None:
+                return self._send(400, {"error": "key and text required"})
+            return self._send(200, {"ok": True, "note": note})
+        elif p == "/api/triage":
+            entries = body.get("entries")
+            if not isinstance(entries, dict):
+                entries = {str(body.get("key") or ""): body}
+            entries = {str(k): v for k, v in entries.items() if k and isinstance(v, dict)}
+            return self._send(200, {"ok": True, "changed": st.set_triage(entries)})
         elif p == "/api/pin":
             st.set_pinned(str(body.get("key") or ""), bool(body.get("pinned", True)))
         elif p == "/api/hide":

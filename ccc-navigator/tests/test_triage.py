@@ -1,0 +1,89 @@
+import json
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import navigator  # noqa: E402
+import triage  # noqa: E402
+
+NOW = 2_000_000_000
+
+
+def item(**kw):
+    base = {"key": "claude:x", "mtime": NOW - 600, "live": False, "needs_you": False}
+    base.update(kw)
+    return base
+
+
+def said(text):
+    return [("user_text", "go"), ("assistant", text)]
+
+
+class ClassifyTests(unittest.TestCase):
+    def label(self, it, msgs):
+        return triage.classify(it, msgs, NOW)[0]
+
+    def test_live_and_flagged_win(self):
+        self.assertEqual(self.label(item(live=True), said("Should I merge?")), "working")
+        self.assertEqual(self.label(item(needs_you=True), []), "needs-you")
+
+    def test_question_needs_you_and_reason_is_the_question(self):
+        label, reason = triage.classify(item(), said("Done with A.\nShould I also do B?\nNotes below."), NOW)
+        self.assertEqual(label, "needs-you")
+        self.assertEqual(reason, "Should I also do B?")
+
+    def test_blocked_but_not_on_negations(self):
+        self.assertEqual(self.label(item(), said("I'm blocked on the Cloudflare token.")), "blocked")
+        self.assertEqual(self.label(item(), said("No verification failed at any step.")), "idle")
+
+    def test_done_but_not_when_negated(self):
+        self.assertEqual(self.label(item(), said("All 34 tests pass. Merged.")), "done")
+        self.assertEqual(self.label(item(), said("The PR was opened and left open, not merged.")), "idle")
+
+    def test_user_spoke_last_is_not_read_as_agent_text(self):
+        self.assertEqual(self.label(item(), [("assistant", "Should I go?"), ("user_text", "yes")]), "idle")
+
+    def test_stale_after_three_days(self):
+        self.assertEqual(self.label(item(mtime=NOW - 4 * 86400), []), "stale")
+
+
+class StateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = navigator.State(Path(self.tmp.name) / "state.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_notes_append_remove_and_persist(self):
+        self.state.add_note("claude:a", "first")
+        self.state.add_note("claude:a", "second", by="copilot")
+        self.assertIsNone(self.state.add_note("claude:a", "  "))
+        self.assertTrue(self.state.remove_note("claude:a", 0))
+        self.assertFalse(self.state.remove_note("claude:a", 5))
+        saved = json.loads((Path(self.tmp.name) / "state.json").read_text())
+        self.assertEqual([n["text"] for n in saved["notes"]["claude:a"]], ["second"])
+        self.assertEqual(saved["notes"]["claude:a"][0]["by"], "copilot")
+
+    def test_owner_label_beats_sorter_until_cleared(self):
+        self.state.set_triage({"claude:a": {"label": "done", "by": "you"}})
+        self.assertEqual(self.state.set_triage({"claude:a": {"label": "idle", "by": "sorter"}}), 0)
+        self.assertEqual(self.state.snapshot()["triage"]["claude:a"]["label"], "done")
+        self.state.set_triage({"claude:a": {"label": "", "by": "you"}})
+        self.state.set_triage({"claude:a": {"label": "idle", "by": "sorter"}})
+        self.assertEqual(self.state.snapshot()["triage"]["claude:a"]["label"], "idle")
+
+    def test_unchanged_label_keeps_its_timestamp(self):
+        self.state.set_triage({"claude:a": {"label": "idle", "reason": "r1"}})
+        ts = self.state.snapshot()["triage"]["claude:a"]["ts"]
+        time.sleep(0.01)
+        self.state.set_triage({"claude:a": {"label": "idle", "reason": "r2"}})
+        self.assertEqual(self.state.snapshot()["triage"]["claude:a"]["ts"], ts)
+
+
+if __name__ == "__main__":
+    unittest.main()
