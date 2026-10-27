@@ -7,6 +7,11 @@ word title per session, and writes that title back through the navigator's
 rename endpoint. Nothing happens in the UI: the worker runs server-side and
 the sidebar simply shows better names.
 
+Privacy: by default NOTHING leaves this machine. Titles come from a local,
+rule-based namer. The external model (see DEFAULT_CMD) is used only when
+TITLER_ALLOW_EXTERNAL=1 is set, or when TITLER_CMD names a command the owner
+chose. Sessions may contain medical, business and personal content.
+
 Safety rules that shape the whole program:
 
 * only sessions the navigator already shows (the tree endpoint hides hidden
@@ -58,8 +63,8 @@ GROWTH_FACTOR = 1.4
 # examined looking for them (a session that cannot be titled costs nothing).
 SCAN_FACTOR = 2
 
-# MiniMax runs on the user's paid, non-training subscription. Do not swap in a
-# free or training lane.
+# External lane. NOT used unless TITLER_ALLOW_EXTERNAL=1 (see external_allowed).
+# The "paid, non-training" claim about this lane has not been verified.
 DEFAULT_CMD = ["droid", "exec", "-m", "custom:MiniMax-M3-direct", "--auto", "low"]
 
 PROMPT = (
@@ -77,6 +82,10 @@ SECRET_PATTERNS = (
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+/=]{8,}"), "Bearer " + REDACTION),
     (re.compile(r"\b[0-9a-fA-F]{32,}\b"), REDACTION),
     (re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}"), REDACTION),
+    # personal data: emails, URLs, phone numbers and long digit runs (IDs)
+    (re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"), REDACTION),
+    (re.compile(r"https?://\S+"), REDACTION),
+    (re.compile(r"\+?\d[\d\s().\-]{7,}\d"), REDACTION),
 )
 
 
@@ -258,6 +267,28 @@ def sanitize_title(reply):
         cut = line[:TITLE_MAX_CHARS]
         line = (cut.rsplit(" ", 1)[0] if " " in cut and line[TITLE_MAX_CHARS] != " " else cut).rstrip(" \t.,;:!?…-")
     return line.strip()
+
+
+def external_allowed(override=None):
+    """True only when the owner explicitly allowed a model outside this machine."""
+    if override or os.environ.get("TITLER_CMD"):
+        return True
+    return os.environ.get("TITLER_ALLOW_EXTERNAL") == "1"
+
+
+LOCAL_STOPWORDS = frozenset(
+    "a an the and or but to of in on for with from at by is are was were be i me my we our you your it this that "
+    "please can could would should let lets need want help make do does did how what why when where which".split()
+)
+
+
+def local_title(messages):
+    """Rule-based title from the first user message. Sends nothing anywhere."""
+    first = next((text for role, text in messages if role == "user"), "")
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", strip_secrets(first)) if w.lower() not in LOCAL_STOPWORDS]
+    if len(words) < 2:
+        return ""
+    return " ".join(w[:1].upper() + w[1:] for w in words[:5])
 
 
 def model_command(prompt, override=None):
@@ -467,11 +498,14 @@ def title_candidate(client, candidate, opts, state):
     if not snippet.strip():
         return {"key": key, "status": "skipped", "reason": "empty-snippet", "events": count}
 
-    prompt = PROMPT + "\n\n" + snippet
-    try:
-        reply = call_model(prompt, opts.cmd)
-    except TitlerError as exc:
-        return {"key": key, "status": "error", "error": str(exc)}
+    if external_allowed(opts.cmd):
+        prompt = PROMPT + "\n\n" + snippet
+        try:
+            reply = call_model(prompt, opts.cmd)
+        except TitlerError as exc:
+            return {"key": key, "status": "error", "error": str(exc)}
+    else:
+        reply = local_title(messages)
 
     title = sanitize_title(reply)
     if not title:
