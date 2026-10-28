@@ -182,6 +182,15 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dopt{min-height:36px;padding:6px 14px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;font-size:13px;cursor:pointer}
 .dopt:hover{background:var(--primary-soft);border-color:var(--primary-hi)}.dopt.other{color:var(--muted)}
 .dsrc{font-size:11px;color:var(--dim)}
+.dlg{position:fixed;inset:0;z-index:200;background:oklch(0 0 0/50%);display:flex;align-items:center;justify-content:center;padding:16px}
+.dlg-box{width:min(440px,100%);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 20px 60px oklch(0 0 0/40%)}
+.dlg-t{font:700 15px var(--display);color:var(--text)}.dlg-h{font-size:12px;color:var(--dim);line-height:1.5}
+.dlg-box input,.dlg-box textarea{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;min-height:40px;unicode-bidi:plaintext;text-align:start}
+.dlg-box input:focus,.dlg-box textarea:focus{outline:none;border-color:var(--primary-hi)}
+.dlg-b{display:flex;justify-content:flex-end;gap:10px}
+.dlg-b button{min-height:38px;padding:6px 16px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;cursor:pointer}
+.dlg-b .dlg-ok{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}.dlg-b .dlg-ok.danger{background:var(--bad,#c0392b);border-color:var(--bad,#c0392b)}
+.dlg-notes{display:flex;flex-direction:column;gap:10px}.dlg-note{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}.dlg-note .linkbtn{align-self:flex-start}
 .dother{display:flex;flex-direction:column;gap:8px}
 .dother textarea{width:100%;box-sizing:border-box;min-height:64px;resize:vertical;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;unicode-bidi:plaintext;text-align:start}
 .dother textarea:focus{outline:none;border-color:var(--primary-hi)}
@@ -535,9 +544,47 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     t.classList.add('on'); clearTimeout(toast.h);
     if (!(action && action.sticky)) toast.h = setTimeout(() => t.classList.remove('on'), action ? 6000 : 2600);
   }
+  /* In-page dialogs. The browser's prompt()/confirm() are blocked in embedded browsers (the app pane,
+     installed web apps), so every question the UI asks goes through these. */
+  function dialog(build) {
+    return new Promise(resolve => {
+      const scrim = document.createElement('div');
+      scrim.className = 'dlg';
+      scrim.innerHTML = '<div class="dlg-box" role="dialog" aria-modal="true"></div>';
+      const box = scrim.firstChild;
+      const prev = document.activeElement;
+      const close = v => { scrim.remove(); document.removeEventListener('keydown', onKey, true); if (prev && prev.focus) prev.focus(); resolve(v); };
+      const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+      document.addEventListener('keydown', onKey, true);
+      scrim.addEventListener('click', e => { if (e.target === scrim) close(null); });
+      document.body.appendChild(scrim);
+      build(box, close);
+    });
+  }
+  function askText({ title, value = '', placeholder = '', hint = '', multiline = false, ok = 'Save', readonly = false }) {
+    return dialog((box, close) => {
+      const field = multiline || readonly ? '<textarea rows="4"></textarea>' : '<input type="text">';
+      box.innerHTML = `<div class="dlg-t" dir="auto">${esc(title)}</div>${hint ? `<div class="dlg-h">${esc(hint)}</div>` : ''}${field}
+        <div class="dlg-b"><button type="button" class="dlg-x">${readonly ? 'Close' : 'Cancel'}</button>${readonly ? '' : `<button type="button" class="dlg-ok">${esc(ok)}</button>`}</div>`;
+      const f = box.querySelector('input,textarea');
+      f.value = value; f.placeholder = placeholder; f.dir = 'auto'; f.readOnly = readonly;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      const okb = box.querySelector('.dlg-ok'); if (okb) okb.addEventListener('click', () => close(f.value));
+      f.addEventListener('keydown', e => { if (e.key === 'Enter' && !readonly && (!multiline || !e.shiftKey) && !e.isComposing) { e.preventDefault(); close(f.value); } });
+      setTimeout(() => { f.focus(); f.select(); }, 0);
+    });
+  }
+  function askConfirm(title, text, ok = 'OK') {
+    return dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t" dir="auto">${esc(title)}</div>${text ? `<div class="dlg-h" dir="auto">${esc(text)}</div>` : ''}
+        <div class="dlg-b"><button type="button" class="dlg-x">Cancel</button><button type="button" class="dlg-ok danger">${esc(ok)}</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(false));
+      const b = box.querySelector('.dlg-ok'); b.addEventListener('click', () => close(true)); setTimeout(() => b.focus(), 0);
+    });
+  }
   async function copyText(text, okMsg) {
     try { await navigator.clipboard.writeText(text); toast(okMsg); }
-    catch (_) { prompt('Copy this:', text); }
+    catch (_) { askText({ title: 'Copy this', value: text, readonly: true }); }
   }
   function focusGroup(repoKey, g) {
     ui.focus = { repo: repoKey, group: g.name, path: g.orca_path || '' };
@@ -777,11 +824,13 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     newg.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
     const rng = $('#rng'), rmg = $('#rmg');
     if (rng) rng.addEventListener('click', () => {
-      const n = prompt('Rename group “' + s.group + '” to:', s.group);
-      if (n && n.trim() && n.trim() !== s.group) post('/api/group', { repo: repo.key, action: 'rename', name: s.group, new_name: n.trim() });
+      askText({ title: 'Rename group “' + s.group + '”', value: s.group, ok: 'Rename' }).then(n => {
+        if (n && n.trim() && n.trim() !== s.group) post('/api/group', { repo: repo.key, action: 'rename', name: s.group, new_name: n.trim() });
+      });
     });
     if (rmg) rmg.addEventListener('click', () => {
-      if (confirm('Delete group “' + s.group + '”? Its sessions move back to Ungrouped (or their Orca workspace).')) post('/api/group', { repo: repo.key, action: 'remove', name: s.group });
+      askConfirm('Delete group “' + s.group + '”?', 'Its sessions move back to Ungrouped (or their Orca workspace).', 'Delete group')
+        .then(yes => { if (yes) post('/api/group', { repo: repo.key, action: 'remove', name: s.group }); });
     });
   }
 
@@ -988,10 +1037,18 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   async function showNotes(s) {
     const r = await fetch('/api/notes?key=' + encodeURIComponent(s.key)).then(x => x.json()).catch(() => ({ notes: [] }));
-    const lines = (r.notes || []).map((n, i) => `${i + 1}. ${new Date(n.ts * 1000).toLocaleString()} (${n.by}): ${n.text}`);
-    const pick = prompt(lines.join('\n\n') + '\n\nType a number to delete that note, or Cancel:');
-    const i = parseInt(pick, 10);
-    if (i >= 1 && i <= lines.length) post('/api/note', { key: s.key, remove: i - 1 });
+    dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t" dir="auto">Notes on “${esc(label(s))}”</div><div class="dlg-notes">${(r.notes || []).map((n, i) =>
+        `<div class="dlg-note"><div class="dlg-h">${esc(new Date(n.ts * 1000).toLocaleString())} · ${esc(n.by)}</div><div dir="auto">${esc(n.text)}</div><button type="button" class="linkbtn" data-rm="${i}">Delete</button></div>`).join('') || '<div class="dlg-h">No notes.</div>'}</div>
+        <div class="dlg-b"><button type="button" class="dlg-x">Close</button><button type="button" class="dlg-ok" data-add>Add note</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      box.querySelector('[data-add]').addEventListener('click', () => { close(null); addNote(s); });
+      box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { close(null); post('/api/note', { key: s.key, remove: +b.dataset.rm }); }));
+    });
+  }
+  function addNote(s) {
+    askText({ title: 'Note on “' + label(s) + '”', multiline: true, ok: 'Add note', hint: 'Enter saves, Shift+Enter adds a line' })
+      .then(t => { if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); });
   }
   function menuFor(anchor) {
     const kind = anchor.dataset.menu;
@@ -1000,12 +1057,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       if (!hit) return [];
       const { s, repo: here } = hit;
       return [
-        { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
+        { label: 'Rename…', fn: () => askText({ title: 'Rename session', value: s.nick || '', hint: 'Applied here and in Claude / Codex / Devin via CCC. Empty clears.', ok: 'Rename' }).then(n => { if (n !== null) renameSession(s, n); }) },
         ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
-        { label: 'Add note…', fn: () => { const t = prompt('Note on “' + label(s) + '”:'); if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); } },
+        { label: 'Add note…', fn: () => addNote(s) },
         ...(s.notes ? [{ label: `Notes (${s.notes})…`, fn: () => showNotes(s) }] : []),
         { hd: 'Mark as' + (s.triage ? ' · now: ' + s.triage + (s.triage_by === 'you' ? ' (you)' : '') : '') },
         ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => post('/api/triage', { entries: { [s.key]: { label: l, by: 'you' } } }) })),
@@ -1033,7 +1090,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         '-',
         { label: 'Change icon…', fn: () => iconPicker(anchor, 'g:' + repo.key + '|' + g.name) },
         { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
-        ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => { const n = prompt('Rename “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); } }] : []),
+        ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => askText({ title: 'Rename “' + g.name + '”', value: g.name, hint: g.source === 'orca' ? 'Also renames the Orca workspace.' : '', ok: 'Rename' }).then(n => { if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); }) }] : []),
         '-',
         { label: g.hidden ? 'Unhide group' : 'Hide group (and future sessions)', fn: () => hideKeys(['g:' + repo.key + '|' + g.name], !g.hidden) },
       ];
@@ -1047,7 +1104,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
       { label: 'Unhide all hidden in this project', fn: () => unhideScope(repo.key) },
       '-',
-      { label: 'Rename project…', fn: () => { const n = prompt('Display name for this project (empty resets):', repo.name); if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); } },
+      { label: 'Rename project…', fn: () => askText({ title: 'Rename project', value: repo.name, hint: 'Display name here only. Empty resets.', ok: 'Rename' }).then(n => { if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); }) },
       { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !repo.hidden) },
       { label: 'Change icon…', fn: () => iconPicker(anchor, 'r:' + repo.key) },
       { label: 'Collapse all groups', fn: () => collapseRepoGroups(repo, true) },
