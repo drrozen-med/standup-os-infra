@@ -864,6 +864,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     toast(r.ok ? 'Back: ' + ((r.entry && r.entry.label) || 'restored') : 'Already restored');
     await refresh(true); renderDrawer();
   }
+  async function unhideScope(repoKey, group) {
+    const body = group === undefined ? { repo: repoKey } : { repo: repoKey, group };
+    const r = await fetch('/api/unhide-scope', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({}));
+    await refresh(true);
+    toast(!r.ok ? 'Could not unhide' : r.count ? `Unhid ${r.count}` + (ui.win !== 'all' ? ' (older ones show under All)' : '') : 'Nothing hidden here');
+  }
   const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);
   const older = (items, days) => items.filter(s => nowS() - s.mtime > days * DAY).map(s => s.key);
   function collapseRepoGroups(repo, collapse, except) {
@@ -917,7 +923,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const repo = tree.repos.find(r => r.key === anchor.dataset.repo); if (!repo) return [];
     if (kind === 'g') {
       const g = repo.groups.find(x => x.name === anchor.dataset.group); if (!g) return [];
-      const its = g.items, vis = its.filter(s => !s.hidden), hid = its.filter(s => s.hidden);
+      const its = g.items, vis = its.filter(s => !s.hidden);
       return [
         { hd: (g.name || 'Ungrouped') + ' · ' + its.length },
         { label: 'Show all sessions here (incl. hidden)', fn: () => focusGroup(repo.key, g) },
@@ -926,7 +932,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         { label: `Hide all ${vis.length} visible`, fn: () => hideKeys(vis.map(s => s.key)) },
         { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
         { label: 'Hide older than 1 day', fn: () => hideKeys(older(vis, 1)) },
-        ...(hid.length ? [{ label: `Unhide ${hid.length}`, fn: () => hideKeys(hid.map(s => s.key), false) }] : []),
+        { label: 'Unhide all hidden here', fn: () => unhideScope(repo.key, g.name) },
         '-',
         { label: 'Change icon…', fn: () => iconPicker(anchor, 'g:' + repo.key + '|' + g.name) },
         { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
@@ -942,6 +948,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
       { label: 'Hide older than 30 days', fn: () => hideKeys(older(vis, 30)) },
       { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
+      { label: 'Unhide all hidden in this project', fn: () => unhideScope(repo.key) },
       '-',
       { label: 'Rename project…', fn: () => { const n = prompt('Display name for this project (empty resets):', repo.name); if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); } },
       { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !repo.hidden) },
