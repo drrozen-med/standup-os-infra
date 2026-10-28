@@ -90,6 +90,21 @@ python3 nav.py icon --repo standup --group scratch --clear
 Hiding a group or a project also hides the sessions inside it, and it keeps
 working for sessions that show up later.
 
+```bash
+# Unhide every hidden session in a project, or in one of its groups (all time).
+python3 nav.py unhide-all --repo shared-marketing
+python3 nav.py unhide-all --repo shared-marketing --group main
+
+# File sessions under another project than their folder's (e.g. work for
+# shared-marketing that was started in another checkout). --back undoes it.
+python3 nav.py move-project --key claude:<uuid> --key claude:<uuid> --to shared-marketing
+python3 nav.py move-project --repo sleepy --match outreach --to shared-marketing --dry-run
+python3 nav.py move-project --key claude:<uuid> --back
+```
+
+A moved session lands in the project's Ungrouped list (use `move` to put it in a
+group). Starred sessions are skipped by filters, but an explicit `--key` is moved.
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session

@@ -292,6 +292,13 @@ class NavCommands(unittest.TestCase):
         self.assertEqual(result["keys"], ["claude:1"])          # starred, but named explicitly
         self.assertEqual(client.posts, [("/api/move-project", {"keys": ["claude:1"], "repo": "/code/web"})])
 
+    def test_unhide_all_posts_scope(self):
+        client = FakeClient(self.tree)
+        run(nav.cmd_unhide_all, self.parser.parse_args(["unhide-all", "--repo", "app", "--group", "infra"]), client)
+        run(nav.cmd_unhide_all, self.parser.parse_args(["unhide-all", "--repo", "app"]), client)
+        self.assertEqual(client.posts, [("/api/unhide-scope", {"repo": "/code/app", "group": "infra"}),
+                                        ("/api/unhide-scope", {"repo": "/code/app"})])
+
     def test_move_project_back_and_guards(self):
         client = FakeClient(self.tree)
         _, result = run(nav.cmd_move_project, self.parser.parse_args(["move-project", "--key", "claude:2", "--back"]), client)

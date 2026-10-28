@@ -457,6 +457,11 @@ def build_parser():
     dest.add_argument("--to", metavar="PROJECT", help="destination project: exact key, or a substring of its name/path matching one project")
     dest.add_argument("--back", action="store_true", help="put the sessions back under their folder's project")
 
+    ua = subparsers.add_parser("unhide-all", help="unhide every hidden session in one project (or one of its groups), all time")
+    _add_global_options(ua, subcommand=True)
+    ua.add_argument("--repo", required=True, metavar="PROJECT", help="exact project key, or a substring matching one project")
+    ua.add_argument("--group", metavar="NAME", help="exact group name ('' for Ungrouped); omit for the whole project")
+
     for command, help_text in (("star", "star matching sessions"), ("unstar", "remove the star from matching sessions")):
         sub = subparsers.add_parser(command, help=help_text)
         _add_global_options(sub, subcommand=True)
@@ -864,6 +869,24 @@ def cmd_move_project(args, client):
         "skipped_starred": item_keys(skipped),
         "dry_run": bool(args.dry_run),
     }
+    if args.table:
+        print_mutation_table(result)
+    else:
+        print_json(result)
+    return 0
+
+
+def cmd_unhide_all(args, client):
+    repos = matching_repos(client.tree(), args.repo)
+    if len(repos) != 1:
+        names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+        raise UsageError(f"--repo must match exactly one project, matched {len(repos)}: {names}")
+    body = {"repo": repos[0]["key"]}
+    if args.group is not None:
+        body["group"] = args.group
+    res = client.post("/api/unhide-scope", body)
+    result = {"action": "unhide-all", "project": repos[0]["key"], "group": args.group,
+              "count": res.get("count", 0), "keys": []}
     if args.table:
         print_mutation_table(result)
     else:
@@ -1770,6 +1793,8 @@ def main(argv=None):
             return cmd_move(args, client)
         if args.command == "move-project":
             return cmd_move_project(args, client)
+        if args.command == "unhide-all":
+            return cmd_unhide_all(args, client)
         if args.command in ("star", "unstar"):
             return cmd_star(args, client, args.command == "star")
         if args.command in ("hide-group", "unhide-group"):
