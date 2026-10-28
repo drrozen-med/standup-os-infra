@@ -34,6 +34,8 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import changes
+import decisions
 import orca
 import pi_run
 import remote
@@ -1045,6 +1047,41 @@ class App:
         self.args = args
         self.ccc = CCCSource(args.ccc)
         self.state = State(Path(args.state).expanduser())
+        home = Path(args.state).expanduser().parent       # a test instance with its own --state keeps its own files
+        self.inbox = decisions.Inbox(
+            os.environ.get("CCC_NAV_DECISIONS") or home / "decisions.json",
+            os.environ.get("CCC_NAV_ANSWERS") or home / "answers.json",
+            os.environ.get("CCC_NAV_WATCHTOWER_DECISIONS",
+                           "~/projects/standup-os-watchtower/watchtower/decisions.json"))
+        self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
+
+    def deliver(self, session_key, text):
+        """Send text into an agent session: Pi by resuming it, everything else through CCC. -> short status."""
+        engine, _, sid = str(session_key or "").partition(":")
+        if not sid:
+            return "no-session"
+        if engine == "pi":
+            r = pi_run.send(self.args.pi_dir, sid, text)
+            return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
+        try:
+            body = json.dumps({"session_id": sid, "text": text, "mode": "send"}).encode()
+            base = urllib.parse.urlparse(self.ccc.base)
+            c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=15)
+            c.request("POST", "/api/inject-input", body=body, headers={"Content-Type": "application/json", "Host": base.netloc})
+            r = c.getresponse(); out = r.read(); c.close()
+            ok = r.status < 300 and json.loads(out or b"{}").get("ok", True) is not False
+            return "sent" if ok else "failed: HTTP %d" % r.status
+        except Exception as e:
+            return "failed: %s" % e
+
+    def answer_decision(self, b, actor):
+        did = str(b.get("id") or "")
+        d = self.inbox.get(did)
+        rec, before = self.inbox.answer(did, b.get("choice"), b.get("note"), by=actor)
+        cid = self.changes.record(actor, "decision.answer", {"id": did, "choice": rec["choice"]},
+                                  {"answers": {did: before}}, {"answers": {did: rec}})
+        delivery = self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
+        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery}
 
     def rename(self, b):
         """Rename a session / group / project and write it through to the tool that owns the name."""
@@ -1236,6 +1273,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"revoked": self.remote_store.revoke(which)})
         return self._send(404, {"error": "not found"})
 
+    def _actor(self):
+        """Who is acting: the X-Nav-Actor header (agents, CLI), else the owner. The phone is always the owner."""
+        if remote.is_remote(self.headers, self.remote_cfg.public_host):
+            return "you"
+        a = (self.headers.get("X-Nav-Actor") or "you").strip().lower()
+        return a if changes.ACTOR_RE.match(a) else "you"
+
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
@@ -1252,7 +1296,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project",
+                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1337,6 +1382,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.pi_transcript(sid))
         if u.path == "/api/pi/run":
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
+        if u.path == "/api/decisions":
+            return self._send(200, dict(self.app.inbox.list(), ok=True))
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1409,6 +1456,25 @@ class Handler(BaseHTTPRequestHandler):
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             entry_id = st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)), str(body.get("label") or ""))
             return self._send(200, {"ok": True, "id": entry_id})
+        elif p.startswith("/api/decisions/"):
+            actor = self._actor()
+            try:
+                if p == "/api/decisions/answer":
+                    return self._send(200, self.app.answer_decision(body, actor))
+                if p == "/api/decisions/reopen":
+                    did = str(body.get("id") or "")
+                    before = self.app.inbox.reopen(did)
+                    cid = self.app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}},
+                                                  {"answers": {did: None}})
+                    return self._send(200, {"ok": True, "id": did, "change": cid})
+                d = self.app.inbox.ask(body.get("question"), body.get("options"), body.get("lane"), body.get("priority", 2),
+                                       body.get("deadline"), body.get("session"), body.get("source"), body.get("id") or "",
+                                       by=actor)
+                self.app.changes.record(actor, "decision.ask", {"id": d["id"]}, {}, {"questions": {d["id"]: d["question"]}},
+                                        undoable=False)
+                return self._send(200, {"ok": True, "decision": d})
+            except (decisions.DecisionError, changes.ChangeError) as e:
+                return self._send(400, {"ok": False, "error": {"code": e.code, "message": str(e)}})
         elif p == "/api/move-project":
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             keys = [str(k) for k in keys if k and not str(k).startswith("batch:")]
