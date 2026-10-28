@@ -232,9 +232,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isPi ? { sid: sid, text: text } : { session_id: sid, text: text, mode: 'send' })
       })
-        .then(function (r) { return r.json(); })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { d = d || {}; if (!r.ok && d.ok !== false && !d.error) d.error = 'Send failed (HTTP ' + r.status + ')'; return d; }); })
         .then(function (d) {
-          if (d && d.ok === false) throw new Error(d.error || 'send failed');
+          if (d && (d.ok === false || d.error)) throw new Error(d.error || 'send failed');
           box.value = '';
           autoGrow();
           if (isPi && d.run) { box.placeholder = 'Pi is working on it...'; watchPiRun(d.run); }
