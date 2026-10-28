@@ -284,6 +284,32 @@ class NavCommands(unittest.TestCase):
         self.assertEqual(result["skipped_starred"], ["claude:1"])
         self.assertEqual(client.posts, [])
 
+    def test_move_project_by_key_posts_target(self):
+        self.tree["repos"].append({"key": "/code/web", "name": "web", "path": "/code/web", "groups": []})
+        args = self.parser.parse_args(["move-project", "--key", "claude:1", "--to", "web"])
+        client = FakeClient(self.tree)
+        _, result = run(nav.cmd_move_project, args, client)
+        self.assertEqual(result["keys"], ["claude:1"])          # starred, but named explicitly
+        self.assertEqual(client.posts, [("/api/move-project", {"keys": ["claude:1"], "repo": "/code/web"})])
+
+    def test_unhide_all_posts_scope(self):
+        client = FakeClient(self.tree)
+        run(nav.cmd_unhide_all, self.parser.parse_args(["unhide-all", "--repo", "app", "--group", "infra"]), client)
+        run(nav.cmd_unhide_all, self.parser.parse_args(["unhide-all", "--repo", "app"]), client)
+        self.assertEqual(client.posts, [("/api/unhide-scope", {"repo": "/code/app", "group": "infra"}),
+                                        ("/api/unhide-scope", {"repo": "/code/app"})])
+
+    def test_move_project_back_and_guards(self):
+        client = FakeClient(self.tree)
+        _, result = run(nav.cmd_move_project, self.parser.parse_args(["move-project", "--key", "claude:2", "--back"]), client)
+        self.assertEqual(client.posts[0][1], {"keys": ["claude:2"], "repo": ""})
+        with self.assertRaises(nav.UsageError):      # no selector
+            nav.cmd_move_project(self.parser.parse_args(["move-project", "--to", "app"]), client)
+        with self.assertRaises(nav.NavError):        # unknown key
+            nav.cmd_move_project(self.parser.parse_args(["move-project", "--key", "claude:9", "--to", "app"]), client)
+        with self.assertRaises(nav.UsageError):      # ambiguous / no project
+            nav.cmd_move_project(self.parser.parse_args(["move-project", "--key", "claude:2", "--to", "zzz"]), client)
+
     def test_move_can_include_starred_sessions(self):
         args = self.parser.parse_args(
             ["move", "--repo", "app", "--to", "infra", "--include-starred", "--dry-run"]

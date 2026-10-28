@@ -61,7 +61,8 @@ class State:
 
     {"nicknames": {key: name},
      "groups":    {repo_key: [group, ...]},
-     "assign":    {key: {"repo": repo_key, "group": name}}}
+     "assign":    {key: {"repo": repo_key, "group": name}},
+     "moved":     {key: repo_key}}   # session filed under another project than its folder
     """
 
     def __init__(self, path: Path):
@@ -78,6 +79,7 @@ class State:
             "nicknames": dict(d.get("nicknames") or {}),
             "groups": {k: list(v) for k, v in (d.get("groups") or {}).items()},
             "assign": dict(d.get("assign") or {}),
+            "moved": dict(d.get("moved") or {}),
             "hidden": dict(d.get("hidden") or {}),
             "pinned": dict(d.get("pinned") or {}),
             "icons": dict(d.get("icons") or {}),
@@ -131,6 +133,20 @@ class State:
             else:
                 self.data["assign"].pop(key, None)
             self._save()
+
+    def move_to_project(self, keys, repo):
+        """File sessions under another project (repo key); an empty repo puts them back by folder."""
+        with self.lock:
+            for key in keys:
+                if repo:
+                    self.data["moved"][key] = repo
+                else:
+                    self.data["moved"].pop(key, None)
+                a = self.data["assign"].get(key)
+                if a and a.get("repo") != repo:
+                    self.data["assign"].pop(key, None)
+            self._save()
+        return len(keys)
 
     def set_repo_name(self, key, name):
         with self.lock:
@@ -817,12 +833,21 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
 
     nick = state["nicknames"]
     assign = state["assign"]
+    moved = state.get("moved") or {}
     method_ct = collections.Counter()
     unresolved = collections.Counter()
     repos = {}
 
-    def place(r):
+    def place(r, item_key=None):
         cwd = r.get("session_cwd") or r.get("folder_path") or ""
+        if item_key in moved:
+            key = moved[item_key]
+            name = key.split(":", 1)[1] if ":" in key and not key.startswith("/") else Path(key).name
+            method_ct["moved"] += 1
+            repo = repos.setdefault(key, {"key": key, "name": state.get("repo_names", {}).get(key) or name,
+                                          "orig_name": name, "path": short(key) if key.startswith("/") else "",
+                                          "items": []})
+            return repo, cwd, None, None
         scratch = claude_scratch_root(cwd)
         ws = orca.workspace_for(orca_ws, cwd, r.get("git_branch") or r.get("branch") or "")
         main, method, wt = resolve_repo(cwd)
@@ -873,6 +898,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "key": item_key, "sid": sid, "engine": engine,
             "original": clean(original, 140),
             "nick": name,
+            "moved": item_key in moved,
             "live": is_running(r),
             "pinned": bool(state.get("pinned", {}).get(item_key)),
             "notes": len(state.get("notes", {}).get(item_key) or []),
@@ -896,8 +922,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         }
 
     for r in singles:
-        repo, cwd, wt, ws = place(r)
         key = f"{r.get('engine') or 'claude'}:{r.get('session_id')}"
+        repo, cwd, wt, ws = place(r, key)
         repo["items"].append(base_item(r, key, repo, cwd, wt, ws))
 
     for pk, runs in batches.items():
@@ -1226,7 +1252,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1383,6 +1409,13 @@ class Handler(BaseHTTPRequestHandler):
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             entry_id = st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)), str(body.get("label") or ""))
             return self._send(200, {"ok": True, "id": entry_id})
+        elif p == "/api/move-project":
+            keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
+            keys = [str(k) for k in keys if k and not str(k).startswith("batch:")]
+            if not keys:
+                return self._send(400, {"ok": False, "error": "no session keys"})
+            return self._send(200, {"ok": True, "count": st.move_to_project(keys, str(body.get("repo") or "")),
+                                    "repo": str(body.get("repo") or "")})
         elif p == "/api/unhide-scope":
             repo = str(body.get("repo") or "")
             group = str(body.get("group")) if body.get("group") is not None else None

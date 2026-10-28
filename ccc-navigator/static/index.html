@@ -801,7 +801,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   // ---- three-dots menus
   const menuEl = document.createElement('div'); menuEl.id = 'menu'; menuEl.hidden = true; document.body.appendChild(menuEl);
   let menuAnchor = null, lastRect = null;
-  function closeMenu() { menuEl.hidden = true; if (menuAnchor) menuAnchor.classList.remove('on'); menuAnchor = null; }
+  function closeMenu() { menuEl.hidden = true; menuEl.style.maxHeight = menuEl.style.overflowY = ''; if (menuAnchor) menuAnchor.classList.remove('on'); menuAnchor = null; }
   function openMenu(anchor, items) {
     lastRect = anchor.getBoundingClientRect();
     closeMenu(); menuAnchor = anchor; anchor.classList.add('on');
@@ -890,6 +890,18 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     menuEl.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
     setTimeout(() => inp.focus(), 0);
   }
+  function projectPicker(anchor, s, here) {
+    closeMenu(); menuAnchor = anchor; if (anchor.isConnected) anchor.classList.add('on');
+    menuEl.innerHTML = '<div class="hd">Move “' + esc(label(s)) + '” to project</div>';
+    const go = (repo, msg) => { closeMenu(); fetch('/api/move-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys: [s.key], repo }) }).then(x => x.json()).then(r => { toast(r.ok ? msg : 'Could not move'); refresh(true); }).catch(() => toast('Could not move')); };
+    const add = (text, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; if (cls) b.className = cls; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menuEl.appendChild(b); };
+    for (const r of [...tree.repos].sort((a, b) => a.name.localeCompare(b.name))) if (r.key !== here.key) add(((tree.icons || {})['r:' + r.key] ? tree.icons['r:' + r.key] + ' ' : '') + r.name, () => go(r.key, 'Moved to ' + r.name));
+    if (s.moved) add('Put back in its folder’s project', () => go('', 'Back in its folder’s project'), 'danger');
+    menuEl.hidden = false; menuEl.style.width = '280px'; menuEl.style.maxHeight = '60vh'; menuEl.style.overflowY = 'auto';
+    const r = anchor.isConnected ? anchor.getBoundingClientRect() : lastRect, mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
+    menuEl.style.left = Math.max(8, Math.min(r.right - mw + 4, innerWidth - mw - 8)) + 'px';
+    menuEl.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
+  }
   async function showNotes(s) {
     const r = await fetch('/api/notes?key=' + encodeURIComponent(s.key)).then(x => x.json()).catch(() => ({ notes: [] }));
     const lines = (r.notes || []).map((n, i) => `${i + 1}. ${new Date(n.ts * 1000).toLocaleString()} (${n.by}): ${n.text}`);
@@ -902,9 +914,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (kind === 's') {
       const hit = (() => { for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) if (s.key === anchor.dataset.key) return { s, repo }; })();
       if (!hit) return [];
-      const { s } = hit;
+      const { s, repo: here } = hit;
       return [
         { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
+        ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
