@@ -576,6 +576,10 @@ def build_parser():
     _add_global_options(brief, subcommand=True)
     brief.add_argument("--window", default="7d", choices=["now", "1d", "7d", "all"])
 
+    ws = subparsers.add_parser("ws", help="resolve a workspace link (from the ⋯ menu, Copy link) and list all its sessions, hidden included")
+    _add_global_options(ws, subcommand=True)
+    ws.add_argument("link", help="the copied link, or just its #g=... part")
+
     status = subparsers.add_parser("status", help="show navigator and CCC status")
     _add_global_options(status, subcommand=True)
 
@@ -1383,8 +1387,6 @@ def cmd_read(args, client):
 
 def cmd_send(args, client):
     sid, engine, item = resolve_session(client, args.target)
-    if engine == "pi":
-        raise UsageError("Pi sessions are read-only: Pi has no remote input")
     text = args.text.strip()
     if not text:
         raise UsageError("empty message")
@@ -1393,9 +1395,14 @@ def cmd_send(args, client):
         print_json({"dry_run": True, "sid": sid, "engine": engine, "title": title, "text": text})
         return 0
     before = len(fetch_events(client, sid, engine)) if args.wait else 0
-    res = client.post("/api/inject-input", {"session_id": sid, "text": text})
-    if res.get("ok") is False:
-        raise NavError("CCC refused the message: %s" % (res.get("error") or res))
+    if engine == "pi":  # Pi has no remote input: the navigator resumes the session headlessly
+        res = client.post("/api/pi/send", {"sid": sid, "text": text})
+        if res.get("ok") is False:
+            raise NavError("Pi send failed: %s" % (res.get("error") or res))
+    else:
+        res = client.post("/api/inject-input", {"session_id": sid, "text": text})
+        if res.get("ok") is False:
+            raise NavError("CCC refused the message: %s" % (res.get("error") or res))
     out = {"sent": True, "sid": sid, "engine": engine, "title": title, "ccc": res}
     if args.wait:
         deadline = time.time() + args.wait
@@ -1523,6 +1530,46 @@ def cmd_brief(args, client):
                 print("              note: %s" % r["note"][:100])
         for r in p["working"]:
             print("  > working   %s" % (r["title"] or "")[:60])
+    return 0
+
+
+def parse_workspace_link(link):
+    """(repo_key, group_name, orca_path) from a copied workspace link."""
+    frag = urllib.parse.urlparse(link).fragment if "#" in link else link.lstrip("#")
+    q = urllib.parse.parse_qs(frag)
+    key = (q.get("g") or [""])[0]
+    if key.startswith(GROUP_KEY_PREFIX):
+        key = key[len(GROUP_KEY_PREFIX):]
+    if "|" not in key:
+        raise UsageError("not a workspace link: expected #g=g:<project>|<workspace>")
+    repo, group = key.rsplit("|", 1)
+    return repo, group, (q.get("p") or [""])[0]
+
+
+def cmd_ws(args, client):
+    repo_key, group_name, path = parse_workspace_link(args.link)
+    tree = client.tree()  # window=all, hidden included
+    repo = next((r for r in tree.get("repos") or [] if r.get("key") == repo_key), None)
+    if repo is None:
+        raise NavError("no project with key %r" % repo_key)
+    grp = next((g for g in repo.get("groups") or [] if g.get("name") == group_name), None) \
+        or next((g for g in repo.get("groups") or [] if path and g.get("orca_path") == path), None)
+    if grp is None:
+        raise NavError("workspace %r not found in %s (renamed? try its path: %s)" % (group_name, repo.get("name"), path or "unknown"))
+    items = sorted(grp.get("items") or [], key=lambda i: -(i.get("mtime") or 0))
+    out = {"project": repo.get("name"), "project_key": repo_key, "workspace": grp.get("name"),
+           "orca_path": grp.get("orca_path") or path, "hidden_workspace": bool(grp.get("hidden")),
+           "sessions": len(items), "hidden_sessions": sum(1 for i in items if i.get("hidden")),
+           "items": [{"key": i["key"], "title": i.get("nick") or i.get("original"), "engine": i.get("engine"),
+                      "triage": i.get("triage") or ("working" if i.get("live") else ""), "hidden": bool(i.get("hidden")),
+                      "mtime": i.get("mtime")} for i in items]}
+    if args.table:
+        print("%s / %s   %s" % (out["project"], out["workspace"], out["orca_path"]))
+        print("%d sessions, %d hidden" % (out["sessions"], out["hidden_sessions"]))
+        print_table(["KEY", "TITLE", "ENGINE", "STATUS", "HIDDEN", "LAST"],
+                    [[i["key"], (i["title"] or "")[:44], i["engine"], i["triage"], "yes" if i["hidden"] else "", _display_time(i["mtime"])] for i in out["items"]])
+        return 0
+    print_json(out)
     return 0
 
 
@@ -1656,6 +1703,8 @@ def main(argv=None):
             return cmd_triage(args, client)
         if args.command == "brief":
             return cmd_brief(args, client)
+        if args.command == "ws":
+            return cmd_ws(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2

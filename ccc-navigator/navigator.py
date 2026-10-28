@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import orca
+import pi_run
 
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
@@ -1036,7 +1037,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1100,6 +1101,8 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._send(400, {"error": "sid required"})
             return self._send(200, self.app.pi_transcript(sid))
+        if u.path == "/api/pi/run":
+            return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1136,6 +1139,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.rename(body))
         elif p == "/api/icon":
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
+        elif p == "/api/pi/send":
+            res = pi_run.send(self.app.args.pi_dir, body.get("sid"), body.get("text"))
+            return self._send(200 if res.get("ok") else 400, res)
         elif p == "/api/note":
             key = str(body.get("key") or "")
             if body.get("remove") is not None:

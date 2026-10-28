@@ -569,6 +569,18 @@ class Curate(unittest.TestCase):
         result, _ = self.curate()
         self.assertEqual([c["group"] for c in result["star_candidates"]], ["live"])
 
+class WorkspaceLink(unittest.TestCase):
+    def test_parses_a_copied_link(self):
+        link = ("http://127.0.0.1:8095/#g=g%3A%2FUsers%2Fme%2Fprojects%2FboardsBridge%7Clab%20results"
+                "&p=%2FUsers%2Fme%2Fprojects%2FboardsBridge")
+        self.assertEqual(nav.parse_workspace_link(link),
+                         ("/Users/me/projects/boardsBridge", "lab results", "/Users/me/projects/boardsBridge"))
+
+    def test_accepts_the_bare_fragment_and_rejects_junk(self):
+        self.assertEqual(nav.parse_workspace_link("#g=g:folder:tmp|main")[:2], ("folder:tmp", "main"))
+        with self.assertRaises(nav.UsageError):
+            nav.parse_workspace_link("http://127.0.0.1:8095/")
+
 
 if __name__ == "__main__":
     unittest.main()

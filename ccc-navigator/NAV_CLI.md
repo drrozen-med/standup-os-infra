@@ -248,9 +248,16 @@ python3 nav.py read <session> --last 10 --table      # latest messages, plain te
 python3 nav.py send <session> "message" --wait 90    # deliver through CCC, wait for the reply
 ```
 
-`<session>` is a key (`claude:<id>`), a session id, or a unique id prefix. Pi
-sessions can be read but not sent to. CCC refuses sessions whose folder it does
-not know (`repo_not_allowed`).
+`<session>` is a key (`claude:<id>`), a session id, or a unique id prefix. CCC
+refuses sessions whose folder it does not know (`repo_not_allowed`).
+
+**Pi sessions** work the same way. Pi has no remote input, so the navigator
+resumes the session file headlessly (`pi --session <file> -p "<text>"`); the
+reply is appended to the session and shows in `nav read` and the chat pane
+(about 30-60 s per turn). Each run is logged in `~/.ccc-navigator/pi-runs/` and
+Pi runs its tools without approval prompts, like any message sent through CCC.
+If a Pi terminal is open in the same folder the result carries a `warning`: that
+terminal will not show the exchange until it is reopened.
 
 ## Notes
 
@@ -284,3 +291,21 @@ python3 nav.py brief --table                            # the live snapshot, per
 
 The "Needs you" chip counts the sorter's `needs-you` too. The row shows the
 label (hover for why); idle and working are not labelled to keep rows quiet.
+
+## Workspaces: show everything, share a link
+
+In the sidebar, a workspace's ⋯ menu has two extra entries:
+
+- **Show all sessions here (incl. hidden)** switches the list to that one
+  workspace, all time, hidden sessions included (dimmed), so you can hunt for a
+  lost terminal. **Back to normal view** returns.
+- **Copy link to this workspace** copies a link such as
+  `http://127.0.0.1:8095/#g=g:<project>|<workspace>&p=<orca path>`. Opening it
+  lands on that workspace in the focused view.
+
+An agent resolves a pasted link with:
+
+```bash
+python3 nav.py ws "<link>" --table      # project, workspace, path, every session (hidden too)
+python3 nav.py ws "<link>"              # same as JSON
+```
