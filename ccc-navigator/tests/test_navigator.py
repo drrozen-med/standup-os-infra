@@ -381,6 +381,31 @@ class DesktopTitles(unittest.TestCase):
             self.assertEqual(navigator.desktop_titles(d), {"abc": "pubmed_audit"})
 
 
+class MoveToProject(unittest.TestCase):
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = navigator.State(Path(self.tmp.name) / "state.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_moved_session_files_under_target_and_back(self):
+        rows = [row("1", "/r/A", "Work"), row("2", "/r/A", "Other")]
+        self.state.assign("claude:1", "/r/A", "mine")
+        self.state.move_to_project(["claude:1"], "/r/B")
+        t = navigator.build_tree(rows, self.state.snapshot(), "all", [], "http://ccc")
+        by = {r["key"]: r for r in t["repos"]}
+        moved = [i for g in by["/r/B"]["groups"] for i in g["items"]]
+        self.assertEqual([i["key"] for i in moved], ["claude:1"])
+        self.assertTrue(moved[0]["moved"])
+        self.assertNotIn("claude:1", self.state.snapshot()["assign"])   # old group dropped
+        self.state.move_to_project(["claude:1"], "")
+        t = navigator.build_tree(rows, self.state.snapshot(), "all", [], "http://ccc")
+        self.assertEqual([r["key"] for r in t["repos"]], ["folder:A"])   # back where its folder puts it
+
+
 class StaticAssets(unittest.TestCase):
     """The chat lives in static/; requests must never read outside it."""
 

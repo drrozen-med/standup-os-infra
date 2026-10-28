@@ -449,6 +449,14 @@ def build_parser():
     _add_filter_options(move, with_dry_run=True, with_starred=True, with_include_starred=True)
     move.add_argument("--to", required=True, metavar="GROUP", help="destination group name")
 
+    mp = subparsers.add_parser("move-project", help="file sessions under another project than their folder's (--back undoes)")
+    _add_global_options(mp, subcommand=True)
+    _add_filter_options(mp, with_dry_run=True, with_starred=True, with_include_starred=True)
+    mp.add_argument("--key", action="append", default=[], metavar="KEY", help="exact session key (repeatable), e.g. claude:<uuid>")
+    dest = mp.add_mutually_exclusive_group(required=True)
+    dest.add_argument("--to", metavar="PROJECT", help="destination project: exact key, or a substring of its name/path matching one project")
+    dest.add_argument("--back", action="store_true", help="put the sessions back under their folder's project")
+
     for command, help_text in (("star", "star matching sessions"), ("unstar", "remove the star from matching sessions")):
         sub = subparsers.add_parser(command, help=help_text)
         _add_global_options(sub, subcommand=True)
@@ -808,6 +816,49 @@ def cmd_move(args, client):
     result = {
         "action": "move",
         "group": args.to,
+        "count": len(keys),
+        "keys": keys,
+        "skipped_starred": item_keys(skipped),
+        "dry_run": bool(args.dry_run),
+    }
+    if args.table:
+        print_mutation_table(result)
+    else:
+        print_json(result)
+    return 0
+
+
+def cmd_move_project(args, client):
+    if not args.key and not has_selector(args):
+        raise UsageError("move-project needs --key or at least one filter; --limit alone is not a filter")
+    tree = client.tree()
+    items = flatten_tree(tree)
+    if args.key:
+        want = set(args.key)
+        items = [i for i in items if i.get("key") in want]
+        missing = sorted(want - {i.get("key") for i in items})
+        if missing:
+            raise NavError("unknown session key(s): " + ", ".join(missing))
+    else:
+        items = filter_from_args(items, args)
+    skipped = []
+    if not args.key and not args.include_starred and not args.starred:   # named keys are moved as asked
+        items, skipped = split_starred(items, False)
+    items = [i for i in items if not str(i.get("key") or "").startswith("batch:")]
+    target = {"key": "", "name": "(its folder's project)"}
+    if not args.back:
+        repos = matching_repos(tree, args.to)
+        if len(repos) != 1:
+            names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+            raise UsageError(f"--to must match exactly one project, matched {len(repos)}: {names}")
+        target = repos[0]
+    keys = item_keys(items)
+    if keys and not args.dry_run:
+        client.post("/api/move-project", {"keys": keys, "repo": target["key"]})
+    result = {
+        "action": "move-project",
+        "project": target["key"],
+        "project_name": target["name"],
         "count": len(keys),
         "keys": keys,
         "skipped_starred": item_keys(skipped),
@@ -1717,6 +1768,8 @@ def main(argv=None):
             return cmd_hide(args, client, args.command)
         if args.command == "move":
             return cmd_move(args, client)
+        if args.command == "move-project":
+            return cmd_move_project(args, client)
         if args.command in ("star", "unstar"):
             return cmd_star(args, client, args.command == "star")
         if args.command in ("hide-group", "unhide-group"):
