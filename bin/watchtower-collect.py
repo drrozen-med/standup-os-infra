@@ -313,9 +313,19 @@ def render(snapshot, decisions, now):
     return "\n".join(lines)
 
 
+def load_decisions():
+    """Open decisions from the navigator's inbox (Watchtower's queue minus what Uri answered, plus questions
+    agents asked with `nav ask`). Falls back to the local file when the navigator is down."""
+    try:
+        with urllib.request.urlopen(f"{NAV_URL}/api/decisions", timeout=20) as resp:
+            return json.loads(resp.read())["open"]
+    except Exception:
+        return json.loads((CONFIG_DIR / "decisions.json").read_text())
+
+
 def main():
     cfg = json.loads((CONFIG_DIR / "lanes.json").read_text())
-    decisions = json.loads((CONFIG_DIR / "decisions.json").read_text())
+    decisions = load_decisions()
     now = datetime.now(timezone.utc)
 
     snapshot = {
