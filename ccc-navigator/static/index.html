@@ -297,6 +297,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .s,.grp-h,.repo-h{min-height:40px}
   .s>.eye,.s>.star-b{display:none}
   .dots,.eye,.star-b{width:30px;height:30px}
+  .row1{flex-wrap:wrap;gap:6px}
+  .row1 .tools{gap:4px}
+  .seg button{padding:4px 6px}
 }
 </style>
 </head>
@@ -610,7 +613,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           sid: s.sid_raw || s.sid,
           engine: s.engine,
           onEngine: () => {},
-          onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); }
+          onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); toast('Not sent: ' + m); }
         });
       };
       wire();
