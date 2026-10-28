@@ -326,7 +326,9 @@ python3 nav.py remote revoke all        # sign every phone out (or pass an id pr
 python3 nav.py remote status --table    # on/off, host, tunnel state
 ```
 
-Open the link on the phone, then Share → Add to Home Screen for the app icon.
+Open the link on the phone and press **Pair this phone** (just opening the link spends nothing, so
+link previews can't use the code up). Then install it: Android Chrome ⋮ → Install, iPhone Share → Add to
+Home Screen.
 Sessions last 30 days. Pairing and revoking work only from the Mac itself.
 
 Turn it off: `launchctl bootout gui/$(id -u)/com.standup-os.nav-tunnel` (the

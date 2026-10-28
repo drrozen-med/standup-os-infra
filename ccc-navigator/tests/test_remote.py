@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,7 +140,7 @@ class GateTests(unittest.TestCase):
     def setUp(self):
         navigator.Handler.limiter = remote.RateLimiter()
 
-    def req(self, method, path, remote_=True, cookie=None, body=None, origin=None, ip="9.9.9.9"):
+    def req(self, method, path, remote_=True, cookie=None, body=None, origin=None, ip="9.9.9.9", form=None):
         h = {"Host": HOST if remote_ else "127.0.0.1:%d" % self.port}
         if remote_:
             h.update({"Cf-Connecting-Ip": ip, "Cf-Ray": "abc"})
@@ -148,6 +149,9 @@ class GateTests(unittest.TestCase):
         if origin:
             h["Origin"] = origin
         data = None
+        if form is not None:
+            data = urllib.parse.urlencode(form).encode()
+            h["Content-Type"] = "application/x-www-form-urlencoded"
         if body is not None:
             data = json.dumps(body).encode()
             h["Content-Type"] = "application/json"
@@ -163,13 +167,17 @@ class GateTests(unittest.TestCase):
         self.assertEqual(st, 200)
         link = json.loads(body)["link"]
         self.assertTrue(link.startswith("https://%s/__pair?code=" % HOST))
-        st, hdrs, _ = self.req("GET", link.split(HOST, 1)[1])
+        code = link.split("code=", 1)[1]
+        st, _, page = self.req("GET", link.split(HOST, 1)[1])
+        self.assertEqual(st, 200)
+        self.assertIn(b'method="post"', page)
+        st, hdrs, _ = self.req("POST", "/__pair", form={"code": code}, origin="https://" + HOST)
         self.assertEqual(st, 303)
         self.assertEqual(hdrs["Location"], "/")
         cookie = hdrs["Set-Cookie"]
-        for flag in ("HttpOnly", "Secure", "SameSite=Strict", "Path=/"):
+        for flag in ("HttpOnly", "Secure", "SameSite=Lax", "Path=/"):
             self.assertIn(flag, cookie)
-        return cookie.split(";", 1)[0], link
+        return cookie.split(";", 1)[0], code
 
     def test_unpaired_remote_gets_nothing(self):
         for method, path in (("GET", "/"), ("GET", "/api/notes"), ("GET", "/api/conversations/x"),
@@ -180,15 +188,26 @@ class GateTests(unittest.TestCase):
             self.assertNotIn(b"ccc", body)
             self.assertEqual(hdrs.get("X-Frame-Options"), "DENY")
             self.assertIn("max-age", hdrs.get("Strict-Transport-Security", ""))
+            self.assertEqual(hdrs.get("Referrer-Policy"), "same-origin")  # no-referrer makes browsers send Origin: null
 
     def test_pair_then_use_then_reuse_fails(self):
-        cookie, link = self.pair()
+        cookie, code = self.pair()
         st, _, body = self.req("GET", "/api/conversations/abc", cookie=cookie)
         self.assertEqual((st, json.loads(body)["ccc"]), (200, True))
         st, _, _ = self.req("GET", "/api/notes", cookie=cookie)
         self.assertEqual(st, 200)
-        st, _, _ = self.req("GET", link.split(HOST, 1)[1])
+        st, _, _ = self.req("POST", "/__pair", form={"code": code}, origin="https://" + HOST)
         self.assertEqual(st, 403)
+
+    def test_link_previews_cannot_spend_the_code(self):
+        st, _, body = self.req("POST", "/api/remote/pair", remote_=False, body={})
+        code = json.loads(body)["link"].split("code=", 1)[1]
+        for _ in range(3):  # prefetchers and link previews only GET
+            self.assertEqual(self.req("GET", "/__pair?code=" + code, ip="74.125.208.194")[0], 200)
+        self.assertEqual(self.req("POST", "/__pair", form={"code": code})[0], 403)  # no Origin: refused, code kept
+        st, hdrs, _ = self.req("POST", "/__pair", form={"code": code}, origin="https://" + HOST)
+        self.assertEqual(st, 303)
+        self.assertIn("nav_session=", hdrs["Set-Cookie"])
 
     def test_remote_post_needs_our_origin(self):
         cookie, _ = self.pair()
@@ -210,11 +229,11 @@ class GateTests(unittest.TestCase):
             self.assertEqual(st, 403, path)
 
     def test_rate_limit_on_bad_codes(self):
-        bad = "/__pair?code=" + "x" * 30
-        codes = [self.req("GET", bad, ip="5.5.5.5")[0] for _ in range(6)]
+        o = "https://" + HOST
+        codes = [self.req("POST", "/__pair", form={"code": "x" * 30}, origin=o, ip="5.5.5.5")[0] for _ in range(6)]
         self.assertEqual(codes[:5], [403] * 5)
         self.assertEqual(codes[5], 429)
-        self.assertEqual(self.req("GET", bad, ip="6.6.6.6")[0], 403)  # another IP still allowed
+        self.assertEqual(self.req("POST", "/__pair", form={"code": "x" * 30}, origin=o, ip="6.6.6.6")[0], 403)
 
     def test_revoke_all_signs_out(self):
         cookie, _ = self.pair()

@@ -1043,7 +1043,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in self.LOCAL_ONLY:
             self._send(403, {"error": "only from the Mac itself"})
             return False
-        if path == "/__pair" and self.command == "GET":
+        if path == "/__pair" and self.command in ("GET", "POST"):
             self._pair()
             return False
         if path in self.PUBLIC_STATIC and self.command == "GET":
@@ -1072,7 +1072,20 @@ class Handler(BaseHTTPRequestHandler):
         html = "text/html; charset=utf-8"
         if not self.limiter.allow(ip):
             return self._send(429, remote.page("Too many tries", "Wait 15 minutes, then make a new link on the Mac."), html)
-        code = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("code") or [""])[0]
+        if self.command == "GET":  # show the button only; the code is spent by the POST
+            code = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("code") or [""])[0]
+            if not remote.CODE_RE.match(code):
+                self.limiter.fail(ip)
+                return self._send(403, remote.page("Link not valid", "This pairing link is mistyped."), html)
+            return self._send(200, remote.confirm_page(code), html)
+        if self.headers.get("Origin") != "https://" + self.remote_cfg.public_host:
+            return self._send(403, remote.page("Link not valid", "Open the pairing link directly on the phone."), html)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            form = urllib.parse.parse_qs(self.rfile.read(min(n, 4096)).decode("ascii", "replace"))
+        except ValueError:
+            form = {}
+        code = (form.get("code") or [""])[0]
         sid = self.remote_store.redeem_pairing(code, self.headers.get("User-Agent") or "")
         if not sid:
             self.limiter.fail(ip)
