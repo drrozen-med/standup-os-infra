@@ -139,7 +139,22 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 #focusBar .fb{display:flex;gap:12px}
 #focusBar[hidden]{display:none}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--text);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s;z-index:99}
-#toast.on{opacity:1;transform:translateX(-50%)}
+#toast.on{opacity:1;transform:translateX(-50%);pointer-events:auto}
+#toast{display:flex;align-items:center;gap:14px;max-width:calc(100vw - 32px)}
+#toast button{background:transparent;border:0;color:var(--accent);font:700 12.5px var(--font,inherit);cursor:pointer;padding:2px 0;text-transform:uppercase;letter-spacing:.04em}
+/* left side menu */
+.menubtn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin:0 6px 0 -4px;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle}
+.menubtn:hover{background:var(--line2);color:var(--text)}
+.menubtn .upd{position:absolute;margin:-14px 0 0 14px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+#drawerScrim{position:fixed;inset:0;background:oklch(0 0 0/35%);z-index:90;opacity:0;pointer-events:none;transition:opacity .15s}
+#drawer{position:fixed;top:0;left:0;bottom:0;width:min(280px,84vw);background:var(--panel);border-right:1px solid var(--line);z-index:91;transform:translateX(-100%);transition:transform .18s ease;display:flex;flex-direction:column;padding:calc(18px + env(safe-area-inset-top)) 16px 16px;gap:4px}
+body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;pointer-events:auto}
+#drawer h3{margin:0 0 10px;font-size:15px}
+#drawer .dv{font-size:11.5px;color:var(--dim);margin-bottom:10px;line-height:1.5}
+#drawer button.it{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-radius:8px;padding:11px 10px;color:var(--text);font-size:14px;cursor:pointer}
+#drawer button.it:hover{background:var(--line2)}
+#drawer button.it.hl{color:var(--accent);font-weight:700}
+#drawer .hint{font-size:11.5px;color:var(--dim);line-height:1.5;margin-top:auto;padding:8px 2px}
 .s .ago{color:var(--dim);font-size:11px;flex:none}
 .v-off-orca .grp-h .tag.orca{display:none}
 .v-off-wt .s .wt{display:none}
@@ -283,7 +298,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 <nav id="side" aria-label="Sessions">
   <div class="top">
     <div class="row1">
-      <div class="brand">Sessions<span class="ovbtn" id="ovBtn" role="button" tabindex="0" title="Show or hide the summary line" aria-label="Show or hide the summary line"></span></div>
+      <div style="display:flex;align-items:center"><button type="button" class="menubtn" id="menuBtn" aria-label="Menu" title="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="upd" id="updDot" hidden></span></button><div class="brand">Sessions<span class="ovbtn" id="ovBtn" role="button" tabindex="0" title="Show or hide the summary line" aria-label="Show or hide the summary line"></span></div></div>
       <div class="tools"><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
     </div>
     <div class="ovline" id="ovLine"></div>
@@ -306,6 +321,8 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   </div>
 </nav>
 <main id="main"></main>
+<div id="drawerScrim"></div>
+<aside id="drawer" aria-label="Menu"></aside>
 
 <script>
 (() => {
@@ -427,10 +444,18 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   function wsUrl(repoKey, g) {
     return location.origin + '/#g=' + encodeURIComponent('g:' + repoKey + '|' + g.name) + (g.orca_path ? '&p=' + encodeURIComponent(g.orca_path) : '');
   }
-  function toast(msg) {
+  function toast(msg, action) {   // action: {label, fn, sticky}
     let t = $('#toast');
     if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
-    t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 2600);
+    t.innerHTML = '';
+    t.appendChild(document.createTextNode(msg));
+    if (action) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = action.label;
+      b.onclick = () => { t.classList.remove('on'); action.fn(); };
+      t.appendChild(b);
+    }
+    t.classList.add('on'); clearTimeout(toast.h);
+    if (!(action && action.sticky)) toast.h = setTimeout(() => t.classList.remove('on'), action ? 6000 : 2600);
   }
   async function copyText(text, okMsg) {
     try { await navigator.clipboard.writeText(text); toast(okMsg); }
@@ -809,7 +834,13 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   }
   const renameSession = (s, name) => post('/api/rename', { kind: 'session', key: s.key, sid: s.sid, engine: s.engine, name });
   const DAY = 86400, nowS = () => Date.now() / 1000;
-  const hideKeys = (keys, hidden = true) => keys.length && post('/api/hide', { keys, hidden });
+  const hideKeys = async (keys, hidden = true) => {
+    if (!keys.length) return;
+    await post('/api/hide', { keys, hidden });
+    if (!hidden) return;
+    const what = keys.length > 1 ? keys.length + ' sessions' : keys[0].startsWith('g:') ? 'workspace' : keys[0].startsWith('r:') ? 'project' : 'session';
+    toast('Hid ' + what, { label: 'Undo', fn: () => post('/api/hide', { keys, hidden: false }) });
+  };
   const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);
   const older = (items, days) => items.filter(s => nowS() - s.mtime > days * DAY).map(s => s.key);
   function collapseRepoGroups(repo, collapse, except) {
@@ -878,7 +909,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
         { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
         ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => { const n = prompt('Rename “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); } }] : []),
         '-',
-        { label: g.hidden ? 'Unhide group' : 'Hide group (and future sessions)', fn: () => hideKeys(['g:' + repo.key + '|' + g.name], !!g.hidden) },
+        { label: g.hidden ? 'Unhide group' : 'Hide group (and future sessions)', fn: () => hideKeys(['g:' + repo.key + '|' + g.name], !g.hidden) },
       ];
     }
     const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
@@ -890,7 +921,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
       { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
       '-',
       { label: 'Rename project…', fn: () => { const n = prompt('Display name for this project (empty resets):', repo.name); if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); } },
-      { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !!repo.hidden) },
+      { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !repo.hidden) },
       { label: 'Change icon…', fn: () => iconPicker(anchor, 'r:' + repo.key) },
       { label: 'Collapse all groups', fn: () => collapseRepoGroups(repo, true) },
       { label: 'Expand all groups', fn: () => collapseRepoGroups(repo, false) },
@@ -928,7 +959,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     const stp = e.target.closest('[data-star]');
     if (stp) { e.stopPropagation(); return post('/api/pin', { key: stp.dataset.star, pinned: stp.dataset.on !== '1' }); }
     const eye = e.target.closest('[data-hide]');
-    if (eye) { e.stopPropagation(); return post('/api/hide', { key: eye.dataset.hide, hidden: eye.dataset.hidden !== '1' }); }
+    if (eye) { e.stopPropagation(); return hideKeys([eye.dataset.hide], eye.dataset.hidden !== '1'); }
     const s = e.target.closest('.s');
     if (s) return select(s.dataset.key, true);
     const t = e.target.closest('[data-toggle]');
@@ -978,6 +1009,53 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
   });
 
   renderWin();
+  // ---- versions: the page knows which build it is; every 15 minutes it asks the server for the current one
+  const APP_VERSION = '__NAV_VERSION__';
+  const upd = { latest: APP_VERSION, checked: 0, checking: false };
+  async function checkUpdate(manual) {
+    if (upd.checking) return;
+    upd.checking = true; renderDrawer();
+    try {
+      const r = await fetch('/api/version', { cache: 'no-store' });
+      upd.latest = (await r.json()).version || upd.latest; upd.checked = Date.now();
+      if (upd.latest !== APP_VERSION) {
+        if (document.hidden) return location.reload();   // nobody is looking: just take it
+        toast('A new version is ready', { label: 'Update', fn: () => location.reload(), sticky: true });
+      } else if (manual) toast('You have the latest version');
+    } catch (_) { if (manual) toast('Could not check for updates'); }
+    finally { upd.checking = false; renderDrawer(); }
+  }
+  setInterval(checkUpdate, 15 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - upd.checked > 15 * 60 * 1000) checkUpdate(); });
+  setTimeout(checkUpdate, 3000);
+
+  function renderDrawer() {
+    const d = $('#drawer'); if (!d) return;
+    const fresh = upd.latest !== APP_VERSION;
+    $('#updDot').hidden = !fresh;
+    const at = upd.checked ? new Date(upd.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'not yet';
+    const mine = tree ? (tree.user_hidden || 0) : 0;
+    d.innerHTML = `<h3>Navigator</h3>
+      <div class="dv">Version ${esc(APP_VERSION)}${fresh ? ' · <b>' + esc(upd.latest) + ' is ready</b>' : ''}<br>Last checked ${esc(at)} · checks every 15 min</div>
+      ${fresh ? '<button type="button" class="it hl" data-dr="reload">Update now</button>' : ''}
+      <button type="button" class="it" data-dr="check">${upd.checking ? 'Checking…' : 'Check for update'}</button>
+      <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
+      <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
+      <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
+  }
+  const openDrawer = (on) => { document.body.classList.toggle('drawer-open', on); if (on) renderDrawer(); };
+  $('#menuBtn').addEventListener('click', e => { e.stopPropagation(); openDrawer(!document.body.classList.contains('drawer-open')); });
+  $('#drawerScrim').addEventListener('click', () => openDrawer(false));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) openDrawer(false); });
+  $('#drawer').addEventListener('click', e => {
+    const b = e.target.closest('[data-dr]'); if (!b) return;
+    const a = b.dataset.dr;
+    if (a === 'check') return checkUpdate(true);
+    if (a === 'reload') return location.reload();
+    if (a === 'mine') { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); openDrawer(false); return refresh(true); }
+    if (a === 'bg') { ui.showHidden = !ui.showHidden; openDrawer(false); return renderList(); }
+  });
+
   ui.focus = parseHash();
   window.addEventListener('hashchange', () => { ui.focus = parseHash(); refresh(true); });
   refresh(true);

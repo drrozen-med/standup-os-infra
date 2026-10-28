@@ -680,6 +680,22 @@ def clean(text, n=90):
     return t[:n] + ("…" if len(t) > n else "")
 
 
+_version_cache = {"sig": None, "v": ""}
+
+
+def app_version():
+    """Short hash of the files the browser runs; changes whenever a new version is deployed."""
+    files = [HERE / "static" / n for n in ("index.html", "chat.js", "chat.css")]
+    sig = tuple(f.stat().st_mtime_ns if f.exists() else 0 for f in files)
+    if sig != _version_cache["sig"]:
+        h = hashlib.sha1()
+        for f in files:
+            if f.exists():
+                h.update(f.read_bytes())
+        _version_cache.update(sig=sig, v=h.hexdigest()[:10])
+    return _version_cache["v"]
+
+
 def static_asset(name):
     """Resolve one file under static/ as (bytes, content-type), or None.
 
@@ -1214,7 +1230,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path.startswith("/__nav/"):
             return self._static(u.path.rsplit("/", 1)[-1])
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
-            return self._send(200, (HERE / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
+            html = (HERE / "static" / "index.html").read_bytes().replace(b"__NAV_VERSION__", app_version().encode())
+            return self._send(200, html, "text/html; charset=utf-8")
+        if u.path == "/api/version":
+            return self._send(200, {"version": app_version()})
         if u.path == "/api/pi/transcript":
             q = urllib.parse.parse_qs(u.query)
             sid = (q.get("sid") or [""])[0]
