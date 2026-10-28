@@ -284,7 +284,9 @@ LOCAL_STOPWORDS = frozenset(
 
 def local_title(messages):
     """Rule-based title from the first user message. Sends nothing anywhere."""
-    first = next((text for role, text in messages if role == "user"), "")
+    # skip slash commands, command echoes and harness caveats: they are not the task
+    first = next((text for role, text in messages
+                  if role == "user" and not text.lstrip().startswith(("/", "<", "Caveat:", "[Request interrupted"))), "")
     words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", strip_secrets(first)) if w.lower() not in LOCAL_STOPWORDS]
     if len(words) < 2:
         return ""
@@ -408,6 +410,17 @@ class Navigator:
 # ---------------------------------------------------------------- selection
 
 
+def has_real_title(item):
+    """True when the session already carries a usable title (the agent's own
+    summary title), so a rule-based one would only make it worse. Untitled
+    sessions show as "(untitled xxxx)"; a raw first message is long or cut
+    off with an ellipsis."""
+    original = str(item.get("original") or "").strip()
+    if not original or original.startswith("(untitled") or original.endswith("…") or original.endswith("..."):
+        return False
+    return 3 <= len(original) <= 60 and not original.startswith(("You are", "#", "/", "<"))
+
+
 def select_candidates(items, state, retitle=False):
     """Split visible sessions into (candidates, skipped).
 
@@ -505,6 +518,8 @@ def title_candidate(client, candidate, opts, state):
         except TitlerError as exc:
             return {"key": key, "status": "error", "error": str(exc)}
     else:
+        if has_real_title(item):  # the agent already summarised it; a rule-based title would be worse
+            return {"key": key, "status": "skipped", "reason": "has-title", "events": count}
         reply = local_title(messages)
 
     title = sanitize_title(reply)

@@ -67,7 +67,11 @@ def classify(item, messages, now=None):
     tail = last_assistant_text(messages)[-TAIL:]
     first_line = next((ln.strip() for ln in tail.splitlines()[::-1] if ln.strip()), "")[:160]
     if tail and ASK_RE.search(tail):
-        asked = next((ln.strip() for ln in tail.splitlines()[::-1] if ASK_RE.search(ln)), "")
+        lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+        hit = next((i for i in range(len(lines) - 1, -1, -1) if ASK_RE.search(lines[i])), None)
+        asked = lines[hit] if hit is not None else ""
+        if asked.rstrip("*").endswith(":") and hit + 1 < len(lines):  # a heading: show what follows it
+            asked = asked + " " + lines[hit + 1]
         return "needs-you", (asked or first_line)[:160] or "last message asks you something"
     if tail and BLOCK_RE.search(tail) and not DONE_RE.search(tail[-200:]):
         return "blocked", first_line

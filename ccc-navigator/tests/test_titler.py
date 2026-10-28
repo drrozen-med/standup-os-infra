@@ -471,6 +471,17 @@ class PrivacyDefaultsTest(unittest.TestCase):
         self.assertEqual(result["status"], "proposed")
         self.assertEqual(result["title"], "Fix Login Page Airline Demo")
 
+    def test_has_real_title(self):
+        self.assertTrue(titler.has_real_title({"original": "Vera Groq API key audit"}))
+        self.assertFalse(titler.has_real_title({"original": "(untitled 01a16f3a)"}))
+        self.assertFalse(titler.has_real_title({"original": "You are a delegated engineer"}))
+        self.assertFalse(titler.has_real_title({"original": "Please look at the failing build on staging and tell me w…"}))
+
+    def test_local_title_skips_slash_commands(self):
+        msgs = [("user", "/model claude-sonnet-5-5"), ("user", "Curate the efforts register for Devin")]
+        self.assertEqual(titler.local_title(msgs), "Curate Efforts Register Devin")
+        self.assertEqual(titler.local_title([("user", "/model claude-sonnet-5-5")]), "")
+
     def test_local_title_needs_real_words(self):
         self.assertEqual(titler.local_title([("user", "ok")]), "")
 
