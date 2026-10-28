@@ -325,6 +325,42 @@ class CCCSource:
             self._busy = False
 
 
+DESKTOP_DIR = os.environ.get("CCC_NAV_DESKTOP_DIR", "~/Library/Application Support/Claude/claude-code-sessions")
+TITLER_STATE = os.environ.get("CCC_NAV_TITLER_STATE", "~/.ccc-navigator/titler.json")
+_desktop_cache: dict[str, tuple[float, dict]] = {}
+
+
+def desktop_titles(root=DESKTOP_DIR):
+    """Session titles from the Claude desktop app (Code tab): CLI session id -> title.
+    Read-only; each record file is re-read only when its mtime changes."""
+    out = {}
+    for f in Path(root).expanduser().glob("*/*/local_*.json"):
+        try:
+            m = f.stat().st_mtime
+        except OSError:
+            continue
+        hit = _desktop_cache.get(str(f))
+        if not hit or hit[0] != m:
+            try:
+                d = json.loads(f.read_text())
+                rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140)}
+            except (OSError, ValueError, AttributeError):
+                rec = {"sid": "", "title": ""}
+            _desktop_cache[str(f)] = hit = (m, rec)
+        if hit[1]["sid"] and hit[1]["title"]:
+            out[hit[1]["sid"]] = hit[1]["title"]
+    return out
+
+
+def titler_titles(path=TITLER_STATE):
+    """Titles the background titler set, so a desktop title can replace them (a user's own rename is kept)."""
+    try:
+        d = json.loads(Path(path).expanduser().read_text())
+        return {k: v.get("title") for k, v in d.items() if isinstance(v, dict) and v.get("title")}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 _pi_cache: dict[str, tuple[tuple[float, int], dict | None]] = {}
 
 
@@ -751,7 +787,8 @@ def is_running(r):
             or time.time() - mtime_of(r) < 600)
 
 
-def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False):
+def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
+               desktop=None, auto_titles=None):
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
     inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r)]
@@ -825,10 +862,17 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         original = (r.get("display_name") if r.get("name_overridden") else None) \
             or r.get("display_name") or r.get("ai_title") or clean(r.get("first_message")) \
             or f"(untitled {sid[:8]})"
+        # the desktop app's title (yours or its own) beats CCC's guess and the titler's
+        dt = (desktop or {}).get(sid) if engine == "claude" else None
+        name = nick.get(item_key) or ""
+        if dt:
+            original = dt
+            if name and name == (auto_titles or {}).get(item_key):
+                name = ""
         return {
             "key": item_key, "sid": sid, "engine": engine,
             "original": clean(original, 140),
-            "nick": nick.get(item_key) or "",
+            "nick": name,
             "live": is_running(r),
             "pinned": bool(state.get("pinned", {}).get(item_key)),
             "notes": len(state.get("notes", {}).get(item_key) or []),
@@ -1037,7 +1081,7 @@ class App:
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
-                       show_hidden=show_hidden)
+                       show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles())
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
@@ -1182,7 +1226,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1339,6 +1383,21 @@ class Handler(BaseHTTPRequestHandler):
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             entry_id = st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)), str(body.get("label") or ""))
             return self._send(200, {"ok": True, "id": entry_id})
+        elif p == "/api/unhide-scope":
+            repo = str(body.get("repo") or "")
+            group = str(body.get("group")) if body.get("group") is not None else None
+            t = self.app.tree("all", show_hidden=True)
+            r = next((x for x in t["repos"] if x["key"] == repo), None)
+            if not r:
+                return self._send(404, {"ok": False, "error": "unknown project"})
+            groups = [g for g in r["groups"] if group is None or g["name"] == group]
+            keys = [s["key"] for g in groups for s in g["items"] if s.get("hidden")]
+            keys += ["r:" + repo] if group is None else []
+            keys += ["g:%s|%s" % (repo, g["name"]) for g in groups]
+            hidden = st.snapshot()["hidden"]
+            keys = [k for k in keys if k in hidden]
+            st.set_hidden(keys, False)
+            return self._send(200, {"ok": True, "count": len(keys)})
         elif p == "/api/hide/undo":
             entry = st.undo_hide(str(body.get("id") or ""))
             return self._send(200 if entry else 404, {"ok": bool(entry), "entry": entry})

@@ -350,6 +350,37 @@ class PinnedLevels(unittest.TestCase):
         self.assertTrue(t2["repos"][0]["groups"][0]["pinned"])
 
 
+class DesktopTitles(unittest.TestCase):
+    """Claude desktop app titles replace CCC's guess and the titler's, never the user's own rename."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def item(self, nick, auto):
+        state = {"nicknames": {"claude:1": nick} if nick else {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {}}
+        t = navigator.build_tree([row("1", "/r/A", "First message text")], state, "all", [], "http://ccc",
+                                 desktop={"1": "phrasing"}, auto_titles={"claude:1": auto} if auto else {})
+        return t["repos"][0]["groups"][0]["items"][0]
+
+    def test_desktop_title_is_the_original(self):
+        self.assertEqual(self.item("", "")["original"], "phrasing")
+
+    def test_desktop_title_replaces_titler_name(self):
+        self.assertEqual(self.item("Marking Edges", "Marking Edges")["nick"], "")
+
+    def test_user_rename_is_kept(self):
+        self.assertEqual(self.item("My name", "Marking Edges")["nick"], "My name")
+
+    def test_reads_desktop_records(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_a.json").write_text(json.dumps({"cliSessionId": "abc", "title": "pubmed_audit"}))
+            (p / "local_b.json").write_text("not json")
+            self.assertEqual(navigator.desktop_titles(d), {"abc": "pubmed_audit"})
+
+
 class StaticAssets(unittest.TestCase):
     """The chat lives in static/; requests must never read outside it."""
 
