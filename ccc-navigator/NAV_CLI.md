@@ -287,6 +287,27 @@ python3 nav.py note <session> --rm 2        # delete note 2
 Notes live in `state.json` (`notes`), show as ✎ N on the row (hover for the
 latest), and in the row's ⋯ menu (Add note, Notes).
 
+## Decisions: what only Uri can decide
+
+The **Decisions** chip (first in the header, also on the phone) opens the inbox: every open question,
+P1 first, then by deadline, each with its answer buttons. A tap records the answer (Undo in the toast,
+Reopen in the Answered list). Questions come from Watchtower's `decisions.json` and from agents:
+
+```bash
+# An agent asks. With --session, the answer is sent back into that session as a message.
+NAV_ACTOR=copilot python3 nav.py ask --question "Deploy the CRM fix now?" --option deploy --option hold \
+    --lane gtm-crm --priority 1 --deadline 2026-11-01 --session claude:<uuid>
+
+python3 nav.py decisions --table              # open questions
+python3 nav.py decisions --answered --table   # recent answers (agents read these)
+python3 nav.py decide crm-fix-1a2b3 hold --note "after the duplicate review"
+python3 nav.py decide crm-fix-1a2b3 --reopen
+```
+
+Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edited; its brief drops
+answered ones). Every ask, answer and reopen is in `~/.ccc-navigator/changes.jsonl` with its actor
+(`$NAV_ACTOR` for the CLI, `you` for the UI and the phone).
+
 ## Triage (live status of every session)
 
 `triage.py` labels every visible session from local rules only (nothing leaves

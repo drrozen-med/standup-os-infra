@@ -171,6 +171,21 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-status #status{display:none}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
+.chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.dec.has .n{color:var(--accent)}
+.inbox h2{font:700 18px var(--display);margin:0;display:flex;gap:8px;align-items:center}.inbox h2 .n{color:var(--dim);font-size:14px}
+.dcard{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
+.dmeta{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
+.pri{font-weight:800;border-radius:6px;padding:1px 6px;background:var(--hover)}.pri.p1{color:var(--accent)}
+.due{margin-left:auto}.due.soon{color:var(--accent);font-weight:700}
+.dq{font-size:14px;line-height:1.5;unicode-bidi:plaintext;text-align:start}
+.dopts{display:flex;flex-wrap:wrap;gap:8px}
+.dopt{min-height:36px;padding:6px 14px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;font-size:13px;cursor:pointer}
+.dopt:hover{background:var(--primary-soft);border-color:var(--primary-hi)}.dopt.other{color:var(--muted)}
+.dsrc{font-size:11px;color:var(--dim)}
+.danswered summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+.dans{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:12.5px}
+.dans .dq{font-size:12.5px;color:var(--muted);flex:1 1 100%}.dpick{font-weight:700}
+.linkbtn{background:none;border:0;color:var(--primary-hi);cursor:pointer;font-size:12px;padding:0}
 .vrow{display:flex!important;align-items:center;gap:10px}
 .vrow .box{flex:none;width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line3);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--primary-fg)}
 .vrow.on .box{background:var(--primary);border-color:var(--primary)}
@@ -366,6 +381,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     focus: null,  // {repo, group, path}: show everything in one workspace, all time, hidden included
   };
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
+  let decs = { open: [], answered: [] }, decSig = '';
 
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -384,10 +400,60 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     try {
       const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.focus ? 'all' : ui.win) + (ui.showMine || ui.focus ? '&hidden=1' : ''));
       tree = await r.json();
+      await loadDecisions();
       render();
     } catch (e) {
       $('#status').innerHTML = '<span class="bad">Navigator server unreachable</span>';
     } finally { inflight = false; }
+  }
+
+  async function loadDecisions() {
+    try {
+      const d = await fetch('/api/decisions').then(x => x.json());
+      const sig = JSON.stringify([d.open.map(x => x.id), d.answered.map(x => x.id + x.answer.ts)]);
+      decs = d;
+      if (sig !== decSig) { decSig = sig; lastDetailKey = null; }
+    } catch (e) { /* inbox stays as it was */ }
+  }
+
+  // ---- decision inbox: what only Uri can decide, answered with one tap
+  const PRI = { 1: 'P1', 2: 'P2', 3: 'P3' };
+  function due(d) {
+    if (d.days_left === null || d.days_left === undefined) return '';
+    const t = d.days_left < 0 ? Math.abs(d.days_left) + 'd overdue' : d.days_left === 0 ? 'due today' : d.days_left + 'd left';
+    return `<span class="due ${d.days_left <= 3 ? 'soon' : ''}">${t}</span>`;
+  }
+  function inboxHtml() {
+    const card = d => `<div class="dcard" data-dec="${esc(d.id)}">
+        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${due(d)}</div>
+        <div class="dq" dir="auto">${esc(d.question)}</div>
+        <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-ans="${esc(d.id)}" data-choice="other">Other…</button></div>
+        ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}
+      </div>`;
+    const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
+    return `<div class="detail inbox"><button type="button" class="mback" data-mback>‹ Sessions</button>
+      <h2>Decisions <span class="n">${decs.open.length}</span></h2>
+      ${decs.open.length ? decs.open.map(card).join('') : '<p class="hint">Nothing waits on you. Agents add questions with <span class="kbd">nav ask</span>.</p>'}
+      ${done ? `<details class="danswered"><summary>Answered (${decs.answered.length})</summary>${done}</details>` : ''}
+    </div>`;
+  }
+  async function answerDecision(id, choice) {
+    let note = '';
+    if (choice === 'other') { note = prompt('Your answer:'); if (!note || !note.trim()) return; }
+    const r = await fetch('/api/decisions/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, choice, note }) }).then(x => x.json()).catch(() => ({}));
+    if (!r.ok) return toast('Not saved: ' + ((r.error && r.error.message) || 'server unreachable'));
+    toast('Answered: ' + r.answer.choice + (r.delivery === 'sent' ? ' · sent to the agent' : r.delivery && r.delivery !== 'recorded' ? ' · ' + r.delivery : ''), { label: 'Undo', fn: () => reopenDecision(id) });
+    await loadDecisions(); renderChips(); renderDetail(true);
+  }
+  async function reopenDecision(id) {
+    const r = await fetch('/api/decisions/reopen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(x => x.json()).catch(() => ({}));
+    toast(r.ok ? 'Reopened' : 'Could not reopen');
+    await loadDecisions(); renderChips(); renderDetail(true);
+  }
+  function openInbox() {
+    ui.inbox = true; ui.selected = null; store.set('selected', null);
+    if (narrow()) document.body.classList.add('m-detail');
+    renderList(); renderDetail(true);
   }
 
   // a session counts as starred when it, its group or its project is starred
@@ -434,7 +500,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = `<button type="button" class="chip dec ${decs.open.length ? 'has' : ''}" id="decBtn" aria-pressed="${!!ui.inbox}">Decisions<span class="n">${decs.open.length}</span></button>` + c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -579,11 +645,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const hit = findSel();
     const chat = !!(hit && ui.pane === 'chat' && (hit.s.open_url || hit.s.engine === 'pi') && !hit.s.batch);
     main.classList.toggle('chat', chat);
-    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview';
+    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + decSig;
     if (!force && main.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
-    if (!force && key === lastDetailKey && hit) { const a = main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
+    if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
     lastDetailKey = key;
-    if (!hit) { main.innerHTML = overview(); return; }
+    if (!hit) { main.innerHTML = (ui.inbox || decs.open.length) ? inboxHtml() : overview(); return; }
     const { s, repo } = hit;
     if (chat) {
       const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
@@ -783,7 +849,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   const narrow = () => matchMedia('(max-width: 760px)').matches;
   function select(key, fromUser) {
-    ui.selected = key; store.set('selected', key);
+    ui.selected = key; store.set('selected', key); ui.inbox = false;
     if (fromUser && narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
@@ -791,6 +857,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   // ---- events
+  $('#main').addEventListener('click', e => {
+    const a = e.target.closest('[data-ans]'); if (a) return answerDecision(a.dataset.ans, a.dataset.choice);
+    const ro = e.target.closest('[data-reopen]'); if (ro) return reopenDecision(ro.dataset.reopen);
+  });
   document.addEventListener('click', e => { if (e.target.closest('[data-mback]')) { document.body.classList.remove('m-detail'); renderList(); } });
   $('#win').addEventListener('click', e => {
     const b = e.target.closest('[data-win]'); if (!b) return;
@@ -991,6 +1061,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     store.set('collapsed', ui.collapsed); renderList();
   });
   $('#chips').addEventListener('click', e => {
+    if (e.target.closest('#decBtn')) return openInbox();
     const vb = e.target.closest('#viewBtn'); if (vb) { e.stopPropagation(); return menuAnchor === vb ? closeMenu() : openViewMenu(vb); }
     const b = e.target.closest('[data-f]'); if (!b) return;
     ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList();

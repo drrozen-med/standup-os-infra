@@ -67,7 +67,7 @@ class NavigatorClient:
     def _request(self, path, method="GET", payload=None):
         url = self.base_url + path
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "X-Nav-Actor": os.environ.get("NAV_ACTOR", "cli")}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -99,6 +99,9 @@ class NavigatorClient:
 
     def post(self, path, payload):
         return self._request(path, method="POST", payload=payload)
+
+    def get(self, path):
+        return self._request(path)
 
 
 def parse_age(value):
@@ -448,6 +451,28 @@ def build_parser():
     _add_global_options(move, subcommand=True)
     _add_filter_options(move, with_dry_run=True, with_starred=True, with_include_starred=True)
     move.add_argument("--to", required=True, metavar="GROUP", help="destination group name")
+
+    dl = subparsers.add_parser("decisions", help="the decision inbox: what waits on Uri (open first; --answered for recent answers)")
+    _add_global_options(dl, subcommand=True)
+    dl.add_argument("--answered", action="store_true", help="show recent answers instead of open questions")
+
+    dc = subparsers.add_parser("decide", help="answer a decision (as the actor in $NAV_ACTOR), or --reopen it")
+    _add_global_options(dc, subcommand=True)
+    dc.add_argument("id", help="decision id (from nav decisions)")
+    dc.add_argument("choice", nargs="?", default="", help="one of its options, or 'other' with --note")
+    dc.add_argument("--note", default="", help="free-text answer or detail")
+    dc.add_argument("--reopen", action="store_true", help="remove the answer so it is open again")
+
+    ak = subparsers.add_parser("ask", help="put a question to Uri: it appears in his decision inbox (and on his phone)")
+    _add_global_options(ak, subcommand=True)
+    ak.add_argument("--question", required=True)
+    ak.add_argument("--option", action="append", required=True, help="answer option (repeat, 1-8)")
+    ak.add_argument("--lane", default="", help="lane/project, e.g. aba-cdl-launch")
+    ak.add_argument("--priority", type=int, default=2, choices=(1, 2, 3))
+    ak.add_argument("--deadline", help="YYYY-MM-DD")
+    ak.add_argument("--session", default="", help="session key that gets the answer as a message, e.g. claude:<uuid>")
+    ak.add_argument("--source", default="", help="where the question comes from (PR, report)")
+    ak.add_argument("--id", default="", help="stable id (default: derived from the question)")
 
     mp = subparsers.add_parser("move-project", help="file sessions under another project than their folder's (--back undoes)")
     _add_global_options(mp, subcommand=True)
@@ -891,6 +916,49 @@ def cmd_unhide_all(args, client):
         print_mutation_table(result)
     else:
         print_json(result)
+    return 0
+
+
+def cmd_decisions(args, client):
+    d = client.get("/api/decisions")
+    rows = d.get("answered" if args.answered else "open") or []
+    if not args.table:
+        print_json({"count": len(rows), "decisions": rows})
+        return 0
+    if not rows:
+        print("nothing answered yet" if args.answered else "nothing waits on Uri")
+    for x in rows:
+        if args.answered:
+            a = x.get("answer") or {}
+            print("%-24s -> %s%s  (by %s)" % (x["id"], a.get("choice"), (": " + a["note"]) if a.get("note") else "", a.get("by")))
+        else:
+            left = x.get("days_left")
+            due = "" if left is None else ("  [%dd left]" % left if left >= 0 else "  [%dd overdue]" % -left)
+            print("P%s %-24s %s%s\n     options: %s" % (x.get("priority", 3), x["id"], x.get("question", ""), due,
+                                                     " / ".join(map(str, x.get("options") or []))))
+    return 0
+
+
+def cmd_decide(args, client):
+    if args.reopen:
+        res = client.post("/api/decisions/reopen", {"id": args.id})
+    else:
+        if not args.choice and not args.note:
+            raise UsageError("give a choice (or 'other' with --note)")
+        res = client.post("/api/decisions/answer", {"id": args.id, "choice": args.choice, "note": args.note})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    print_json(res)
+    return 0
+
+
+def cmd_ask(args, client):
+    res = client.post("/api/decisions/ask", {"question": args.question, "options": args.option, "lane": args.lane,
+                                            "priority": args.priority, "deadline": args.deadline, "session": args.session,
+                                            "source": args.source, "id": args.id})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    print_json(res)
     return 0
 
 
@@ -1791,6 +1859,12 @@ def main(argv=None):
             return cmd_hide(args, client, args.command)
         if args.command == "move":
             return cmd_move(args, client)
+        if args.command == "decisions":
+            return cmd_decisions(args, client)
+        if args.command == "decide":
+            return cmd_decide(args, client)
+        if args.command == "ask":
+            return cmd_ask(args, client)
         if args.command == "move-project":
             return cmd_move_project(args, client)
         if args.command == "unhide-all":
