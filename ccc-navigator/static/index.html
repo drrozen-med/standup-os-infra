@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CCC Navigator</title>
+<link rel="manifest" href="/__nav/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/__nav/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="/__nav/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Navigator">
+<meta name="theme-color" content="#0f1020">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/__nav/chat.css">
@@ -252,7 +260,23 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .card .n{font:700 24px var(--display);letter-spacing:-.02em}
 .card .d{color:var(--muted);font-size:12px}
 .list{font-family:var(--mono);font-size:12px;color:var(--text2);display:flex;flex-direction:column;gap:3px}
-@media (max-width: 760px){body{flex-direction:column;overflow:auto}#side{width:100%;height:70vh}#main{overflow:visible}.detail{padding:20px 16px}}
+/* phones: one pane at a time. The list fills the screen; opening a session swaps to it, with a back button */
+.mback{display:none}
+@media (max-width: 760px){
+  body{flex-direction:column;height:100dvh;overflow:hidden}
+  #side{width:100%;height:100dvh;border-right:0;padding-top:env(safe-area-inset-top)}
+  #main{display:none;height:100dvh;padding-top:env(safe-area-inset-top)}
+  body.m-detail #side{display:none}
+  body.m-detail #main{display:flex;flex-direction:column;overflow-y:auto}
+  body.m-detail #main.chat{overflow:hidden}
+  .mback{display:inline-flex;align-items:center;gap:4px;background:transparent;border:0;color:var(--primary-hi);font-weight:700;font-size:15px;padding:10px 12px 10px 0;cursor:pointer}
+  .detail{padding:16px}
+  .composer{padding-bottom:max(10px,env(safe-area-inset-bottom))}
+  .chat-head .btn{display:none}
+  .s,.grp-h,.repo-h{min-height:40px}
+  .s>.eye,.s>.star-b{display:none}
+  .dots,.eye,.star-b{width:30px;height:30px}
+}
 </style>
 </head>
 <body>
@@ -530,6 +554,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     if (chat) {
       const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
       main.innerHTML = `<div class="chat-head">
+          <button type="button" class="mback" data-mback aria-label="Back to sessions">‹</button>
           <span class="dot ${dotc}"></span>
           <div class="who">
             <div class="title" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</div>
@@ -583,7 +608,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     const manualGroup = s.group && s.group_source === 'manual';
     const status = s.needs_you ? 'Live, waiting on you' : (s.live ? 'Live, working' : 'Idle');
     const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
-    main.innerHTML = `<div class="detail">
+    main.innerHTML = `<div class="detail"><button type="button" class="mback" data-mback>‹ Sessions</button>
       <div class="crumb">${esc(repo.name)} <span style="color:var(--dim)">/</span> ${esc(s.group || 'Ungrouped')}${s.group_source === 'orca' ? ' <span class="tag orca" title="Orca workspace">🐋 Orca</span>' : ''}</div>
       <label style="display:flex;flex-direction:column;gap:6px">
         <span class="lbl">Nickname</span>
@@ -722,14 +747,17 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 
   function render() { renderWin(); renderStatus(); renderChips(); warmOnIdle(); renderList(); renderDetail(false); }
 
-  function select(key) {
+  const narrow = () => matchMedia('(max-width: 760px)').matches;
+  function select(key, fromUser) {
     ui.selected = key; store.set('selected', key);
+    if (fromUser && narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
     if (el) el.scrollIntoView({ block: 'nearest' });
   }
 
   // ---- events
+  document.addEventListener('click', e => { if (e.target.closest('[data-mback]')) { document.body.classList.remove('m-detail'); renderList(); } });
   $('#win').addEventListener('click', e => {
     const b = e.target.closest('[data-win]'); if (!b) return;
     ui.win = b.dataset.win; store.set('win', ui.win); renderWin(); refresh(true);
@@ -817,7 +845,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
       const { s } = hit;
       return [
         { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
-        { label: 'Move to group…', fn: () => { select(s.key); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
+        { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
         { label: 'Add note…', fn: () => { const t = prompt('Note on “' + label(s) + '”:'); if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); } },
@@ -902,7 +930,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
     const eye = e.target.closest('[data-hide]');
     if (eye) { e.stopPropagation(); return post('/api/hide', { key: eye.dataset.hide, hidden: eye.dataset.hidden !== '1' }); }
     const s = e.target.closest('.s');
-    if (s) return select(s.dataset.key);
+    if (s) return select(s.dataset.key, true);
     const t = e.target.closest('[data-toggle]');
     if (t) { const k = t.dataset.toggle; ui.collapsed[k] = !ui.collapsed[k]; store.set('collapsed', ui.collapsed); renderList(); }
   });

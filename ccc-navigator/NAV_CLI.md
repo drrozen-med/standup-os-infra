@@ -309,3 +309,30 @@ An agent resolves a pasted link with:
 python3 nav.py ws "<link>" --table      # project, workspace, path, every session (hidden too)
 python3 nav.py ws "<link>"              # same as JSON
 ```
+
+## Phone access (issue #5)
+
+The navigator is reachable from the phone at `https://cmd-m110rk.vera.baby`
+through a Cloudflare Tunnel (`nav-mac`, launchd `com.standup-os.nav-tunnel`).
+The Mac opens no ports; the navigator still listens on 127.0.0.1 only.
+
+Every request through the tunnel needs a paired session; without one it gets a
+401 and nothing else. There is no password: pair a phone with a one-time link.
+
+```bash
+python3 nav.py remote pair --table      # one-time link: works once, expires in 15 minutes
+python3 nav.py remote sessions --table  # paired phones
+python3 nav.py remote revoke all        # sign every phone out (or pass an id prefix)
+python3 nav.py remote status --table    # on/off, host, tunnel state
+```
+
+Open the link on the phone, then Share → Add to Home Screen for the app icon.
+Sessions last 30 days. Pairing and revoking work only from the Mac itself.
+
+Turn it off: `launchctl bootout gui/$(id -u)/com.standup-os.nav-tunnel` (the
+URL stops answering), or remove `CCC_NAV_PUBLIC_HOST` from the navigator's
+launchd plist. Remote requests are logged (no codes or cookies) in
+`~/.ccc-navigator/remote-access.log`.
+
+The Mac must be awake and online. A closed MacBook sleeps unless it is on power
+with an external display.

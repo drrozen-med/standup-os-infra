@@ -580,6 +580,11 @@ def build_parser():
     _add_global_options(ws, subcommand=True)
     ws.add_argument("link", help="the copied link, or just its #g=... part")
 
+    rem = subparsers.add_parser("remote", help="phone access: pair a phone, list or revoke paired phones")
+    _add_global_options(rem, subcommand=True)
+    rem.add_argument("action", choices=["status", "pair", "sessions", "revoke"])
+    rem.add_argument("target", nargs="?", default="", help="for revoke: a session id prefix, or 'all'")
+
     status = subparsers.add_parser("status", help="show navigator and CCC status")
     _add_global_options(status, subcommand=True)
 
@@ -1573,6 +1578,49 @@ def cmd_ws(args, client):
     return 0
 
 
+def _tunnel_state():
+    try:
+        out = subprocess.run(["launchctl", "print", "gui/%d/com.standup-os.nav-tunnel" % os.getuid()],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    m = re.search(r"^\s*state = (\S+)", out, re.M)
+    return m.group(1) if m else "not installed"
+
+
+def cmd_remote(args, client):
+    if args.action == "pair":
+        res = client.post("/api/remote/pair", {})
+        if args.table:
+            print(res["link"])
+            print("works once, expires %s" % _display_time(res["expires_at"]))
+            return 0
+        print_json(res)
+        return 0
+    if args.action == "revoke":
+        if not args.target:
+            raise UsageError("revoke needs a session id prefix (from `nav remote sessions`) or 'all'")
+        print_json(client.post("/api/remote/revoke", {"id": args.target}))
+        return 0
+    info = client._request("/api/remote/sessions")
+    if args.action == "sessions":
+        if args.table:
+            print_table(["ID", "PHONE", "LAST SEEN", "EXPIRES"],
+                        [[x["id"], x["label"][:50], _display_time(x["last_seen"]), _display_time(x["expires"])]
+                         for x in info["sessions"]])
+            return 0
+        print_json(info["sessions"])
+        return 0
+    out = {"enabled": info["enabled"], "public_host": info["public_host"], "tunnel": _tunnel_state(),
+           "paired_phones": len(info["sessions"])}
+    if args.table:
+        print("remote access: %s  host: %s  tunnel: %s  paired phones: %d" % (
+            "on" if out["enabled"] else "off", out["public_host"] or "-", out["tunnel"], out["paired_phones"]))
+        return 0
+    print_json(out)
+    return 0
+
+
 def cmd_nick(args, client):
     client.post("/api/nickname", {"key": args.key, "name": args.name})
     result = {"key": args.key, "name": args.name}
@@ -1705,6 +1753,8 @@ def main(argv=None):
             return cmd_brief(args, client)
         if args.command == "ws":
             return cmd_ws(args, client)
+        if args.command == "remote":
+            return cmd_remote(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2
