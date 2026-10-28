@@ -77,6 +77,26 @@ class StateTests(unittest.TestCase):
         self.state.set_triage({"claude:a": {"label": "idle", "by": "sorter"}})
         self.assertEqual(self.state.snapshot()["triage"]["claude:a"]["label"], "idle")
 
+    def test_hide_log_and_undo(self):
+        eid = self.state.set_hidden(["claude:a", "g:/p|ws"], True, "2 sessions")
+        self.assertTrue(eid)
+        self.assertIsNone(self.state.set_hidden(["claude:a"], False))  # unhides are not logged
+        self.state.set_hidden(["claude:a"], True, "a")
+        snap = self.state.snapshot()
+        self.assertEqual([e["label"] for e in snap["hide_log"]], ["2 sessions", "a"])
+        entry = self.state.undo_hide(eid)
+        self.assertEqual(entry["keys"], ["claude:a", "g:/p|ws"])
+        self.assertNotIn("g:/p|ws", self.state.snapshot()["hidden"])
+        self.assertIsNone(self.state.undo_hide(eid))       # only once
+        self.assertIsNone(self.state.undo_hide("nope"))
+
+    def test_hide_log_is_capped(self):
+        for i in range(navigator.HIDE_LOG_MAX + 5):
+            self.state.set_hidden(["k%d" % i], True)
+        log = self.state.snapshot()["hide_log"]
+        self.assertEqual(len(log), navigator.HIDE_LOG_MAX)
+        self.assertEqual(log[-1]["keys"], ["k%d" % (navigator.HIDE_LOG_MAX + 4)])
+
     def test_unchanged_label_keeps_its_timestamp(self):
         self.state.set_triage({"claude:a": {"label": "idle", "reason": "r1"}})
         ts = self.state.snapshot()["triage"]["claude:a"]["ts"]

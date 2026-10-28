@@ -154,6 +154,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 #drawer button.it{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-radius:8px;padding:11px 10px;color:var(--text);font-size:14px;cursor:pointer}
 #drawer button.it:hover{background:var(--line2)}
 #drawer button.it.hl{color:var(--accent);font-weight:700}
+#drawer .rh{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+#drawer .rht{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:0 2px 6px}
+#drawer .hl-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 2px;font-size:13px;color:var(--text)}
+#drawer .hl-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#drawer .hl-row i{font-style:normal;color:var(--dim);font-size:11px;margin-left:6px}
+#drawer .hl-row button{flex:none;background:transparent;border:1px solid var(--line2);border-radius:6px;color:var(--accent);font-weight:700;font-size:12px;padding:4px 10px;cursor:pointer}
 #drawer .hint{font-size:11.5px;color:var(--dim);line-height:1.5;margin-top:auto;padding:8px 2px}
 .s .ago{color:var(--dim);font-size:11px;flex:none}
 .v-off-orca .grp-h .tag.orca{display:none}
@@ -834,13 +840,27 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   const renameSession = (s, name) => post('/api/rename', { kind: 'session', key: s.key, sid: s.sid, engine: s.engine, name });
   const DAY = 86400, nowS = () => Date.now() / 1000;
+  function hideLabel(keys) {   // a name a person recognises, kept in the server's hide log
+    const repoName = k => ((tree.repos.find(r => r.key === k) || {}).name) || k.split('/').pop();
+    if (keys.length > 1) return keys.length + ' sessions';
+    const k = keys[0];
+    if (k.startsWith('r:')) return 'Project ' + repoName(k.slice(2));
+    if (k.startsWith('g:')) { const i = k.lastIndexOf('|'); return 'Workspace ' + (k.slice(i + 1) || 'Ungrouped') + ' (' + repoName(k.slice(2, i)) + ')'; }
+    for (const r of tree.repos) for (const g of r.groups) for (const x of g.items) if (x.key === k) return label(x);
+    return k;
+  }
   const hideKeys = async (keys, hidden = true) => {
     if (!keys.length) return;
-    await post('/api/hide', { keys, hidden });
-    if (!hidden) return;
-    const what = keys.length > 1 ? keys.length + ' sessions' : keys[0].startsWith('g:') ? 'workspace' : keys[0].startsWith('r:') ? 'project' : 'session';
-    toast('Hid ' + what, { label: 'Undo', fn: () => post('/api/hide', { keys, hidden: false }) });
+    const lbl = hidden ? hideLabel(keys) : '';
+    const r = await fetch('/api/hide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys, hidden, label: lbl }) }).then(x => x.json()).catch(() => ({}));
+    await refresh(true);
+    if (hidden && r.id) toast('Hid ' + lbl, { label: 'Undo', fn: () => undoHide(r.id) });
   };
+  async function undoHide(id) {
+    const r = await fetch('/api/hide/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(x => x.json()).catch(() => ({}));
+    toast(r.ok ? 'Back: ' + ((r.entry && r.entry.label) || 'restored') : 'Already restored');
+    await refresh(true); renderDrawer();
+  }
   const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);
   const older = (items, days) => items.filter(s => nowS() - s.mtime > days * DAY).map(s => s.key);
   function collapseRepoGroups(repo, collapse, except) {
@@ -1041,13 +1061,22 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       <button type="button" class="it" data-dr="check">${upd.checking ? 'Checking…' : 'Check for update'}</button>
       <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
+      <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
   }
-  const openDrawer = (on) => { document.body.classList.toggle('drawer-open', on); if (on) renderDrawer(); };
+  async function loadHideLog() {
+    const box = $('#hideLog'); if (!box) return;
+    const r = await fetch('/api/hidelog', { cache: 'no-store' }).then(x => x.json()).catch(() => ({ entries: [] }));
+    const es = r.entries || [];
+    box.innerHTML = es.length ? es.slice(0, 8).map(e => `<div class="hl-row"><span title="${esc(e.label || e.keys.join(', '))}">${esc(e.label || (e.keys.length + ' items'))}<i>${ago(e.ts)}</i></span><button type="button" data-undo="${esc(e.id)}">Undo</button></div>`).join('')
+      : 'Nothing hidden recently.';
+  }
+  const openDrawer = (on) => { document.body.classList.toggle('drawer-open', on); if (on) { renderDrawer(); loadHideLog(); } };
   $('#menuBtn').addEventListener('click', e => { e.stopPropagation(); openDrawer(!document.body.classList.contains('drawer-open')); });
   $('#drawerScrim').addEventListener('click', () => openDrawer(false));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) openDrawer(false); });
   $('#drawer').addEventListener('click', e => {
+    const u = e.target.closest('[data-undo]'); if (u) { u.disabled = true; return undoHide(u.dataset.undo).then(loadHideLog); }
     const b = e.target.closest('[data-dr]'); if (!b) return;
     const a = b.dataset.dr;
     if (a === 'check') return checkUpdate(true);
