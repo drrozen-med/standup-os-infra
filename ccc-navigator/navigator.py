@@ -35,6 +35,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import orca
+import pi_run
+import remote
 
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
@@ -691,7 +693,8 @@ def static_asset(name):
         return None
     ctype = {"css": "text/css; charset=utf-8",
              "js": "application/javascript; charset=utf-8",
-             "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "text/plain; charset=utf-8")
+             "svg": "image/svg+xml", "png": "image/png",
+             "webmanifest": "application/manifest+json"}.get(name.rsplit(".", 1)[-1], "text/plain; charset=utf-8")
     return f.read_bytes(), ctype
 
 
@@ -1015,10 +1018,102 @@ class Handler(BaseHTTPRequestHandler):
         if self.app.args.verbose:
             sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % a))
 
+    remote_cfg = remote.RemoteConfig("", Path("."))  # set in main()
+    remote_store = None
+    limiter = None
+    PUBLIC_STATIC = {"/__nav/manifest.webmanifest", "/__nav/icon-192.png", "/__nav/icon-512.png",
+                     "/__nav/apple-touch-icon.png"}
+    LOCAL_ONLY = {"/api/remote/pair", "/api/remote/sessions", "/api/remote/revoke"}
+
     def _host_ok(self):
-        # DNS-rebinding guard: only answer to localhost names.
-        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
-        return host in ("127.0.0.1", "localhost", "::1")
+        # DNS-rebinding guard: only answer to localhost names (and the tunnel's public name, when set).
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        return host in ("127.0.0.1", "localhost", "::1") or (
+            self.remote_cfg.enabled and host == self.remote_cfg.public_host)
+
+    def _gate(self):
+        """Remote requests (through the tunnel) need a paired session. Returns False when it already answered."""
+        self._rem = remote.is_remote(self.headers, self.remote_cfg.public_host)
+        if not self._rem:
+            return True
+        path = urllib.parse.urlparse(self.path).path
+        if not self.remote_cfg.enabled:
+            self._send(403, {"error": "remote access is off"})
+            return False
+        if path in self.LOCAL_ONLY:
+            self._send(403, {"error": "only from the Mac itself"})
+            return False
+        if path == "/__pair" and self.command == "GET":
+            self._pair()
+            return False
+        if path in self.PUBLIC_STATIC and self.command == "GET":
+            return True
+        if self.remote_store.check_session(self.headers.get("Cookie")):
+            if self.command != "GET" and not self._origin_ok():
+                self._send(403, {"error": "cross-origin"})
+                return False
+            return True
+        if path.startswith("/api/"):
+            self._send(401, {"error": "not paired: on the Mac run `nav remote pair`"})
+        else:
+            self._send(401, remote.page("Pair this phone",
+                                        "On the Mac, run <code>nav remote pair</code> and open the link it prints here. "
+                                        "The link works once and expires after 15 minutes."), "text/html; charset=utf-8")
+        return False
+
+    def _origin_ok(self):
+        origin = self.headers.get("Origin")
+        if getattr(self, "_rem", False):
+            return origin == "https://" + self.remote_cfg.public_host
+        return not origin or urllib.parse.urlparse(origin).hostname in ("127.0.0.1", "localhost", "::1")
+
+    def _pair(self):
+        ip = remote.client_ip(self.headers)
+        html = "text/html; charset=utf-8"
+        if not self.limiter.allow(ip):
+            return self._send(429, remote.page("Too many tries", "Wait 15 minutes, then make a new link on the Mac."), html)
+        code = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("code") or [""])[0]
+        sid = self.remote_store.redeem_pairing(code, self.headers.get("User-Agent") or "")
+        if not sid:
+            self.limiter.fail(ip)
+            return self._send(403, remote.page("Link not valid",
+                                               "This pairing link was already used, has expired or is mistyped. "
+                                               "On the Mac run <code>nav remote pair</code> for a new one."), html)
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie", remote.session_cookie(sid))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def end_headers(self):
+        if getattr(self, "_rem", False):
+            sent = b"".join(getattr(self, "_headers_buffer", [])).lower()
+            for k, v in remote.SECURITY_HEADERS:
+                if k.lower().encode() + b":" not in sent:
+                    self.send_header(k, v)
+        super().end_headers()
+
+    def log_request(self, code="-", size="-"):
+        if getattr(self, "_rem", False) and self.remote_store:
+            self.remote_store.access_log(remote.client_ip(self.headers), self.command, self.path, code)
+        super().log_request(code, size)
+
+    def _remote_api(self, path, body):
+        cfg = self.remote_cfg
+        if path == "/api/remote/sessions":
+            return self._send(200, {"public_host": cfg.public_host, "enabled": cfg.enabled,
+                                    "sessions": self.remote_store.list_sessions()})
+        if path == "/api/remote/pair":
+            if not cfg.enabled:
+                return self._send(400, {"error": "remote access is off (CCC_NAV_PUBLIC_HOST is not set)"})
+            code, exp = self.remote_store.create_pairing()
+            return self._send(200, {"link": "https://%s/__pair?code=%s" % (cfg.public_host, code), "expires_at": exp})
+        if path == "/api/remote/revoke":
+            which = str((body or {}).get("id") or "").strip()
+            if not which:
+                return self._send(400, {"error": "id or 'all' required"})
+            return self._send(200, {"revoked": self.remote_store.revoke(which)})
+        return self._send(404, {"error": "not found"})
 
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -1036,7 +1131,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1084,12 +1179,25 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    do_PUT = do_DELETE = do_PATCH = lambda self: self._proxy()
+    def _proxy_gated(self):
+        if not self._host_ok():
+            return self._send(403, {"error": "bad host"})
+        if not self._gate():
+            return
+        if not self._rem and not self._origin_ok():
+            return self._send(403, {"error": "cross-origin"})
+        return self._proxy()
+
+    do_PUT = do_DELETE = do_PATCH = _proxy_gated
 
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
+        if not self._gate():
+            return
         u = urllib.parse.urlparse(self.path)
+        if u.path == "/api/remote/sessions":
+            return self._remote_api(u.path, None)
         if u.path.startswith("/__nav/"):
             return self._static(u.path.rsplit("/", 1)[-1])
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
@@ -1100,6 +1208,8 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._send(400, {"error": "sid required"})
             return self._send(200, self.app.pi_transcript(sid))
+        if u.path == "/api/pi/run":
+            return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1115,10 +1225,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
-        origin = self.headers.get("Origin")
-        if origin and urllib.parse.urlparse(origin).hostname not in ("127.0.0.1", "localhost", "::1"):
+        if not self._gate():
+            return
+        if not self._origin_ok():
             return self._send(403, {"error": "cross-origin"})
-        if urllib.parse.urlparse(self.path).path not in self.NAV_POST:
+        path = urllib.parse.urlparse(self.path).path
+        if path in self.LOCAL_ONLY:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+            except ValueError:
+                return self._send(400, {"error": "bad json"})
+            return self._remote_api(path, body)
+        if path not in self.NAV_POST:
             return self._proxy()
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             return self._send(415, {"error": "json only"})
@@ -1136,6 +1255,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.rename(body))
         elif p == "/api/icon":
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
+        elif p == "/api/pi/send":
+            res = pi_run.send(self.app.args.pi_dir, body.get("sid"), body.get("text"))
+            return self._send(200 if res.get("ok") else 400, res)
         elif p == "/api/note":
             key = str(body.get("key") or "")
             if body.get("remove") is not None:
@@ -1187,6 +1309,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     Handler.app = App(args)
+    Handler.remote_cfg = remote.load_config()
+    Handler.remote_store = remote.Store(Handler.remote_cfg.state_dir)
+    Handler.limiter = remote.RateLimiter()
     def _warm():  # the first full-history tree reads every transcript header; do it before anyone asks
         for w in ("1d", "all"):
             try:

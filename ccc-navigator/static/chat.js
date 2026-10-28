@@ -185,9 +185,16 @@
     var send = root.querySelector('.composer .send');
     var timer = null;
 
-    if (isPi) {
-      if (box) { box.disabled = true; box.placeholder = 'Pi sessions are read-only here.'; }
-      if (send) send.disabled = true;
+    var piWatch = null;
+    function watchPiRun(run) {      // a Pi turn takes a while: refresh the thread until its run finishes
+      if (piWatch) clearInterval(piWatch);
+      var until = Date.now() + 10 * 60 * 1000;
+      piWatch = setInterval(function () {
+        cache.delete(sid); load(false);
+        fetch('/api/pi/run?id=' + encodeURIComponent(run)).then(function (r) { return r.json(); }).then(function (d) {
+          if ((d && d.done) || Date.now() > until) { clearInterval(piWatch); piWatch = null; cache.delete(sid); load(false); if (box) box.placeholder = ''; }
+        }).catch(function () {});
+      }, 3000);
     }
 
     var showAll = false, lastSig = null, current = null;
@@ -220,16 +227,18 @@
       var text = box.value.trim();
       if (!text || send.disabled) return;
       send.disabled = true;
-      fetch('/api/inject-input', {
+      fetch(isPi ? '/api/pi/send' : '/api/inject-input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, text: text, mode: 'send' })
+        body: JSON.stringify(isPi ? { sid: sid, text: text } : { session_id: sid, text: text, mode: 'send' })
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok === false) throw new Error(d.error || 'send failed');
           box.value = '';
           autoGrow();
+          if (isPi && d.run) { box.placeholder = 'Pi is working on it...'; watchPiRun(d.run); }
+          if (d && d.warning && opts.onError) opts.onError(d.warning);
           cache.delete(sid); lastSig = null; load();
         })
         .catch(function (e) {
@@ -254,7 +263,7 @@
       if (timer) clearInterval(timer);
       if (on) timer = setInterval(load, every || 5000);
     };
-    this.destroy = function () { if (timer) clearInterval(timer); };
+    this.destroy = function () { if (timer) clearInterval(timer); if (piWatch) clearInterval(piWatch); };
     load();
   }
 

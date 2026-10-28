@@ -1,0 +1,22 @@
+{
+ "name": "CCC Navigator",
+ "short_name": "Navigator",
+ "start_url": "/",
+ "scope": "/",
+ "display": "standalone",
+ "background_color": "#0f1020",
+ "theme_color": "#0f1020",
+ "icons": [
+  {
+   "src": "/__nav/icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  },
+  {
+   "src": "/__nav/icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any maskable"
+  }
+ ]
+}
