@@ -13,20 +13,42 @@
   }
 
   /* enough markdown to read an agent reply: fenced code, inline code, bold, links */
+  /* Direction of one line. Quoted text ("...", “...”) is left out, so an English line that quotes Hebrew
+     stays left-to-right (and the reverse); the first letter of what remains decides, as in Gmail/Slack.
+     A line that is all quote falls back to whichever script has more letters. Markup is skipped. */
+  var RTL = /[\u0590-\u05FF\u0600-\u06FF]/, LTR = /[A-Za-z\u00C0-\u024F]/;
+  function dirOf(line) {
+    var t = String(line || '').replace(/&quot;/g, '"').replace(/<[^>]*>|&[a-z#0-9]+;/gi, ' ');
+    var bare = t.replace(/"[^"]*"|“[^”]*”|«[^»]*»|„[^“”]*[“”]/g, ' ');
+    var m = bare.match(/[A-Za-z\u00C0-\u024F\u0590-\u05FF\u0600-\u06FF]/);
+    if (m) return RTL.test(m[0]) ? 'rtl' : 'ltr';
+    var r = (t.match(/[\u0590-\u05FF\u0600-\u06FF]/g) || []).length, l = (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
+    return r > l ? 'rtl' : r || l ? 'ltr' : 'auto';
+  }
+
+  /* a quoted phrase is laid out as one unit in its own direction, so a Hebrew quote inside an English
+     line (or the reverse) does not scramble the words and punctuation around it */
+  function isolateQuotes(line) {
+    return line.replace(/&quot;((?:(?!&quot;)[^<])+)&quot;/g, function (_, q) {
+      return '&quot;<bdi dir="' + dirOf(q) + '">' + q + '</bdi>&quot;';
+    });
+  }
+
   function md(text) {
     var out = esc(text);
     var fences = [];
     out = out.replace(/```([a-zA-Z0-9+#_-]*)\n([\s\S]*?)```/g, function (_, lang, code) {
-      fences.push('<pre data-lang="' + esc(lang) + '"><code>' + code.replace(/\n$/, '') + '</code></pre>');
+      fences.push('<pre dir="ltr" data-lang="' + esc(lang) + '"><code>' + code.replace(/\n$/, '') + '</code></pre>');
       return '\u0000' + (fences.length - 1) + '\u0000';
     });
     out = out
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
     out = out.split(/\n{2,}/).map(function (p) {
       if (/^\u0000\d+\u0000$/.test(p.trim())) return p.trim();
-      return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+      // each line picks its own direction (Hebrew right-to-left, English left-to-right)
+      return '<p>' + p.split('\n').map(function (l) { return '<span class="ln" dir="' + dirOf(l) + '">' + (isolateQuotes(l) || '&nbsp;') + '</span>'; }).join('') + '</p>';
     }).join('');
     return out.replace(/\u0000(\d+)\u0000/g, function (_, i) { return fences[+i]; });
   }

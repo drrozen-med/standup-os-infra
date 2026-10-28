@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-title" content="Navigator">
 <meta name="theme-color" content="#0f1020">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/__nav/chat.css">
 <script src="/__nav/chat.js" defer></script>
 <script>try{var th=localStorage.getItem("ccc-nav-theme");if(th&&th!=="auto")document.documentElement.dataset.theme=JSON.parse(th)}catch(e){}</script>
@@ -31,7 +31,7 @@
   --shadow:0 12px 36px oklch(0 0 0/55%),0 0 0 1px oklch(1 0 0/6%);
   --scroll:oklch(1 0 0/14%);
   --mono:ui-monospace,"JetBrains Mono",SFMono-Regular,Menlo,monospace;
-  --sans:Manrope,"Heebo",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --sans:Manrope,"Heebo","Noto Sans Hebrew","Arial Hebrew",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   --display:Sora,Manrope,ui-sans-serif,system-ui,sans-serif;
   --r:10px;--r-sm:6px;
 }
@@ -314,7 +314,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <span class="sr">Search sessions</span>
-      <input id="q" type="text" placeholder="Search nickname, title, repo, group…" autocomplete="off">
+      <input id="q" type="text" dir="auto" placeholder="Search nickname, title, repo, group…" autocomplete="off">
       <span class="kbd" aria-hidden="true">/</span>
     </label>
     <div class="status" id="status"></div>
@@ -518,7 +518,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           const tri = s.triage && !['idle', 'working'].includes(s.triage) && !s.needs_you ? s.triage : '';
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
-            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}${esc(label(s))}</span>
+            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}<bdi>${esc(label(s))}</bdi></span>
               <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
@@ -533,7 +533,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
           <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
-            ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}">${esc(g.name || 'Ungrouped')}</span>
+            ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}"><bdi>${esc(g.name || 'Ungrouped')}</bdi></span>
             ${g.source === 'orca' ? '<span class="tag orca" title="Orca workspace">🐋</span>' : ''}
             <span class="cnt" style="margin-left:auto">${items.length}</span>
             <span class="star-b ${g.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc(gk)}" data-on="${g.pinned ? 1 : 0}" title="${g.pinned ? 'Unstar group' : 'Star group (never hidden, sorts first)'}">${g.pinned ? STAR_ON : STAR}</span>
@@ -544,7 +544,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const rOpen = forceOpen() || !ui.collapsed[repo.key];
       html += `<div class="${rOpen ? 'open' : ''}">
         <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
-          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name">${esc(repo.name)}</span>
+          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
           ${repoLive ? `<span class="livec" title="Live = a session with a running process (Claude, Codex), or a Devin session active in the last 10 minutes"><span class="dot live"></span>${repoLive} live</span>` : ''}
           <span class="cnt">${repoCount}</span>
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
@@ -591,7 +591,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           <button type="button" class="mback" data-mback aria-label="Back to sessions">‹</button>
           <span class="dot ${dotc}"></span>
           <div class="who">
-            <div class="title" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</div>
+            <div class="title" id="ttl" dir="auto" title="Double-click to rename">${esc(s.nick || s.original)}</div>
             <div class="where">${esc(repo.name)} › ${esc(s.group || 'Ungrouped')}</div>
           </div>
           <span class="eng">${esc(s.engine)}</span>
@@ -601,7 +601,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         <div class="thread" id="thread"></div>
         <div class="composer">
           <span class="sr">Message</span>
-          <textarea id="cmp" rows="1" placeholder="${'Reply to ' + esc(s.nick || s.original) + '…'}"></textarea>
+          <textarea id="cmp" dir="auto" rows="1" placeholder="${'Reply to ' + esc(s.nick || s.original) + '…'}"></textarea>
           <button type="button" class="send" id="sendBtn" title="Send" aria-label="Send"></button>
         </div>
         ${s.engine === 'pi' ? '<div class="stamp" style="padding:8px 16px">Pi replies take a minute: a message resumes the session in the background.</div>' : ''}`;
