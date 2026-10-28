@@ -370,6 +370,13 @@ class StaticAssets(unittest.TestCase):
                      "chat.css/..", "..\\navigator.py", ".hidden"):
             self.assertIsNone(navigator.static_asset(name), name)
 
+class AppVersion(unittest.TestCase):
+    def test_version_is_stable_short_and_injected(self):
+        v = navigator.app_version()
+        self.assertEqual(len(v), 10)
+        self.assertEqual(v, navigator.app_version())
+        self.assertIn(b"__NAV_VERSION__", (navigator.HERE / "static" / "index.html").read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()
