@@ -219,13 +219,17 @@ SECURITY_HEADERS = (
     ("Strict-Transport-Security", "max-age=31536000"),
     ("X-Frame-Options", "DENY"),
     ("X-Content-Type-Options", "nosniff"),
-    ("Referrer-Policy", "no-referrer"),
+    # same-origin, not no-referrer: with no-referrer browsers send "Origin: null" on POSTs, which the
+    # exact-Origin check must then refuse, so no write from the phone (or the pairing button) could work
+    ("Referrer-Policy", "same-origin"),
     ("Cache-Control", "no-store"),
 )
 
 
 def session_cookie(sid):
-    return "%s=%s; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=%d" % (COOKIE, sid, SESSION_TTL)
+    # Lax, not Strict: Strict cookies are withheld when the page is opened from another app (a tapped link,
+    # the home-screen icon), which signs the phone out. Writes stay protected by the exact-Origin check.
+    return "%s=%s; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=%d" % (COOKIE, sid, SESSION_TTL)
 
 
 PAIR_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -236,3 +240,12 @@ div{max-width:360px}h1{font-size:20px}p{color:#a0a0b8;line-height:1.5}code{backg
 
 def page(title, text):
     return (PAIR_PAGE % (title, text)).encode()
+
+
+def confirm_page(code):
+    """Opening the link only shows a button; pressing it (a POST) uses the code. Link previews and
+    prefetchers only GET, so they can no longer spend the one-time code before the owner does."""
+    form = ('<form method="post" action="/__pair"><input type="hidden" name="code" value="%s">'
+            '<button type="submit" style="font:600 17px system-ui;padding:14px 22px;border-radius:12px;border:0;'
+            'background:#5b54e8;color:#fff;width:100%%">Pair this phone</button></form>') % code
+    return page("Pair this phone", "This gives this phone access to the navigator for 30 days.</p>" + form + "<p>")
