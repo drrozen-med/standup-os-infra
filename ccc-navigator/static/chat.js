@@ -99,15 +99,15 @@
     if (t === 'assistant') {
       (ev.blocks || []).forEach(function (b) {
         if (b.kind === 'text' && b.text) acc.push(bubble('them', md(b.text)));
-        else if (b.kind === 'thinking') acc.push(fold(ICONS.think, '<b>Thought</b> ' + esc((b.text || '').slice(0, 120)), b.text || ''));
-        else if (b.kind === 'tool_use') acc.push(fold(ICONS.run, '<b>' + esc(b.name || 'Tool') + '</b> ' + esc(b.detail || ''), b.detail || ''));
+        else if (b.kind === 'thinking') acc.push(step(fold(ICONS.think, '<b>Thought</b> ' + esc((b.text || '').slice(0, 120)), b.text || '')));
+        else if (b.kind === 'tool_use') acc.push(step(fold(ICONS.run, '<b>' + esc(b.name || 'Tool') + '</b> ' + esc(b.detail || ''), b.detail || ''), b.name));
       });
       return;
     }
     if (t === 'tool_result') {
       var txt = ev.text || '';
       var head = txt.split('\n')[0].slice(0, 120) || 'Output';
-      acc.push(fold(ICONS.out, '<b>Output</b> ' + esc(head), txt));
+      acc.push(step(fold(ICONS.out, '<b>Output</b> ' + esc(head), txt)));
       return;
     }
     if (t === 'result') {
@@ -115,10 +115,36 @@
       if (ev.duration_ms) bits.push(Math.round(ev.duration_ms / 1000) + 's');
       var u = ev.token_usage || {};
       if (u.total_tokens) bits.push(size(u.total_tokens) + ' tokens');
-      acc.push(note(ICONS.tick + ' Turn finished' + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '')));
+      acc.push(step(note(ICONS.tick + ' Turn finished' + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '')), '', ev.duration_ms));
       return;
     }
-    if (t === 'system') acc.push(note(ICONS.dot + ' ' + esc(ev.text || ev.kind || 'event')));
+    if (t === 'system') acc.push(step(note(ICONS.dot + ' ' + esc(ev.text || ev.kind || 'event'))));
+  }
+
+  /* tool calls, outputs, thoughts and status lines are "steps": render() folds each run of them into one line */
+  function step(node, tool, ms) {
+    node.dataset.step = tool ? 'tool' : '1';
+    if (ms) node.dataset.ms = String(ms);
+    return node;
+  }
+
+  function stepGroup(nodes, id, open) {
+    var tools = nodes.filter(function (n) { return n.dataset.step === 'tool'; }).length;
+    var ms = nodes.reduce(function (a, n) { return a + (+n.dataset.ms || 0); }, 0);
+    var bits = [tools ? tools + ' step' + (tools > 1 ? 's' : '') : nodes.length + ' update' + (nodes.length > 1 ? 's' : '')];
+    if (ms) bits.push(Math.round(ms / 1000) + 's');
+    var wrap = document.createElement('div');
+    wrap.className = 'steps' + (open ? ' open' : '');
+    wrap.dataset.id = id;
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'steps-h';
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.innerHTML = '<span class="f-lbl">Worked &middot; ' + bits.join(' &middot; ') + '</span><span class="chev">' + ICONS.chev + '</span>';
+    var body = document.createElement('div');
+    body.className = 'steps-body';
+    nodes.forEach(function (n) { body.appendChild(n); });
+    wrap.appendChild(b); wrap.appendChild(body);
+    return wrap;
   }
 
   var ICONS = {
@@ -171,9 +197,21 @@
       thread.innerHTML = '<div class="chat-empty">Nothing here yet.<br>Start the conversation below.</div>';
       return;
     }
-    var acc = [];
-    events.forEach(function (ev) { eventToNodes(ev, acc); });
-    acc.forEach(function (n) { thread.appendChild(n); });
+    var open = thread._openSteps || (thread._openSteps = new Set());
+    var run = [], runId = '';
+    function flush() {
+      if (run.length) thread.appendChild(stepGroup(run, runId, open.has(runId)));
+      run = [];
+    }
+    events.forEach(function (ev, i) {
+      var acc = [];
+      eventToNodes(ev, acc);
+      acc.forEach(function (n) {
+        if (n.dataset.step) { if (!run.length) runId = 'e' + (hidden + i); run.push(n); }
+        else { flush(); thread.appendChild(n); }
+      });
+    });
+    flush();
   }
 
   function Conversation(root, opts) {
@@ -220,6 +258,13 @@
         });
     }
     thread.addEventListener('click', function (e) {
+      var sh = e.target.closest && e.target.closest('.steps-h');
+      if (sh) {
+        var g = sh.parentNode, on = g.classList.toggle('open');
+        sh.setAttribute('aria-expanded', on ? 'true' : 'false');
+        if (on) thread._openSteps.add(g.dataset.id); else thread._openSteps.delete(g.dataset.id);
+        return;
+      }
       if (e.target.closest && e.target.closest('[data-more]')) { showAll = true; lastSig = null; if (current) paint({ events: current }, false); var top = thread.scrollTop; thread.scrollTop = top; }
     });
 
