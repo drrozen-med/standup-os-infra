@@ -42,6 +42,7 @@ HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
 WINDOWS = {"now": 3600, "1d": 86400, "7d": 7 * 86400, "all": None}
 UNGROUPED = ""
+HIDE_LOG_MAX = 30
 # Auto-resurface lifts a tombstone whose subject is live again. Kill switch in
 # case it ever misfires: CCC_NAV_RESURFACE=0.
 RESURFACE = os.environ.get("CCC_NAV_RESURFACE", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -83,6 +84,7 @@ class State:
             "repo_names": dict(d.get("repo_names") or {}),
             "notes": {k: list(v) for k, v in (d.get("notes") or {}).items()},
             "triage": dict(d.get("triage") or {}),
+            "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
         }
 
     def _save(self):
@@ -201,14 +203,34 @@ class State:
                 self.data["pinned"].pop(key, None)
             self._save()
 
-    def set_hidden(self, keys, hidden):
+    def set_hidden(self, keys, hidden, label=""):
+        """Hide or unhide keys. Every hide is logged so it can be undone later; returns the log id."""
         with self.lock:
             for key in keys:
                 if hidden:
                     self.data["hidden"][key] = True
                 else:
                     self.data["hidden"].pop(key, None)
+            entry_id = None
+            if hidden and keys:
+                entry_id = hashlib.sha1(("%s%s" % (time.time(), keys)).encode()).hexdigest()[:10]
+                self.data["hide_log"].append({"id": entry_id, "ts": time.time(), "keys": list(keys),
+                                              "label": (label or "")[:120]})
+                self.data["hide_log"] = self.data["hide_log"][-HIDE_LOG_MAX:]
             self._save()
+            return entry_id
+
+    def undo_hide(self, entry_id):
+        """Unhide everything one logged hide hid. None when the id is unknown or already undone."""
+        with self.lock:
+            entry = next((e for e in self.data["hide_log"] if e.get("id") == entry_id and not e.get("undone")), None)
+            if not entry:
+                return None
+            for key in entry["keys"]:
+                self.data["hidden"].pop(key, None)
+            entry["undone"] = time.time()
+            self._save()
+            return entry
 
     def add_group(self, repo, name):
         with self.lock:
@@ -1160,7 +1182,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1232,6 +1254,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
             html = (HERE / "static" / "index.html").read_bytes().replace(b"__NAV_VERSION__", app_version().encode())
             return self._send(200, html, "text/html; charset=utf-8")
+        if u.path == "/api/hidelog":
+            log = self.app.state.snapshot()["hide_log"]
+            return self._send(200, {"entries": [e for e in reversed(log) if not e.get("undone")][:15]})
         if u.path == "/api/version":
             return self._send(200, {"version": app_version()})
         if u.path == "/api/pi/transcript":
@@ -1312,7 +1337,11 @@ class Handler(BaseHTTPRequestHandler):
             st.set_pinned(str(body.get("key") or ""), bool(body.get("pinned", True)))
         elif p == "/api/hide":
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
-            st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)))
+            entry_id = st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)), str(body.get("label") or ""))
+            return self._send(200, {"ok": True, "id": entry_id})
+        elif p == "/api/hide/undo":
+            entry = st.undo_hide(str(body.get("id") or ""))
+            return self._send(200 if entry else 404, {"ok": bool(entry), "entry": entry})
         elif p == "/api/group":
             repo, action = str(body.get("repo") or ""), body.get("action")
             if action == "add":
