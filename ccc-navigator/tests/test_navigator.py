@@ -431,6 +431,13 @@ class DesktopGroups(unittest.TestCase):
             self.assertNotIn("url", navigator.desktop_links("cop2", d))
             self.assertEqual(navigator.desktop_links("nope", d), {})
 
+    def test_copilot_is_never_filtered(self):
+        rows = [row("1", "/r/A", "One"), dict(row("2", "/r/A", "Pilot"), archived=True)]
+        base = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {"claude:2": 1}, "pinned": {}}
+        keys = lambda t: sorted(i["key"] for r in t["repos"] for g in r["groups"] for i in g["items"])
+        self.assertEqual(keys(navigator.build_tree(rows, base, "all", [], "http://ccc")), ["claude:1"])
+        self.assertEqual(keys(navigator.build_tree(rows, base, "all", [], "http://ccc", always="claude:2")), ["claude:1", "claude:2"])
+
     def test_map_state(self):
         with tempfile.TemporaryDirectory() as d:
             st = navigator.State(Path(d) / "s.json")

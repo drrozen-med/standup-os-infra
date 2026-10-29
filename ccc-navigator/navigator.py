@@ -873,17 +873,23 @@ def is_running(r):
 
 
 def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
-               desktop=None, auto_titles=None, desktop_group=None):
-    """desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
+               desktop=None, auto_titles=None, desktop_group=None, always=None):
+    """always: a session key that is never filtered out or hidden (the co-pilot). desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
     an explicit move, then the desktop group (its mapped project, or its own), then the folder."""
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
-    inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r)]
+    def is_always(r):
+        return bool(always) and "%s:%s" % (r.get("engine") or "claude", r.get("session_id")) == always
+
+    inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r) or is_always(r)]
 
     hidden = collections.Counter()
     keep, origins = [], {}
     for r in inwin:
-        if r.get("trashed") or r.get("archived"):
+        if is_always(r):
+            keep.append(r)
+            origins[id(r)] = transcript_origin(r)
+        elif r.get("trashed") or r.get("archived"):
             hidden["Archived or trashed"] += 1
         elif is_scratch(r):
             hidden["CCC's own title-generation runs"] += 1
@@ -895,7 +901,9 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
     singles, batches = [], collections.defaultdict(list)
     for r in keep:
         pk = prompt_key(r)
-        if pk and pk_count[pk] >= batch_min:
+        if is_always(r):
+            singles.append(r)
+        elif pk and pk_count[pk] >= batch_min:
             batches[pk].append(r)
         elif is_headless(r, origins[id(r)]):
             hidden["Headless runs (claude -p, codex exec)"] += 1
@@ -1054,7 +1062,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         kept = []
         repo_hidden = bool(hmap.get("r:" + repo["key"]))
         for it in repo["items"]:
-            if repo_hidden or hmap.get(it["key"]) or hmap.get("g:%s|%s" % (repo["key"], it["group"])):
+            if it["key"] != always and (repo_hidden or hmap.get(it["key"]) or hmap.get("g:%s|%s" % (repo["key"], it["group"]))):
                 user_hidden += 1
                 if not show_hidden:
                     continue
@@ -1220,7 +1228,7 @@ class App:
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
-                       desktop_group=desktop_groups())
+                       desktop_group=desktop_groups(), always=self.state.snapshot()["copilot"] or None)
         t["copilot"] = self.copilot()
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)

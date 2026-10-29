@@ -100,6 +100,12 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .status{font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .status .bad{color:var(--accent)}
 
+#pinned{display:flex;flex-direction:column;gap:2px;padding:2px 8px 6px;border-bottom:1px solid var(--line)}
+.pin-row{display:flex;align-items:center;gap:8px;width:100%;text-align:start;background:transparent;border:0;border-radius:8px;padding:9px 10px;color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer}
+.pin-row:hover{background:var(--line2)}.pin-row[aria-current="true"]{background:var(--primary-soft)}
+.pin-row .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pin-row .ps{margin-inline-start:auto;font-size:11.5px;font-weight:400;color:var(--dim);white-space:nowrap}
+.pin-row .n{background:var(--accent);color:var(--bg);border-radius:999px;font-size:11px;padding:0 7px;line-height:18px}
+.pin-row.dec:not(.has) .pn{color:var(--muted)}
 #list{flex:1;overflow-y:auto;padding:4px 0 12px;min-height:0}
 #list::-webkit-scrollbar{width:8px}#list::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:4px}
 .repo-h{width:100%;display:flex;align-items:center;gap:8px;padding:9px 16px;background:var(--panel);border:0;border-top:1px solid var(--line);cursor:pointer;text-align:left;position:sticky;top:0;z-index:3}
@@ -172,7 +178,6 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-status #status:has(.bad){display:flex}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
-.chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.pilot{background:var(--accent);border-color:var(--accent);color:var(--bg);text-decoration:none}.chip.dec.has .n{color:var(--accent)}
 .inbox h2{font:700 18px var(--display);margin:0;display:flex;gap:8px;align-items:center}.inbox h2 .n{color:var(--dim);font-size:14px}
 .dcard{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
 .dmeta{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
@@ -353,6 +358,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     <div class="chips" id="chips"></div>
   </div>
   <div id="focusBar" hidden></div>
+  <div id="pinned"></div>
   <div id="list" role="tree"></div>
   <div class="foot">
     <span id="hiddenTxt"></span>
@@ -507,6 +513,24 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     menuEl.style.left = Math.max(8, Math.min(rc.right - mw, innerWidth - mw - 8)) + 'px';
     menuEl.style.top = Math.max(8, Math.min(rc.bottom + 4, innerHeight - mh - 8)) + 'px';
   }
+  /* Pinned at the top, not filtered and not movable: the Co-pilot chat, and the Decisions page. */
+  function renderPinned() {
+    const box = $('#pinned'); if (!box || !tree) return;
+    const cp = tree.copilot, hit = cp && flatSessions().find(x => x.s.key === cp.key);
+    const n = decs.open.length;
+    box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-current="${!!hit && ui.selected === cp.key}">
+        <span class="dot ${hit && hit.s.needs_you ? 'you' : (hit && hit.s.live ? 'live' : '')}"></span><span class="pn"><bdi>${esc((hit && (hit.s.nick || hit.s.original)) || cp.name || 'Co-pilot')}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
+      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-current="${!!ui.inbox}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`;
+  }
+  function flatSessions() { const out = []; for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) out.push({ s, repo, g }); return out; }
+  $('#pinned').addEventListener('click', e => {
+    if (e.target.closest('#decRow')) return openInbox();
+    if (e.target.closest('#pilotRow')) {
+      const cp = tree && tree.copilot; if (!cp) return;
+      if (!flatSessions().some(x => x.s.key === cp.key)) return toast('Co-pilot session not found yet, try again in a moment');
+      ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
+    }
+  });
   function renderChips() {
     let st = 0, lv = 0, nd = 0;
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
@@ -516,7 +540,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
-    $('#chips').innerHTML = (tree && tree.copilot && tree.copilot.url ? `<a class="chip pilot" id="pilotBtn" href="${esc(tree.copilot.url)}" target="_blank" rel="noopener" title="Open ${esc(tree.copilot.name || 'your co-pilot')} in Claude">Co-pilot</a>` : '') + `<button type="button" class="chip dec ${decs.open.length ? 'has' : ''}" id="decBtn" aria-pressed="${!!ui.inbox}">Decisions<span class="n">${decs.open.length}</span></button>` + c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    renderPinned();
+    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -617,6 +642,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   function renderList() {
     flat = [];
+    renderPinned();
     let html = '';
     let focusInfo = null;
     for (const repo of tree.repos) {
@@ -631,6 +657,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         const gOpen = forceOpen() || !ui.collapsed[gk];
         let rows = '';
         for (const s of items) {
+          if (tree.copilot && s.key === tree.copilot.key) continue;
           repoCount++; if (s.live) repoLive++;
           if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
           const eng = ENGINES.has(s.engine) ? s.engine : 'other';
@@ -1159,7 +1186,6 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     store.set('collapsed', ui.collapsed); renderList();
   });
   $('#chips').addEventListener('click', e => {
-    if (e.target.closest('#decBtn')) return openInbox();
     const vb = e.target.closest('#viewBtn'); if (vb) { e.stopPropagation(); return menuAnchor === vb ? closeMenu() : openViewMenu(vb); }
     const b = e.target.closest('[data-f]'); if (!b) return;
     ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList();
