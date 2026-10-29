@@ -90,6 +90,7 @@ class State:
             "repo_names": dict(d.get("repo_names") or {}),
             "notes": {k: list(v) for k, v in (d.get("notes") or {}).items()},
             "triage": dict(d.get("triage") or {}),
+            "copilot": str(d.get("copilot") or ""),   # session key of Uri's main assistant
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
         }
 
@@ -151,6 +152,13 @@ class State:
                     self.data["assign"].pop(key, None)
             self._save()
         return len(keys)
+
+    def set_copilot(self, key):
+        with self.lock:
+            before = self.data["copilot"]
+            self.data["copilot"] = (key or "").strip()[:200]
+            self._save()
+        return before
 
     def map_desktop_group(self, group, repo):
         """File a Claude desktop sidebar group's sessions under a project; an empty repo unmaps it."""
@@ -378,12 +386,31 @@ def desktop_titles(root=DESKTOP_DIR):
             try:
                 d = json.loads(f.read_text())
                 rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140),
-                       "lid": str(d.get("sessionId") or f.stem)}
-            except (OSError, ValueError, AttributeError):
-                rec = {"sid": "", "title": "", "lid": ""}
+                       "lid": str(d.get("sessionId") or f.stem),
+                       "bridge": str((d.get("bridgeSessionIds") or [""])[-1] or "")}
+            except (OSError, ValueError, AttributeError, TypeError):
+                rec = {"sid": "", "title": "", "lid": "", "bridge": ""}
             _desktop_cache[str(f)] = hit = (m, rec)
         if hit[1]["sid"] and hit[1]["title"]:
             out[hit[1]["sid"]] = hit[1]["title"]
+    return out
+
+
+BRIDGE_RE = re.compile(r"^session_[0-9A-Za-z]{10,40}$")
+LOCAL_RE = re.compile(r"^local_[0-9a-fA-F-]{8,40}$")
+
+
+def desktop_links(sid, root=DESKTOP_DIR):
+    """Links that open a Claude desktop session: on claude.ai (phone, needs Remote Control on) and in the Mac app."""
+    desktop_titles(root)
+    rec = next((r for _, r in _desktop_cache.values() if r.get("sid") == sid), None)
+    if not rec:
+        return {}
+    out = {"title": rec.get("title") or ""}
+    if BRIDGE_RE.match(rec.get("bridge") or ""):
+        out["url"] = "https://claude.ai/code/" + rec["bridge"]
+    if LOCAL_RE.match(rec.get("lid") or ""):
+        out["mac_url"] = "claude://claude.ai/epitaxy/" + rec["lid"]
     return out
 
 
@@ -1194,11 +1221,24 @@ class App:
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
                        desktop_group=desktop_groups())
+        t["copilot"] = self.copilot()
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
+
+    def copilot(self):
+        """The main assistant's session and the links that open it, or None when none is set."""
+        key = self.state.snapshot()["copilot"]
+        if not key:
+            return None
+        out = {"key": key, "name": self.state.snapshot()["nicknames"].get(key) or ""}
+        if key.startswith("claude:"):
+            links = desktop_links(key[7:])
+            out.update(links)
+            out["name"] = links.get("title") or out["name"]     # the desktop title is the one Uri sees
+        return out
 
     def desktop_group_list(self):
         """Every Claude desktop sidebar group with its session count and the project it files under."""
@@ -1361,7 +1401,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -1550,6 +1590,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"ok": False, "error": "no session keys"})
             return self._send(200, {"ok": True, "count": st.move_to_project(keys, str(body.get("repo") or "")),
                                     "repo": str(body.get("repo") or "")})
+        elif p == "/api/copilot":
+            key = str(body.get("key") or "").strip()
+            if key and not re.match(r"^[a-z][a-z0-9_-]*:\S+$", key):
+                return self._send(400, {"ok": False, "error": "key must be <engine>:<id>"})
+            before = st.set_copilot(key)
+            cid = self.app.changes.record(self._actor(), "copilot.set", {"key": key},
+                                          {"copilot": {"key": before or None}}, {"copilot": {"key": key or None}})
+            return self._send(200, {"ok": True, "copilot": self.app.copilot(), "change": cid})
         elif p == "/api/desktop-map":
             group, repo = str(body.get("group") or "").strip(), str(body.get("repo") or "")
             if not group:

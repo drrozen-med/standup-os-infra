@@ -171,7 +171,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-status #status{display:none}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
-.chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.dec.has .n{color:var(--accent)}
+.chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.pilot{background:var(--accent);border-color:var(--accent);color:var(--bg);text-decoration:none}.chip.dec.has .n{color:var(--accent)}
 .inbox h2{font:700 18px var(--display);margin:0;display:flex;gap:8px;align-items:center}.inbox h2 .n{color:var(--dim);font-size:14px}
 .dcard{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
 .dmeta{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
@@ -512,7 +512,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
-    $('#chips').innerHTML = `<button type="button" class="chip dec ${decs.open.length ? 'has' : ''}" id="decBtn" aria-pressed="${!!ui.inbox}">Decisions<span class="n">${decs.open.length}</span></button>` + c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = (tree && tree.copilot && tree.copilot.url ? `<a class="chip pilot" id="pilotBtn" href="${esc(tree.copilot.url)}" target="_blank" rel="noopener" title="Open ${esc(tree.copilot.name || 'your co-pilot')} in Claude">Co-pilot</a>` : '') + `<button type="button" class="chip dec ${decs.open.length ? 'has' : ''}" id="decBtn" aria-pressed="${!!ui.inbox}">Decisions<span class="n">${decs.open.length}</span></button>` + c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -1080,6 +1080,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       return [
         { label: 'Rename…', fn: () => askText({ title: 'Rename session', value: s.nick || '', hint: 'Applied here and in Claude / Codex / Devin via CCC. Empty clears.', ok: 'Rename' }).then(n => { if (n !== null) renameSession(s, n); }) },
         ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
+        ...(s.engine === 'claude' && !s.batch ? [{ label: tree.copilot && tree.copilot.key === s.key ? 'Stop being my co-pilot' : 'Make this my co-pilot', fn: () => post('/api/copilot', { key: tree.copilot && tree.copilot.key === s.key ? '' : s.key }) }] : []),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
