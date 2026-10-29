@@ -179,6 +179,53 @@
     send: '<svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M3 10h13M11 4.5L16.5 10 11 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
   };
 
+  /* what the session is doing right now, read off the end of the transcript (null = idle) */
+  function activityOf(ev, live) {
+    var l = ev[ev.length - 1];
+    if (!l) return null;
+    var label = null;
+    if (l.type === 'user_text' || l.type === 'tool_result') label = 'Thinking';
+    else if (l.type === 'assistant') {
+      var b = (l.blocks || [])[(l.blocks || []).length - 1];
+      if (!b) return null;
+      if (b.kind === 'tool_use') label = 'Running ' + (b.name || 'a tool');
+      else if (b.kind === 'thinking') label = 'Thinking';
+    }
+    if (!label) return null;
+    var at = Date.parse(l.ts || '');
+    if (at && Date.now() - at > (live ? 15 * 60e3 : 90e3)) return null;   // a stale tail is a stalled or finished session, not a busy one
+    return { label: label, since: at || Date.now() };
+  }
+  function elapsed(since) {
+    var s = Math.max(0, Math.round((Date.now() - since) / 1000));
+    return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  }
+  function normText(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
+
+  function pendNode(p) {
+    var row = bubble('me', md(p.text));
+    row.classList.add('pend', p.state);
+    row.dataset.live = '1'; row.dataset.pid = String(p.id);
+    var st = document.createElement('div');
+    st.className = 'stamp pstate';
+    if (p.state === 'sending') st.innerHTML = 'Sending&hellip;';
+    else if (p.state === 'sent') st.innerHTML = ICONS.tick + ' Sent';
+    else st.innerHTML = '<span class="bad">Not sent</span>' + (p.err ? ' &middot; ' + esc(p.err) : '') +
+      ' <button type="button" data-retry>Retry</button><button type="button" data-edit>Edit</button>';
+    row.appendChild(st);
+    return row;
+  }
+
+  function typingNode(a) {
+    var row = document.createElement('div');
+    row.className = 'row them';
+    row.dataset.live = '1';
+    row.innerHTML = '<div class="typing" role="status" aria-live="polite" data-label="' + esc(a.label) + '">' +
+      '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>' +
+      '<span class="t-lbl">' + esc(a.label) + '&hellip;</span><span class="t-el">' + elapsed(a.since) + '</span></div>';
+    return row;
+  }
+
   // ---- fast switching: cache of recent conversations + prefetch
   var TAIL = 80, CACHE_MAX = 24, FRESH_MS = 15000;
   var cache = new Map(), inflight = new Map();
@@ -265,6 +312,7 @@
       var atEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
       var keep = thread.scrollTop;
       lastSig = s; render(ev, thread, showAll); current = ev;
+      reconcile(); decorate();
       if (scroll !== false && (atEnd || keep === 0)) thread.scrollTop = thread.scrollHeight; else thread.scrollTop = keep;
       if (opts.onEngine) opts.onEngine(d.engine || '');
     }
@@ -290,10 +338,63 @@
       if (e.target.closest && e.target.closest('[data-more]')) { showAll = true; lastSig = null; if (current) paint({ events: current }, false); var top = thread.scrollTop; thread.scrollTop = top; }
     });
 
-    function post() {
-      var text = box.value.trim();
-      if (!text || send.disabled) return;
-      send.disabled = true;
+    /* ---- sent messages show at once, then "Thinking..." until the reply lands ---- */
+    var pending = [], seq = 0, pollT = null, tick = null;
+    function countUser(text) {
+      var all = 0, same = 0, n = normText(text);
+      (current || []).forEach(function (e) { if (e.type === 'user_text') { all++; if (normText(e.text) === n) same++; } });
+      return { all: all, same: same };
+    }
+    function reconcile() {
+      pending = pending.filter(function (p) {
+        if (p.state !== 'sent') return true;
+        var n = countUser(p.text), age = Date.now() - p.sentAt;
+        if (n.same > p.baseSame) return false;                         // our message is in the transcript now
+        if (age > 45000 && n.all > p.baseAll) return false;            // transcript changed the wording: stop waiting
+        return age < 5 * 60e3;
+      });
+    }
+    function activity() {
+      var waiting = pending.filter(function (p) { return p.state === 'sent'; });
+      if (waiting.length) return { label: 'Thinking', since: waiting[0].at };
+      var a = current ? activityOf(current, opts.live) : null;
+      if (!a && piWatch) a = { label: 'Pi is working', since: Date.now() };
+      return a;
+    }
+    function decorate() {
+      if (!lastSig && !pending.length) return;
+      var atEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
+      Array.prototype.slice.call(thread.querySelectorAll('[data-live]')).forEach(function (n) { n.remove(); });
+      var empty = thread.querySelector('.chat-empty');
+      if (empty && pending.length) empty.remove();
+      pending.forEach(function (p) { thread.appendChild(pendNode(p)); });
+      var a = activity();
+      if (a) { thread._since = a.since; thread.appendChild(typingNode(a)); }
+      if (atEnd) thread.scrollTop = thread.scrollHeight;
+    }
+    function busy() { return pending.length > 0 || !!activity(); }
+
+    function schedule() {
+      if (pollT) clearTimeout(pollT);
+      pollT = setTimeout(function () {
+        if (!document.hidden) { load(false); }
+        schedule();
+      }, busy() ? 2000 : 8000);
+    }
+    tick = setInterval(function () {      // elapsed-time counter; rebuild only when the state itself changed
+      var t = thread.querySelector('.typing'), a = activity();
+      if (!!t !== !!a || (t && a && t.getAttribute('data-label') !== a.label)) { decorate(); return; }
+      if (t && a) { var el = t.querySelector('.t-el'); if (el) el.textContent = elapsed(a.since); }
+    }, 1000);
+
+    function post(retry) {
+      var text = retry ? retry.text : box.value.trim();
+      if (!text) return;
+      var p = retry || { id: ++seq, text: text };
+      var n = countUser(text);
+      p.at = Date.now(); p.baseSame = n.same; p.baseAll = n.all; p.state = 'sending'; p.err = '';
+      if (!retry) { pending.push(p); box.value = ''; autoGrow(); }
+      decorate(); thread.scrollTop = thread.scrollHeight; schedule();
       fetch(isPi ? '/api/pi/send' : '/api/inject-input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -307,16 +408,17 @@
           });
         })
         .then(function (d) {
-          box.value = '';
-          autoGrow();
+          p.state = 'sent'; p.sentAt = Date.now();
           if (isPi && d.run) { box.placeholder = 'Pi is working on it...'; watchPiRun(d.run); }
           if (d && d.warning && opts.onError) opts.onError(d.warning);
           cache.delete(sid); lastSig = null; load();
+          decorate(); schedule();
         })
         .catch(function (e) {
-          if (opts.onError) opts.onError(e.message || 'Could not send');
-        })
-        .then(function () { send.disabled = false; });
+          p.state = 'failed'; p.err = e.message || 'Could not send';
+          decorate();
+          if (opts.onError) opts.onError(p.err);
+        });
     }
 
     function autoGrow() {
@@ -324,18 +426,37 @@
       box.style.height = Math.min(box.scrollHeight, 180) + 'px';
     }
 
+    thread.addEventListener('click', function (e) {
+      var row = e.target.closest && e.target.closest('.pend');
+      if (!row) return;
+      var p = pending.filter(function (x) { return String(x.id) === row.dataset.pid; })[0];
+      if (!p) return;
+      if (e.target.closest('[data-retry]')) post(p);
+      else if (e.target.closest('[data-edit]')) {
+        pending = pending.filter(function (x) { return x !== p; });
+        if (!box.value) { box.value = p.text; autoGrow(); }
+        box.focus(); decorate();
+      }
+    });
+
     box.addEventListener('input', autoGrow);
     box.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); post(); }
     });
-    send.addEventListener('click', post);
+    send.addEventListener('click', function () { post(); });
+    document.addEventListener('visibilitychange', onVisible);
+    function onVisible() { if (!document.hidden) load(false); }
 
     this.refresh = load;
-    this.poll = function (on, every) {
+    this.poll = function () {};            // the conversation now keeps itself fresh (see schedule)
+    this.destroy = function () {
       if (timer) clearInterval(timer);
-      if (on) timer = setInterval(load, every || 5000);
+      if (piWatch) clearInterval(piWatch);
+      if (pollT) clearTimeout(pollT);
+      if (tick) clearInterval(tick);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-    this.destroy = function () { if (timer) clearInterval(timer); if (piWatch) clearInterval(piWatch); };
+    schedule();
     load();
   }
 
