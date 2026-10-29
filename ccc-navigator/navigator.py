@@ -34,6 +34,8 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import changes
+import decisions
 import orca
 import pi_run
 import remote
@@ -61,7 +63,9 @@ class State:
 
     {"nicknames": {key: name},
      "groups":    {repo_key: [group, ...]},
-     "assign":    {key: {"repo": repo_key, "group": name}}}
+     "assign":    {key: {"repo": repo_key, "group": name}},
+     "moved":     {key: repo_key},   # session filed under another project than its folder
+     "desktop_map": {desktop group name: repo_key}}   # unmapped desktop groups are their own project
     """
 
     def __init__(self, path: Path):
@@ -78,12 +82,15 @@ class State:
             "nicknames": dict(d.get("nicknames") or {}),
             "groups": {k: list(v) for k, v in (d.get("groups") or {}).items()},
             "assign": dict(d.get("assign") or {}),
+            "moved": dict(d.get("moved") or {}),
+            "desktop_map": dict(d.get("desktop_map") or {}),
             "hidden": dict(d.get("hidden") or {}),
             "pinned": dict(d.get("pinned") or {}),
             "icons": dict(d.get("icons") or {}),
             "repo_names": dict(d.get("repo_names") or {}),
             "notes": {k: list(v) for k, v in (d.get("notes") or {}).items()},
             "triage": dict(d.get("triage") or {}),
+            "copilot": str(d.get("copilot") or ""),   # session key of Uri's main assistant
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
         }
 
@@ -131,6 +138,39 @@ class State:
             else:
                 self.data["assign"].pop(key, None)
             self._save()
+
+    def move_to_project(self, keys, repo):
+        """File sessions under another project (repo key); an empty repo puts them back by folder."""
+        with self.lock:
+            for key in keys:
+                if repo:
+                    self.data["moved"][key] = repo
+                else:
+                    self.data["moved"].pop(key, None)
+                a = self.data["assign"].get(key)
+                if a and a.get("repo") != repo:
+                    self.data["assign"].pop(key, None)
+            self._save()
+        return len(keys)
+
+    def set_copilot(self, key):
+        with self.lock:
+            before = self.data["copilot"]
+            self.data["copilot"] = (key or "").strip()[:200]
+            self._save()
+        return before
+
+    def map_desktop_group(self, group, repo):
+        """File a Claude desktop sidebar group's sessions under a project; an empty repo unmaps it."""
+        group = (group or "").strip()[:80]
+        with self.lock:
+            before = self.data["desktop_map"].get(group)
+            if repo:
+                self.data["desktop_map"][group] = repo
+            else:
+                self.data["desktop_map"].pop(group, None)
+            self._save()
+        return before
 
     def set_repo_name(self, key, name):
         with self.lock:
@@ -323,6 +363,87 @@ class CCCSource:
             # a failed fetch costs the connect timeout, so back off: retry after 2x ttl
             self._val, self._at = (rows, meta), time.time() + (0 if meta["ok"] else self.ttl)
             self._busy = False
+
+
+DESKTOP_DIR = os.environ.get("CCC_NAV_DESKTOP_DIR", "~/Library/Application Support/Claude/claude-code-sessions")
+DESKTOP_CONFIG = os.environ.get("CCC_NAV_DESKTOP_CONFIG", "~/Library/Application Support/Claude/claude_desktop_config.json")
+DESKTOP_PREFIX = "desktop:"   # project key for a desktop group with no project mapped to it
+TITLER_STATE = os.environ.get("CCC_NAV_TITLER_STATE", "~/.ccc-navigator/titler.json")
+_desktop_cache: dict[str, tuple[float, dict]] = {}
+
+
+def desktop_titles(root=DESKTOP_DIR):
+    """Session titles from the Claude desktop app (Code tab): CLI session id -> title.
+    Read-only; each record file is re-read only when its mtime changes."""
+    out = {}
+    for f in Path(root).expanduser().glob("*/*/local_*.json"):
+        try:
+            m = f.stat().st_mtime
+        except OSError:
+            continue
+        hit = _desktop_cache.get(str(f))
+        if not hit or hit[0] != m:
+            try:
+                d = json.loads(f.read_text())
+                rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140),
+                       "lid": str(d.get("sessionId") or f.stem),
+                       "bridge": str((d.get("bridgeSessionIds") or [""])[-1] or "")}
+            except (OSError, ValueError, AttributeError, TypeError):
+                rec = {"sid": "", "title": "", "lid": "", "bridge": ""}
+            _desktop_cache[str(f)] = hit = (m, rec)
+        if hit[1]["sid"] and hit[1]["title"]:
+            out[hit[1]["sid"]] = hit[1]["title"]
+    return out
+
+
+BRIDGE_RE = re.compile(r"^session_[0-9A-Za-z]{10,40}$")
+LOCAL_RE = re.compile(r"^local_[0-9a-fA-F-]{8,40}$")
+
+
+def desktop_links(sid, root=DESKTOP_DIR):
+    """Links that open a Claude desktop session: on claude.ai (phone, needs Remote Control on) and in the Mac app."""
+    desktop_titles(root)
+    rec = next((r for _, r in _desktop_cache.values() if r.get("sid") == sid), None)
+    if not rec:
+        return {}
+    out = {"title": rec.get("title") or ""}
+    if BRIDGE_RE.match(rec.get("bridge") or ""):
+        out["url"] = "https://claude.ai/code/" + rec["bridge"]
+    if LOCAL_RE.match(rec.get("lid") or ""):
+        out["mac_url"] = "claude://claude.ai/epitaxy/" + rec["lid"]
+    return out
+
+
+def desktop_groups(root=DESKTOP_DIR, config=DESKTOP_CONFIG):
+    """Sidebar groups from the Claude desktop app: CLI session id -> group name. Read-only."""
+    try:
+        prefs = json.loads(Path(config).expanduser().read_text())["preferences"]["epitaxyPrefs"]
+        scopes = prefs.get("dframe-group-scopes") or {}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+    by_lid = {}
+    for scope in scopes.values() if isinstance(scopes, dict) else []:
+        try:
+            names = {g["id"]: str(g["name"]).strip() for g in scope.get("groups") or []}
+            for k, gid in (scope.get("assignments") or {}).items():
+                if names.get(gid) and str(k).startswith("code:"):
+                    by_lid[str(k)[5:]] = names[gid][:80]
+        except (KeyError, TypeError, AttributeError):
+            continue
+    if not by_lid:
+        return {}
+    desktop_titles(root)     # fills the record cache (local id -> CLI id)
+    return {rec["sid"]: by_lid[rec["lid"]] for _, rec in _desktop_cache.values()
+            if rec.get("sid") and rec.get("lid") in by_lid}
+
+
+def titler_titles(path=TITLER_STATE):
+    """Titles the background titler set, so a desktop title can replace them (a user's own rename is kept)."""
+    try:
+        d = json.loads(Path(path).expanduser().read_text())
+        return {k: v.get("title") for k, v in d.items() if isinstance(v, dict) and v.get("title")}
+    except (OSError, ValueError, AttributeError):
+        return {}
 
 
 _pi_cache: dict[str, tuple[tuple[float, int], dict | None]] = {}
@@ -751,7 +872,10 @@ def is_running(r):
             or time.time() - mtime_of(r) < 600)
 
 
-def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False):
+def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
+               desktop=None, auto_titles=None, desktop_group=None):
+    """desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
+    an explicit move, then the desktop group (its mapped project, or its own), then the folder."""
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
     inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r)]
@@ -780,12 +904,26 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
 
     nick = state["nicknames"]
     assign = state["assign"]
+    moved = state.get("moved") or {}
+    dmap = state.get("desktop_map") or {}
     method_ct = collections.Counter()
     unresolved = collections.Counter()
     repos = {}
 
-    def place(r):
+    def dgroup(r):
+        return (desktop_group or {}).get(str(r.get("session_id") or "")) if str(r.get("engine") or "claude") == "claude" else None
+
+    def place(r, item_key=None):
         cwd = r.get("session_cwd") or r.get("folder_path") or ""
+        dg = dgroup(r) if item_key not in moved else None
+        if item_key in moved or dg:
+            key = moved[item_key] if item_key in moved else dmap.get(dg) or DESKTOP_PREFIX + dg
+            name = key.split(":", 1)[1] if ":" in key and not key.startswith("/") else Path(key).name
+            method_ct["moved" if item_key in moved else "desktop-group"] += 1
+            repo = repos.setdefault(key, {"key": key, "name": state.get("repo_names", {}).get(key) or name,
+                                          "orig_name": name, "path": short(key) if key.startswith("/") else "",
+                                          "items": []})
+            return repo, cwd, None, None
         scratch = claude_scratch_root(cwd)
         ws = orca.workspace_for(orca_ws, cwd, r.get("git_branch") or r.get("branch") or "")
         main, method, wt = resolve_repo(cwd)
@@ -825,10 +963,19 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         original = (r.get("display_name") if r.get("name_overridden") else None) \
             or r.get("display_name") or r.get("ai_title") or clean(r.get("first_message")) \
             or f"(untitled {sid[:8]})"
+        # the desktop app's title (yours or its own) beats CCC's guess and the titler's
+        dt = (desktop or {}).get(sid) if engine == "claude" else None
+        name = nick.get(item_key) or ""
+        if dt:
+            original = dt
+            if name and name == (auto_titles or {}).get(item_key):
+                name = ""
         return {
             "key": item_key, "sid": sid, "engine": engine,
             "original": clean(original, 140),
-            "nick": nick.get(item_key) or "",
+            "nick": name,
+            "moved": item_key in moved,
+            "desktop_group": dgroup(r) or "",
             "live": is_running(r),
             "pinned": bool(state.get("pinned", {}).get(item_key)),
             "notes": len(state.get("notes", {}).get(item_key) or []),
@@ -852,8 +999,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         }
 
     for r in singles:
-        repo, cwd, wt, ws = place(r)
         key = f"{r.get('engine') or 'claude'}:{r.get('session_id')}"
+        repo, cwd, wt, ws = place(r, key)
         repo["items"].append(base_item(r, key, repo, cwd, wt, ws))
 
     for pk, runs in batches.items():
@@ -975,6 +1122,41 @@ class App:
         self.args = args
         self.ccc = CCCSource(args.ccc)
         self.state = State(Path(args.state).expanduser())
+        home = Path(args.state).expanduser().parent       # a test instance with its own --state keeps its own files
+        self.inbox = decisions.Inbox(
+            os.environ.get("CCC_NAV_DECISIONS") or home / "decisions.json",
+            os.environ.get("CCC_NAV_ANSWERS") or home / "answers.json",
+            os.environ.get("CCC_NAV_WATCHTOWER_DECISIONS",
+                           "~/projects/standup-os/watchtower/decisions.json"))
+        self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
+
+    def deliver(self, session_key, text):
+        """Send text into an agent session: Pi by resuming it, everything else through CCC. -> short status."""
+        engine, _, sid = str(session_key or "").partition(":")
+        if not sid:
+            return "no-session"
+        if engine == "pi":
+            r = pi_run.send(self.args.pi_dir, sid, text)
+            return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
+        try:
+            body = json.dumps({"session_id": sid, "text": text, "mode": "send"}).encode()
+            base = urllib.parse.urlparse(self.ccc.base)
+            c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=15)
+            c.request("POST", "/api/inject-input", body=body, headers={"Content-Type": "application/json", "Host": base.netloc})
+            r = c.getresponse(); out = r.read(); c.close()
+            ok = r.status < 300 and json.loads(out or b"{}").get("ok", True) is not False
+            return "sent" if ok else "failed: HTTP %d" % r.status
+        except Exception as e:
+            return "failed: %s" % e
+
+    def answer_decision(self, b, actor):
+        did = str(b.get("id") or "")
+        d = self.inbox.get(did)
+        rec, before = self.inbox.answer(did, b.get("choice"), b.get("note"), by=actor)
+        cid = self.changes.record(actor, "decision.answer", {"id": did, "choice": rec["choice"]},
+                                  {"answers": {did: before}}, {"answers": {did: rec}})
+        delivery = self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
+        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery}
 
     def rename(self, b):
         """Rename a session / group / project and write it through to the tool that owns the name."""
@@ -1037,12 +1219,42 @@ class App:
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
-                       show_hidden=show_hidden)
+                       show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
+                       desktop_group=desktop_groups())
+        t["copilot"] = self.copilot()
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
+
+    def copilot(self):
+        """The main assistant's session and the links that open it, or None when none is set."""
+        key = self.state.snapshot()["copilot"]
+        if not key:
+            return None
+        out = {"key": key, "name": self.state.snapshot()["nicknames"].get(key) or ""}
+        if key.startswith("claude:"):
+            links = desktop_links(key[7:])
+            out.update(links)
+            out["name"] = links.get("title") or out["name"]     # the desktop title is the one Uri sees
+        return out
+
+    def desktop_group_list(self):
+        """Every Claude desktop sidebar group with its session count and the project it files under."""
+        dmap = self.state.snapshot()["desktop_map"]
+        counts = collections.Counter(desktop_groups().values())
+        return [{"name": g, "sessions": counts[g], "project": dmap.get(g) or DESKTOP_PREFIX + g,
+                 "mapped": g in dmap} for g in sorted(set(counts) | set(dmap), key=str.lower)]
+
+    @staticmethod
+    def project_folders(root="~/projects"):
+        """Git checkouts under ~/projects, so a group can be mapped to a project with no recent sessions."""
+        base = Path(root).expanduser()
+        try:
+            return sorted(str(p) for p in base.iterdir() if (p / ".git").exists())
+        except OSError:
+            return []
 
     def pi_transcript(self, sid):
         return pi_transcript(self.args.pi_dir, sid)
@@ -1166,6 +1378,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"revoked": self.remote_store.revoke(which)})
         return self._send(404, {"error": "not found"})
 
+    def _actor(self):
+        """Who is acting: the X-Nav-Actor header (agents, CLI), else the owner. The phone is always the owner."""
+        if remote.is_remote(self.headers, self.remote_cfg.public_host):
+            return "you"
+        a = (self.headers.get("X-Nav-Actor") or "you").strip().lower()
+        return a if changes.ACTOR_RE.match(a) else "you"
+
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
@@ -1182,7 +1401,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo"}
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot",
+                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1267,6 +1487,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.pi_transcript(sid))
         if u.path == "/api/pi/run":
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
+        if u.path == "/api/decisions":
+            return self._send(200, dict(self.app.inbox.list(), ok=True))
+        if u.path == "/api/desktop-groups":
+            return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
+                                    "folders": self.app.project_folders()})
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1339,6 +1564,63 @@ class Handler(BaseHTTPRequestHandler):
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             entry_id = st.set_hidden([str(k) for k in keys if k], bool(body.get("hidden", True)), str(body.get("label") or ""))
             return self._send(200, {"ok": True, "id": entry_id})
+        elif p.startswith("/api/decisions/"):
+            actor = self._actor()
+            try:
+                if p == "/api/decisions/answer":
+                    return self._send(200, self.app.answer_decision(body, actor))
+                if p == "/api/decisions/reopen":
+                    did = str(body.get("id") or "")
+                    before = self.app.inbox.reopen(did)
+                    cid = self.app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}},
+                                                  {"answers": {did: None}})
+                    return self._send(200, {"ok": True, "id": did, "change": cid})
+                d = self.app.inbox.ask(body.get("question"), body.get("options"), body.get("lane"), body.get("priority", 2),
+                                       body.get("deadline"), body.get("session"), body.get("source"), body.get("id") or "",
+                                       by=actor)
+                self.app.changes.record(actor, "decision.ask", {"id": d["id"]}, {}, {"questions": {d["id"]: d["question"]}},
+                                        undoable=False)
+                return self._send(200, {"ok": True, "decision": d})
+            except (decisions.DecisionError, changes.ChangeError) as e:
+                return self._send(400, {"ok": False, "error": {"code": e.code, "message": str(e)}})
+        elif p == "/api/move-project":
+            keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
+            keys = [str(k) for k in keys if k and not str(k).startswith("batch:")]
+            if not keys:
+                return self._send(400, {"ok": False, "error": "no session keys"})
+            return self._send(200, {"ok": True, "count": st.move_to_project(keys, str(body.get("repo") or "")),
+                                    "repo": str(body.get("repo") or "")})
+        elif p == "/api/copilot":
+            key = str(body.get("key") or "").strip()
+            if key and not re.match(r"^[a-z][a-z0-9_-]*:\S+$", key):
+                return self._send(400, {"ok": False, "error": "key must be <engine>:<id>"})
+            before = st.set_copilot(key)
+            cid = self.app.changes.record(self._actor(), "copilot.set", {"key": key},
+                                          {"copilot": {"key": before or None}}, {"copilot": {"key": key or None}})
+            return self._send(200, {"ok": True, "copilot": self.app.copilot(), "change": cid})
+        elif p == "/api/desktop-map":
+            group, repo = str(body.get("group") or "").strip(), str(body.get("repo") or "")
+            if not group:
+                return self._send(400, {"ok": False, "error": "group required"})
+            before = st.map_desktop_group(group, repo)
+            cid = self.app.changes.record(self._actor(), "desktop-group.map", {"group": group, "repo": repo},
+                                          {"desktop_map": {group: before}}, {"desktop_map": {group: repo or None}})
+            return self._send(200, {"ok": True, "group": group, "repo": repo, "change": cid})
+        elif p == "/api/unhide-scope":
+            repo = str(body.get("repo") or "")
+            group = str(body.get("group")) if body.get("group") is not None else None
+            t = self.app.tree("all", show_hidden=True)
+            r = next((x for x in t["repos"] if x["key"] == repo), None)
+            if not r:
+                return self._send(404, {"ok": False, "error": "unknown project"})
+            groups = [g for g in r["groups"] if group is None or g["name"] == group]
+            keys = [s["key"] for g in groups for s in g["items"] if s.get("hidden")]
+            keys += ["r:" + repo] if group is None else []
+            keys += ["g:%s|%s" % (repo, g["name"]) for g in groups]
+            hidden = st.snapshot()["hidden"]
+            keys = [k for k in keys if k in hidden]
+            st.set_hidden(keys, False)
+            return self._send(200, {"ok": True, "count": len(keys)})
         elif p == "/api/hide/undo":
             entry = st.undo_hide(str(body.get("id") or ""))
             return self._send(200 if entry else 404, {"ok": bool(entry), "entry": entry})

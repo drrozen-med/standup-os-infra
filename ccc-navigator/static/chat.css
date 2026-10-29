@@ -22,6 +22,7 @@
 
 .chat-head .who { min-width: 0; flex: 1; }
 .chat-head .title {
+  text-align: left;   /* header stays left; a Hebrew title still reads right-to-left inside it */
   font-family: var(--display);
   font-size: 15px;
   font-weight: 600;
@@ -90,6 +91,11 @@
   border-bottom-left-radius: 4px;
 }
 .bubble p { margin: 0 0 0.6em; }
+/* Hebrew + English: chat.js gives every line the direction of the script most of its letters are in;
+   it aligns to its own start (Hebrew right, English left) */
+.bubble .ln { display: block; text-align: start; }
+.bubble code { unicode-bidi: isolate; }
+.bubble pre { text-align: left; }
 .bubble p:last-child { margin-bottom: 0; }
 .bubble pre {
   margin: 0.55em 0;
@@ -167,12 +173,33 @@
   line-height: 1.6;
   color: var(--muted);
   white-space: pre-wrap;
+  unicode-bidi: plaintext;
   overflow-wrap: anywhere;
   max-height: 320px;
   overflow-y: auto;
 }
 .fold-wrap.open .fold-body { display: block; }
 .fold-wrap.open .fold .f-lbl { color: var(--muted); }
+
+/* ---- a run of steps folds into one line ("Worked · 4 steps · 16s"), Claude Code style ---- */
+.steps-h {
+  border: none;
+  background: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+.steps-h:hover { color: var(--muted); background: var(--hover); }
+.steps-h .chev { color: var(--dim); transition: transform 140ms ease; }
+.steps-h[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.steps-body { display: none; margin-block: 2px 6px; margin-inline-start: 10px; padding-inline-start: 8px; border-inline-start: 1px solid var(--line); }
+.steps.open .steps-body { display: block; }
 
 /* ---- composer ---- */
 .composer {
@@ -185,6 +212,8 @@
   align-items: flex-end;
 }
 .composer textarea {
+  unicode-bidi: plaintext;
+  text-align: start;
   flex: 1;
   min-width: 0;
   min-height: 44px;

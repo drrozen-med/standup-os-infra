@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-title" content="Navigator">
 <meta name="theme-color" content="#0f1020">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@600;700&family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/__nav/chat.css">
 <script src="/__nav/chat.js" defer></script>
 <script>try{var th=localStorage.getItem("ccc-nav-theme");if(th&&th!=="auto")document.documentElement.dataset.theme=JSON.parse(th)}catch(e){}</script>
@@ -31,7 +31,7 @@
   --shadow:0 12px 36px oklch(0 0 0/55%),0 0 0 1px oklch(1 0 0/6%);
   --scroll:oklch(1 0 0/14%);
   --mono:ui-monospace,"JetBrains Mono",SFMono-Regular,Menlo,monospace;
-  --sans:Manrope,"Heebo",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --sans:Manrope,"Heebo","Noto Sans Hebrew","Arial Hebrew",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   --display:Sora,Manrope,ui-sans-serif,system-ui,sans-serif;
   --r:10px;--r-sm:6px;
 }
@@ -172,6 +172,34 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-status #status:has(.bad){display:flex}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
+.chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.pilot{background:var(--accent);border-color:var(--accent);color:var(--bg);text-decoration:none}.chip.dec.has .n{color:var(--accent)}
+.inbox h2{font:700 18px var(--display);margin:0;display:flex;gap:8px;align-items:center}.inbox h2 .n{color:var(--dim);font-size:14px}
+.dcard{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
+.dmeta{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
+.pri{font-weight:800;border-radius:6px;padding:1px 6px;background:var(--hover)}.pri.p1{color:var(--accent)}
+.due{margin-left:auto}.due.soon{color:var(--accent);font-weight:700}
+.dq{font-size:14px;line-height:1.5;unicode-bidi:plaintext;text-align:start}
+.dopts{display:flex;flex-wrap:wrap;gap:8px}
+.dopt{min-height:36px;padding:6px 14px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;font-size:13px;cursor:pointer}
+.dopt:hover{background:var(--primary-soft);border-color:var(--primary-hi)}.dopt.other{color:var(--muted)}
+.dsrc{font-size:11px;color:var(--dim)}
+.dlg{position:fixed;inset:0;z-index:200;background:oklch(0 0 0/50%);display:flex;align-items:center;justify-content:center;padding:16px}
+.dlg-box{width:min(440px,100%);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 20px 60px oklch(0 0 0/40%)}
+.dlg-t{font:700 15px var(--display);color:var(--text)}.dlg-h{font-size:12px;color:var(--dim);line-height:1.5}
+.dlg-box input,.dlg-box textarea{width:100%;box-sizing:border-box;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;min-height:40px;unicode-bidi:plaintext;text-align:start}
+.dlg-box input:focus,.dlg-box textarea:focus{outline:none;border-color:var(--primary-hi)}
+.dlg-b{display:flex;justify-content:flex-end;gap:10px}
+.dlg-b button{min-height:38px;padding:6px 16px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;cursor:pointer}
+.dlg-b .dlg-ok{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}.dlg-b .dlg-ok.danger{background:var(--bad,#c0392b);border-color:var(--bad,#c0392b)}
+.dlg-notes{display:flex;flex-direction:column;gap:10px}.dlg-note{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}.dlg-note .linkbtn{align-self:flex-start}
+.dother{display:flex;flex-direction:column;gap:8px}
+.dother textarea{width:100%;box-sizing:border-box;min-height:64px;resize:vertical;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;unicode-bidi:plaintext;text-align:start}
+.dother textarea:focus{outline:none;border-color:var(--primary-hi)}
+.drow{display:flex;gap:12px;align-items:center}.dopt.send{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.danswered summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+.dans{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:12.5px}
+.dans .dq{font-size:12.5px;color:var(--muted);flex:1 1 100%}.dpick{font-weight:700}
+.linkbtn{background:none;border:0;color:var(--primary-hi);cursor:pointer;font-size:12px;padding:0}
 .vrow{display:flex!important;align-items:center;gap:10px}
 .vrow .box{flex:none;width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line3);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--primary-fg)}
 .vrow.on .box{background:var(--primary);border-color:var(--primary)}
@@ -301,6 +329,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .s,.grp-h,.repo-h{min-height:40px}
   .s>.eye,.s>.star-b{display:none}
   .dots,.eye,.star-b{width:30px;height:30px}
+  .row1{flex-wrap:wrap;gap:6px}
+  .row1 .tools{gap:4px}
+  .seg button{padding:4px 6px}
 }
 </style>
 </head>
@@ -315,7 +346,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     <label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <span class="sr">Search sessions</span>
-      <input id="q" type="text" placeholder="Search nickname, title, repo, group…" autocomplete="off">
+      <input id="q" type="text" dir="auto" placeholder="Search nickname, title, repo, group…" autocomplete="off">
       <span class="kbd" aria-hidden="true">/</span>
     </label>
     <div class="status" id="status"></div>
@@ -367,6 +398,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     focus: null,  // {repo, group, path}: show everything in one workspace, all time, hidden included
   };
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
+  let decs = { open: [], answered: [] }, decSig = '';
 
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -385,10 +417,59 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     try {
       const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.focus ? 'all' : ui.win) + (ui.showMine || ui.focus ? '&hidden=1' : ''));
       tree = await r.json();
+      await loadDecisions();
       render();
     } catch (e) {
       $('#status').innerHTML = '<span class="bad">Navigator server unreachable</span>';
     } finally { inflight = false; }
+  }
+
+  async function loadDecisions() {
+    try {
+      const d = await fetch('/api/decisions').then(x => x.json());
+      const sig = JSON.stringify([d.open.map(x => x.id), d.answered.map(x => x.id + x.answer.ts)]);
+      decs = d;
+      if (sig !== decSig) { decSig = sig; lastDetailKey = null; }
+    } catch (e) { /* inbox stays as it was */ }
+  }
+
+  // ---- decision inbox: what only Uri can decide, answered with one tap
+  const PRI = { 1: 'P1', 2: 'P2', 3: 'P3' };
+  function due(d) {
+    if (d.days_left === null || d.days_left === undefined) return '';
+    const t = d.days_left < 0 ? Math.abs(d.days_left) + 'd overdue' : d.days_left === 0 ? 'due today' : d.days_left + 'd left';
+    return `<span class="due ${d.days_left <= 3 ? 'soon' : ''}">${t}</span>`;
+  }
+  function inboxHtml() {
+    const card = d => `<div class="dcard" data-dec="${esc(d.id)}">
+        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${due(d)}</div>
+        <div class="dq" dir="auto">${esc(d.question)}</div>
+        <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
+        <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt send" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
+        ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}
+      </div>`;
+    const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
+    return `<div class="detail inbox"><button type="button" class="mback" data-mback>‹ Sessions</button>
+      <h2>Decisions <span class="n">${decs.open.length}</span></h2>
+      ${decs.open.length ? decs.open.map(card).join('') : '<p class="hint">Nothing waits on you. Agents add questions with <span class="kbd">nav ask</span>.</p>'}
+      ${done ? `<details class="danswered"><summary>Answered (${decs.answered.length})</summary>${done}</details>` : ''}
+    </div>`;
+  }
+  async function answerDecision(id, choice, note = '') {
+    const r = await fetch('/api/decisions/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, choice, note }) }).then(x => x.json()).catch(() => ({}));
+    if (!r.ok) return toast('Not saved: ' + ((r.error && r.error.message) || 'server unreachable'));
+    toast('Answered: ' + (r.answer.choice === 'other' ? r.answer.note.slice(0, 60) : r.answer.choice) + (r.delivery === 'sent' ? ' · sent to the agent' : r.delivery && r.delivery !== 'recorded' ? ' · ' + r.delivery : ''), { label: 'Undo', fn: () => reopenDecision(id) });
+    await loadDecisions(); renderChips(); renderDetail(true);
+  }
+  async function reopenDecision(id) {
+    const r = await fetch('/api/decisions/reopen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(x => x.json()).catch(() => ({}));
+    toast(r.ok ? 'Reopened' : 'Could not reopen');
+    await loadDecisions(); renderChips(); renderDetail(true);
+  }
+  function openInbox() {
+    ui.inbox = true; ui.selected = null; store.set('selected', null);
+    if (narrow()) document.body.classList.add('m-detail');
+    renderList(); renderDetail(true);
   }
 
   // a session counts as starred when it, its group or its project is starred
@@ -435,7 +516,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = (tree && tree.copilot && tree.copilot.url ? `<a class="chip pilot" id="pilotBtn" href="${esc(tree.copilot.url)}" target="_blank" rel="noopener" title="Open ${esc(tree.copilot.name || 'your co-pilot')} in Claude">Co-pilot</a>` : '') + `<button type="button" class="chip dec ${decs.open.length ? 'has' : ''}" id="decBtn" aria-pressed="${!!ui.inbox}">Decisions<span class="n">${decs.open.length}</span></button>` + c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -467,9 +548,47 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     t.classList.add('on'); clearTimeout(toast.h);
     if (!(action && action.sticky)) toast.h = setTimeout(() => t.classList.remove('on'), action ? 6000 : 2600);
   }
+  /* In-page dialogs. The browser's prompt()/confirm() are blocked in embedded browsers (the app pane,
+     installed web apps), so every question the UI asks goes through these. */
+  function dialog(build) {
+    return new Promise(resolve => {
+      const scrim = document.createElement('div');
+      scrim.className = 'dlg';
+      scrim.innerHTML = '<div class="dlg-box" role="dialog" aria-modal="true"></div>';
+      const box = scrim.firstChild;
+      const prev = document.activeElement;
+      const close = v => { scrim.remove(); document.removeEventListener('keydown', onKey, true); if (prev && prev.focus) prev.focus(); resolve(v); };
+      const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+      document.addEventListener('keydown', onKey, true);
+      scrim.addEventListener('click', e => { if (e.target === scrim) close(null); });
+      document.body.appendChild(scrim);
+      build(box, close);
+    });
+  }
+  function askText({ title, value = '', placeholder = '', hint = '', multiline = false, ok = 'Save', readonly = false }) {
+    return dialog((box, close) => {
+      const field = multiline || readonly ? '<textarea rows="4"></textarea>' : '<input type="text">';
+      box.innerHTML = `<div class="dlg-t" dir="auto">${esc(title)}</div>${hint ? `<div class="dlg-h">${esc(hint)}</div>` : ''}${field}
+        <div class="dlg-b"><button type="button" class="dlg-x">${readonly ? 'Close' : 'Cancel'}</button>${readonly ? '' : `<button type="button" class="dlg-ok">${esc(ok)}</button>`}</div>`;
+      const f = box.querySelector('input,textarea');
+      f.value = value; f.placeholder = placeholder; f.dir = 'auto'; f.readOnly = readonly;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      const okb = box.querySelector('.dlg-ok'); if (okb) okb.addEventListener('click', () => close(f.value));
+      f.addEventListener('keydown', e => { if (e.key === 'Enter' && !readonly && (!multiline || !e.shiftKey) && !e.isComposing) { e.preventDefault(); close(f.value); } });
+      setTimeout(() => { f.focus(); f.select(); }, 0);
+    });
+  }
+  function askConfirm(title, text, ok = 'OK') {
+    return dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t" dir="auto">${esc(title)}</div>${text ? `<div class="dlg-h" dir="auto">${esc(text)}</div>` : ''}
+        <div class="dlg-b"><button type="button" class="dlg-x">Cancel</button><button type="button" class="dlg-ok danger">${esc(ok)}</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(false));
+      const b = box.querySelector('.dlg-ok'); b.addEventListener('click', () => close(true)); setTimeout(() => b.focus(), 0);
+    });
+  }
   async function copyText(text, okMsg) {
     try { await navigator.clipboard.writeText(text); toast(okMsg); }
-    catch (_) { prompt('Copy this:', text); }
+    catch (_) { askText({ title: 'Copy this', value: text, readonly: true }); }
   }
   function focusGroup(repoKey, g) {
     ui.focus = { repo: repoKey, group: g.name, path: g.orca_path || '' };
@@ -519,7 +638,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           const tri = s.triage && !['idle', 'working'].includes(s.triage) && !s.needs_you ? s.triage : '';
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
-            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}${esc(label(s))}</span>
+            <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}<bdi>${esc(label(s))}</bdi></span>
               <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
@@ -534,7 +653,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
           <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
-            ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}">${esc(g.name || 'Ungrouped')}</span>
+            ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}"><bdi>${esc(g.name || 'Ungrouped')}</bdi></span>
             ${g.source === 'orca' ? '<span class="tag orca" title="Orca workspace">🐋</span>' : ''}
             <span class="cnt" style="margin-left:auto">${items.length}</span>
             <span class="star-b ${g.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc(gk)}" data-on="${g.pinned ? 1 : 0}" title="${g.pinned ? 'Unstar group' : 'Star group (never hidden, sorts first)'}">${g.pinned ? STAR_ON : STAR}</span>
@@ -545,7 +664,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const rOpen = forceOpen() || !ui.collapsed[repo.key];
       html += `<div class="${rOpen ? 'open' : ''}">
         <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
-          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name">${esc(repo.name)}</span>
+          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
           ${repoLive ? `<span class="livec" title="Live = a session with a running process (Claude, Codex), or a Devin session active in the last 10 minutes"><span class="dot live"></span>${repoLive} live</span>` : ''}
           <span class="cnt">${repoCount}</span>
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
@@ -580,11 +699,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const hit = findSel();
     const chat = !!(hit && ui.pane === 'chat' && (hit.s.open_url || hit.s.engine === 'pi') && !hit.s.batch);
     main.classList.toggle('chat', chat);
-    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview';
-    if (!force && main.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
-    if (!force && key === lastDetailKey && hit) { const a = main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
+    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + decSig;
+    if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+    if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
     lastDetailKey = key;
-    if (!hit) { main.innerHTML = overview(); return; }
+    if (!hit) { main.innerHTML = (ui.inbox || decs.open.length) ? inboxHtml() : overview(); return; }
     const { s, repo } = hit;
     if (chat) {
       const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
@@ -592,7 +711,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           <button type="button" class="mback" data-mback aria-label="Back to sessions">‹</button>
           <span class="dot ${dotc}"></span>
           <div class="who">
-            <div class="title" id="ttl" title="Double-click to rename">${esc(s.nick || s.original)}</div>
+            <div class="title" id="ttl" dir="auto" title="Double-click to rename">${esc(s.nick || s.original)}</div>
             <div class="where">${esc(repo.name)} › ${esc(s.group || 'Ungrouped')}</div>
           </div>
           <span class="eng">${esc(s.engine)}</span>
@@ -602,7 +721,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         <div class="thread" id="thread"></div>
         <div class="composer">
           <span class="sr">Message</span>
-          <textarea id="cmp" rows="1" placeholder="${'Reply to ' + esc(s.nick || s.original) + '…'}"></textarea>
+          <textarea id="cmp" dir="auto" rows="1" placeholder="${'Reply to ' + esc(s.nick || s.original) + '…'}"></textarea>
           <button type="button" class="send" id="sendBtn" title="Send" aria-label="Send"></button>
         </div>
         ${s.engine === 'pi' ? '<div class="stamp" style="padding:8px 16px">Pi replies take a minute: a message resumes the session in the background.</div>' : ''}`;
@@ -709,11 +828,13 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     newg.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
     const rng = $('#rng'), rmg = $('#rmg');
     if (rng) rng.addEventListener('click', () => {
-      const n = prompt('Rename group “' + s.group + '” to:', s.group);
-      if (n && n.trim() && n.trim() !== s.group) post('/api/group', { repo: repo.key, action: 'rename', name: s.group, new_name: n.trim() });
+      askText({ title: 'Rename group “' + s.group + '”', value: s.group, ok: 'Rename' }).then(n => {
+        if (n && n.trim() && n.trim() !== s.group) post('/api/group', { repo: repo.key, action: 'rename', name: s.group, new_name: n.trim() });
+      });
     });
     if (rmg) rmg.addEventListener('click', () => {
-      if (confirm('Delete group “' + s.group + '”? Its sessions move back to Ungrouped (or their Orca workspace).')) post('/api/group', { repo: repo.key, action: 'remove', name: s.group });
+      askConfirm('Delete group “' + s.group + '”?', 'Its sessions move back to Ungrouped (or their Orca workspace).', 'Delete group')
+        .then(yes => { if (yes) post('/api/group', { repo: repo.key, action: 'remove', name: s.group }); });
     });
   }
 
@@ -784,7 +905,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   const narrow = () => matchMedia('(max-width: 760px)').matches;
   function select(key, fromUser) {
-    ui.selected = key; store.set('selected', key);
+    ui.selected = key; store.set('selected', key); ui.inbox = false;
     if (fromUser && narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
@@ -792,6 +913,21 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   // ---- events
+  $('#main').addEventListener('click', e => {
+    const a = e.target.closest('[data-ans]'); if (a) return answerDecision(a.dataset.ans, a.dataset.choice);
+    const o = e.target.closest('[data-other]');
+    if (o) { const box = o.closest('.dcard').querySelector('.dother'); box.hidden = false; box.querySelector('textarea').focus(); return; }
+    const sd = e.target.closest('[data-send]');
+    if (sd) { const t = sd.closest('.dother').querySelector('textarea'); if (!t.value.trim()) return t.focus(); return answerDecision(sd.dataset.send, 'other', t.value.trim()); }
+    const cc = e.target.closest('[data-cancel]');
+    if (cc) { const box = cc.closest('.dother'); box.querySelector('textarea').value = ''; box.hidden = true; }
+    const ro = e.target.closest('[data-reopen]'); if (ro) return reopenDecision(ro.dataset.reopen);
+  });
+  $('#main').addEventListener('keydown', e => {
+    const t = e.target.closest && e.target.closest('.dother textarea'); if (!t) return;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); t.closest('.dother').querySelector('[data-send]').click(); }
+    if (e.key === 'Escape') t.closest('.dother').querySelector('[data-cancel]').click();
+  });
   document.addEventListener('click', e => { if (e.target.closest('[data-mback]')) { document.body.classList.remove('m-detail'); renderList(); } });
   $('#win').addEventListener('click', e => {
     const b = e.target.closest('[data-win]'); if (!b) return;
@@ -802,7 +938,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   // ---- three-dots menus
   const menuEl = document.createElement('div'); menuEl.id = 'menu'; menuEl.hidden = true; document.body.appendChild(menuEl);
   let menuAnchor = null, lastRect = null;
-  function closeMenu() { menuEl.hidden = true; if (menuAnchor) menuAnchor.classList.remove('on'); menuAnchor = null; }
+  function closeMenu() { menuEl.hidden = true; menuEl.style.maxHeight = menuEl.style.overflowY = ''; if (menuAnchor) menuAnchor.classList.remove('on'); menuAnchor = null; }
   function openMenu(anchor, items) {
     lastRect = anchor.getBoundingClientRect();
     closeMenu(); menuAnchor = anchor; anchor.classList.add('on');
@@ -865,6 +1001,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     toast(r.ok ? 'Back: ' + ((r.entry && r.entry.label) || 'restored') : 'Already restored');
     await refresh(true); renderDrawer();
   }
+  async function unhideScope(repoKey, group) {
+    const body = group === undefined ? { repo: repoKey } : { repo: repoKey, group };
+    const r = await fetch('/api/unhide-scope', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(() => ({}));
+    await refresh(true);
+    toast(!r.ok ? 'Could not unhide' : r.count ? `Unhid ${r.count}` + (ui.win !== 'all' ? ' (older ones show under All)' : '') : 'Nothing hidden here');
+  }
   const itemsOf = (repo, g) => repo.groups.filter(x => !g || x.name === g.name).flatMap(x => x.items);
   const older = (items, days) => items.filter(s => nowS() - s.mtime > days * DAY).map(s => s.key);
   function collapseRepoGroups(repo, collapse, except) {
@@ -885,25 +1027,68 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     menuEl.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
     setTimeout(() => inp.focus(), 0);
   }
+  function projectPicker(anchor, s, here) {
+    closeMenu(); menuAnchor = anchor; if (anchor.isConnected) anchor.classList.add('on');
+    menuEl.innerHTML = '<div class="hd">Move “' + esc(label(s)) + '” to project</div>';
+    const go = (repo, msg) => { closeMenu(); fetch('/api/move-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys: [s.key], repo }) }).then(x => x.json()).then(r => { toast(r.ok ? msg : 'Could not move'); refresh(true); }).catch(() => toast('Could not move')); };
+    const add = (text, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; if (cls) b.className = cls; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menuEl.appendChild(b); };
+    for (const r of [...tree.repos].sort((a, b) => a.name.localeCompare(b.name))) if (r.key !== here.key) add(((tree.icons || {})['r:' + r.key] ? tree.icons['r:' + r.key] + ' ' : '') + r.name, () => go(r.key, 'Moved to ' + r.name));
+    if (s.moved) add('Put back in its folder’s project', () => go('', 'Back in its folder’s project'), 'danger');
+    menuEl.hidden = false; menuEl.style.width = '280px'; menuEl.style.maxHeight = '60vh'; menuEl.style.overflowY = 'auto';
+    const r = anchor.isConnected ? anchor.getBoundingClientRect() : lastRect, mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
+    menuEl.style.left = Math.max(8, Math.min(r.right - mw + 4, innerWidth - mw - 8)) + 'px';
+    menuEl.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
+  }
   async function showNotes(s) {
     const r = await fetch('/api/notes?key=' + encodeURIComponent(s.key)).then(x => x.json()).catch(() => ({ notes: [] }));
-    const lines = (r.notes || []).map((n, i) => `${i + 1}. ${new Date(n.ts * 1000).toLocaleString()} (${n.by}): ${n.text}`);
-    const pick = prompt(lines.join('\n\n') + '\n\nType a number to delete that note, or Cancel:');
-    const i = parseInt(pick, 10);
-    if (i >= 1 && i <= lines.length) post('/api/note', { key: s.key, remove: i - 1 });
+    dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t" dir="auto">Notes on “${esc(label(s))}”</div><div class="dlg-notes">${(r.notes || []).map((n, i) =>
+        `<div class="dlg-note"><div class="dlg-h">${esc(new Date(n.ts * 1000).toLocaleString())} · ${esc(n.by)}</div><div dir="auto">${esc(n.text)}</div><button type="button" class="linkbtn" data-rm="${i}">Delete</button></div>`).join('') || '<div class="dlg-h">No notes.</div>'}</div>
+        <div class="dlg-b"><button type="button" class="dlg-x">Close</button><button type="button" class="dlg-ok" data-add>Add note</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      box.querySelector('[data-add]').addEventListener('click', () => { close(null); addNote(s); });
+      box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { close(null); post('/api/note', { key: s.key, remove: +b.dataset.rm }); }));
+    });
+  }
+  /* Each Claude desktop sidebar group files its sessions under one project (or shows as its own). */
+  async function desktopGroups() {
+    const r = await fetch('/api/desktop-groups', { cache: 'no-store' }).then(x => x.json()).catch(() => ({ groups: [] }));
+    const repos = [...(tree ? tree.repos : [])].filter(x => !x.key.startsWith('desktop:'));
+    for (const f of [...(r.folders || []), ...(r.groups || []).filter(g => g.mapped).map(g => g.project)])
+      if (!repos.some(x => x.key === f)) repos.push({ key: f, name: f.split('/').pop() });
+    repos.sort((a, b) => a.name.localeCompare(b.name));
+    dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t">Claude desktop groups</div><div class="dlg-h">Sessions in a desktop sidebar group are filed under the project you pick here, whatever folder they run in. A session you moved by hand stays where you put it.</div>
+        <div class="dlg-notes">${(r.groups || []).map((g, i) => `<label class="dlg-note"><span dir="auto"><b>${esc(g.name)}</b> · ${g.sessions}</span>
+          <select data-dg="${i}"><option value="">Its own project</option>${repos.map(x => `<option value="${esc(x.key)}"${g.mapped && g.project === x.key ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>`).join('') || '<div class="dlg-h">No desktop groups found.</div>'}</div>
+        <div class="dlg-b"><button type="button" class="dlg-x">Close</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      box.querySelectorAll('[data-dg]').forEach(s => s.addEventListener('change', () => {
+        const g = r.groups[+s.dataset.dg];
+        fetch('/api/desktop-map', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group: g.name, repo: s.value }) })
+          .then(x => x.json()).then(res => { toast(res.ok ? g.name + ' → ' + s.selectedOptions[0].textContent : 'Could not save'); refresh(true); })
+          .catch(() => toast('Could not save'));
+      }));
+    });
+  }
+  function addNote(s) {
+    askText({ title: 'Note on “' + label(s) + '”', multiline: true, ok: 'Add note', hint: 'Enter saves, Shift+Enter adds a line' })
+      .then(t => { if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); });
   }
   function menuFor(anchor) {
     const kind = anchor.dataset.menu;
     if (kind === 's') {
       const hit = (() => { for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) if (s.key === anchor.dataset.key) return { s, repo }; })();
       if (!hit) return [];
-      const { s } = hit;
+      const { s, repo: here } = hit;
       return [
-        { label: 'Rename…', fn: () => { const n = prompt('New name (applied here and in Claude / Codex / Devin via CCC; empty clears):', s.nick || ''); if (n !== null) renameSession(s, n); } },
+        { label: 'Rename…', fn: () => askText({ title: 'Rename session', value: s.nick || '', hint: 'Applied here and in Claude / Codex / Devin via CCC. Empty clears.', ok: 'Rename' }).then(n => { if (n !== null) renameSession(s, n); }) },
+        ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
+        ...(s.engine === 'claude' && !s.batch ? [{ label: tree.copilot && tree.copilot.key === s.key ? 'Stop being my co-pilot' : 'Make this my co-pilot', fn: () => post('/api/copilot', { key: tree.copilot && tree.copilot.key === s.key ? '' : s.key }) }] : []),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
         '-',
-        { label: 'Add note…', fn: () => { const t = prompt('Note on “' + label(s) + '”:'); if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); } },
+        { label: 'Add note…', fn: () => addNote(s) },
         ...(s.notes ? [{ label: `Notes (${s.notes})…`, fn: () => showNotes(s) }] : []),
         { hd: 'Mark as' + (s.triage ? ' · now: ' + s.triage + (s.triage_by === 'you' ? ' (you)' : '') : '') },
         ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => post('/api/triage', { entries: { [s.key]: { label: l, by: 'you' } } }) })),
@@ -918,7 +1103,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const repo = tree.repos.find(r => r.key === anchor.dataset.repo); if (!repo) return [];
     if (kind === 'g') {
       const g = repo.groups.find(x => x.name === anchor.dataset.group); if (!g) return [];
-      const its = g.items, vis = its.filter(s => !s.hidden), hid = its.filter(s => s.hidden);
+      const its = g.items, vis = its.filter(s => !s.hidden);
       return [
         { hd: (g.name || 'Ungrouped') + ' · ' + its.length },
         { label: 'Show all sessions here (incl. hidden)', fn: () => focusGroup(repo.key, g) },
@@ -927,11 +1112,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         { label: `Hide all ${vis.length} visible`, fn: () => hideKeys(vis.map(s => s.key)) },
         { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
         { label: 'Hide older than 1 day', fn: () => hideKeys(older(vis, 1)) },
-        ...(hid.length ? [{ label: `Unhide ${hid.length}`, fn: () => hideKeys(hid.map(s => s.key), false) }] : []),
+        { label: 'Unhide all hidden here', fn: () => unhideScope(repo.key, g.name) },
         '-',
         { label: 'Change icon…', fn: () => iconPicker(anchor, 'g:' + repo.key + '|' + g.name) },
         { label: 'Collapse other groups', fn: () => collapseRepoGroups(repo, true, g.name) },
-        ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => { const n = prompt('Rename “' + g.name + '” to:', g.name); if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); } }] : []),
+        ...(g.name ? [{ label: g.source === 'orca' ? 'Rename (also renames the Orca workspace)…' : 'Rename group…', fn: () => askText({ title: 'Rename “' + g.name + '”', value: g.name, hint: g.source === 'orca' ? 'Also renames the Orca workspace.' : '', ok: 'Rename' }).then(n => { if (n && n.trim() && n.trim() !== g.name) post('/api/rename', { kind: 'group', repo: repo.key, group: g.name, name: n.trim(), orca_path: g.source === 'orca' ? g.orca_path : '' }); }) }] : []),
         '-',
         { label: g.hidden ? 'Unhide group' : 'Hide group (and future sessions)', fn: () => hideKeys(['g:' + repo.key + '|' + g.name], !g.hidden) },
       ];
@@ -943,8 +1128,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
       { label: 'Hide older than 30 days', fn: () => hideKeys(older(vis, 30)) },
       { label: `Hide whole project (${vis.length})`, fn: () => hideKeys(vis.map(s => s.key)) },
+      { label: 'Unhide all hidden in this project', fn: () => unhideScope(repo.key) },
       '-',
-      { label: 'Rename project…', fn: () => { const n = prompt('Display name for this project (empty resets):', repo.name); if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); } },
+      { label: 'Rename project…', fn: () => askText({ title: 'Rename project', value: repo.name, hint: 'Display name here only. Empty resets.', ok: 'Rename' }).then(n => { if (n !== null) post('/api/rename', { kind: 'repo', key: repo.key, name: n.trim() === repo.orig_name ? '' : n }); }) },
       { label: repo.hidden ? 'Unhide project' : 'Hide project (and future sessions)', fn: () => hideKeys(['r:' + repo.key], !repo.hidden) },
       { label: 'Change icon…', fn: () => iconPicker(anchor, 'r:' + repo.key) },
       { label: 'Collapse all groups', fn: () => collapseRepoGroups(repo, true) },
@@ -972,6 +1158,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     store.set('collapsed', ui.collapsed); renderList();
   });
   $('#chips').addEventListener('click', e => {
+    if (e.target.closest('#decBtn')) return openInbox();
     const vb = e.target.closest('#viewBtn'); if (vb) { e.stopPropagation(); return menuAnchor === vb ? closeMenu() : openViewMenu(vb); }
     const b = e.target.closest('[data-f]'); if (!b) return;
     ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList();
@@ -1065,6 +1252,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       <button type="button" class="it" data-dr="check">${upd.checking ? 'Checking…' : 'Check for update'}</button>
       <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
+      <button type="button" class="it" data-dr="dgroups">Claude desktop groups…</button>
       <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
   }
@@ -1083,6 +1271,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const u = e.target.closest('[data-undo]'); if (u) { u.disabled = true; return undoHide(u.dataset.undo).then(loadHideLog); }
     const b = e.target.closest('[data-dr]'); if (!b) return;
     const a = b.dataset.dr;
+    if (a === 'dgroups') { openDrawer(false); return desktopGroups(); }
     if (a === 'check') return checkUpdate(true);
     if (a === 'reload') return location.reload();
     if (a === 'mine') { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); openDrawer(false); return refresh(true); }

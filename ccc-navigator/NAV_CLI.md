@@ -90,6 +90,42 @@ python3 nav.py icon --repo standup --group scratch --clear
 Hiding a group or a project also hides the sessions inside it, and it keeps
 working for sessions that show up later.
 
+```bash
+# Unhide every hidden session in a project, or in one of its groups (all time).
+python3 nav.py unhide-all --repo shared-marketing
+python3 nav.py unhide-all --repo shared-marketing --group main
+
+# File sessions under another project than their folder's (e.g. work for
+# shared-marketing that was started in another checkout). --back undoes it.
+python3 nav.py move-project --key claude:<uuid> --key claude:<uuid> --to shared-marketing
+python3 nav.py move-project --repo sleepy --match outreach --to shared-marketing --dry-run
+python3 nav.py move-project --key claude:<uuid> --back
+```
+
+A moved session lands in the project's Ungrouped list (use `move` to put it in a
+group). Starred sessions are skipped by filters, but an explicit `--key` is moved.
+
+```bash
+# Claude desktop sidebar groups decide the project of their sessions.
+python3 nav.py desktop-groups --table
+python3 nav.py map-desktop-group "BoadsBridge" --to boardsBridge
+python3 nav.py map-desktop-group "CFO, Bookkeepping" --clear   # shows as its own project
+```
+
+Placement order: an explicit `move-project`, then the desktop group (its mapped
+project, or a project named after the group), then the folder. In the UI:
+Menu → Claude desktop groups….
+
+```bash
+# The Co-pilot button: one tap opens Uri's main assistant session in Claude
+# (claude.ai/code on the phone; needs Remote Control on for that session).
+python3 nav.py copilot                                   # show
+python3 nav.py copilot --set local_<uuid>                # or claude:<uuid>
+python3 nav.py copilot --clear
+```
+
+In the UI: a session's ⋯ menu → Make this my co-pilot.
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session
@@ -271,6 +307,27 @@ python3 nav.py note <session> --rm 2        # delete note 2
 
 Notes live in `state.json` (`notes`), show as ✎ N on the row (hover for the
 latest), and in the row's ⋯ menu (Add note, Notes).
+
+## Decisions: what only Uri can decide
+
+The **Decisions** chip (first in the header, also on the phone) opens the inbox: every open question,
+P1 first, then by deadline, each with its answer buttons. A tap records the answer (Undo in the toast,
+Reopen in the Answered list). Questions come from Watchtower's `decisions.json` and from agents:
+
+```bash
+# An agent asks. With --session, the answer is sent back into that session as a message.
+NAV_ACTOR=copilot python3 nav.py ask --question "Deploy the CRM fix now?" --option deploy --option hold \
+    --lane gtm-crm --priority 1 --deadline 2026-11-01 --session claude:<uuid>
+
+python3 nav.py decisions --table              # open questions
+python3 nav.py decisions --answered --table   # recent answers (agents read these)
+python3 nav.py decide crm-fix-1a2b3 hold --note "after the duplicate review"
+python3 nav.py decide crm-fix-1a2b3 --reopen
+```
+
+Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edited; its brief drops
+answered ones). Every ask, answer and reopen is in `~/.ccc-navigator/changes.jsonl` with its actor
+(`$NAV_ACTOR` for the CLI, `you` for the UI and the phone).
 
 ## Triage (live status of every session)
 

@@ -13,20 +13,42 @@
   }
 
   /* enough markdown to read an agent reply: fenced code, inline code, bold, links */
+  /* Direction of one line. Quoted text ("...", “...”) is left out, so an English line that quotes Hebrew
+     stays left-to-right (and the reverse); the first letter of what remains decides, as in Gmail/Slack.
+     A line that is all quote falls back to whichever script has more letters. Markup is skipped. */
+  var RTL = /[\u0590-\u05FF\u0600-\u06FF]/, LTR = /[A-Za-z\u00C0-\u024F]/;
+  function dirOf(line) {
+    var t = String(line || '').replace(/&quot;/g, '"').replace(/<[^>]*>|&[a-z#0-9]+;/gi, ' ');
+    var bare = t.replace(/"[^"]*"|“[^”]*”|«[^»]*»|„[^“”]*[“”]/g, ' ');
+    var m = bare.match(/[A-Za-z\u00C0-\u024F\u0590-\u05FF\u0600-\u06FF]/);
+    if (m) return RTL.test(m[0]) ? 'rtl' : 'ltr';
+    var r = (t.match(/[\u0590-\u05FF\u0600-\u06FF]/g) || []).length, l = (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
+    return r > l ? 'rtl' : r || l ? 'ltr' : 'auto';
+  }
+
+  /* a quoted phrase is laid out as one unit in its own direction, so a Hebrew quote inside an English
+     line (or the reverse) does not scramble the words and punctuation around it */
+  function isolateQuotes(line) {
+    return line.replace(/&quot;((?:(?!&quot;)[^<])+)&quot;/g, function (_, q) {
+      return '&quot;<bdi dir="' + dirOf(q) + '">' + q + '</bdi>&quot;';
+    });
+  }
+
   function md(text) {
     var out = esc(text);
     var fences = [];
     out = out.replace(/```([a-zA-Z0-9+#_-]*)\n([\s\S]*?)```/g, function (_, lang, code) {
-      fences.push('<pre data-lang="' + esc(lang) + '"><code>' + code.replace(/\n$/, '') + '</code></pre>');
+      fences.push('<pre dir="ltr" data-lang="' + esc(lang) + '"><code>' + code.replace(/\n$/, '') + '</code></pre>');
       return '\u0000' + (fences.length - 1) + '\u0000';
     });
     out = out
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
     out = out.split(/\n{2,}/).map(function (p) {
       if (/^\u0000\d+\u0000$/.test(p.trim())) return p.trim();
-      return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+      // each line picks its own direction (Hebrew right-to-left, English left-to-right)
+      return '<p>' + p.split('\n').map(function (l) { return '<span class="ln" dir="' + dirOf(l) + '">' + (isolateQuotes(l) || '&nbsp;') + '</span>'; }).join('') + '</p>';
     }).join('');
     return out.replace(/\u0000(\d+)\u0000/g, function (_, i) { return fences[+i]; });
   }
@@ -99,15 +121,15 @@
     if (t === 'assistant') {
       (ev.blocks || []).forEach(function (b) {
         if (b.kind === 'text' && b.text) acc.push(bubble('them', md(b.text)));
-        else if (b.kind === 'thinking') acc.push(fold(ICONS.think, '<b>Thought</b> ' + esc((b.text || '').slice(0, 120)), b.text || ''));
-        else if (b.kind === 'tool_use') acc.push(fold(ICONS.run, '<b>' + esc(b.name || 'Tool') + '</b> ' + esc(b.detail || ''), b.detail || ''));
+        else if (b.kind === 'thinking') acc.push(step(fold(ICONS.think, '<b>Thought</b> ' + esc((b.text || '').slice(0, 120)), b.text || '')));
+        else if (b.kind === 'tool_use') acc.push(step(fold(ICONS.run, '<b>' + esc(b.name || 'Tool') + '</b> ' + esc(b.detail || ''), b.detail || ''), b.name));
       });
       return;
     }
     if (t === 'tool_result') {
       var txt = ev.text || '';
       var head = txt.split('\n')[0].slice(0, 120) || 'Output';
-      acc.push(fold(ICONS.out, '<b>Output</b> ' + esc(head), txt));
+      acc.push(step(fold(ICONS.out, '<b>Output</b> ' + esc(head), txt)));
       return;
     }
     if (t === 'result') {
@@ -115,10 +137,36 @@
       if (ev.duration_ms) bits.push(Math.round(ev.duration_ms / 1000) + 's');
       var u = ev.token_usage || {};
       if (u.total_tokens) bits.push(size(u.total_tokens) + ' tokens');
-      acc.push(note(ICONS.tick + ' Turn finished' + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '')));
+      acc.push(step(note(ICONS.tick + ' Turn finished' + (bits.length ? ' &middot; ' + bits.join(' &middot; ') : '')), '', ev.duration_ms));
       return;
     }
-    if (t === 'system') acc.push(note(ICONS.dot + ' ' + esc(ev.text || ev.kind || 'event')));
+    if (t === 'system') acc.push(step(note(ICONS.dot + ' ' + esc(ev.text || ev.kind || 'event'))));
+  }
+
+  /* tool calls, outputs, thoughts and status lines are "steps": render() folds each run of them into one line */
+  function step(node, tool, ms) {
+    node.dataset.step = tool ? 'tool' : '1';
+    if (ms) node.dataset.ms = String(ms);
+    return node;
+  }
+
+  function stepGroup(nodes, id, open) {
+    var tools = nodes.filter(function (n) { return n.dataset.step === 'tool'; }).length;
+    var ms = nodes.reduce(function (a, n) { return a + (+n.dataset.ms || 0); }, 0);
+    var bits = [tools ? tools + ' step' + (tools > 1 ? 's' : '') : nodes.length + ' update' + (nodes.length > 1 ? 's' : '')];
+    if (ms) bits.push(Math.round(ms / 1000) + 's');
+    var wrap = document.createElement('div');
+    wrap.className = 'steps' + (open ? ' open' : '');
+    wrap.dataset.id = id;
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'steps-h';
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.innerHTML = '<span class="f-lbl">Worked &middot; ' + bits.join(' &middot; ') + '</span><span class="chev">' + ICONS.chev + '</span>';
+    var body = document.createElement('div');
+    body.className = 'steps-body';
+    nodes.forEach(function (n) { body.appendChild(n); });
+    wrap.appendChild(b); wrap.appendChild(body);
+    return wrap;
   }
 
   var ICONS = {
@@ -171,9 +219,21 @@
       thread.innerHTML = '<div class="chat-empty">Nothing here yet.<br>Start the conversation below.</div>';
       return;
     }
-    var acc = [];
-    events.forEach(function (ev) { eventToNodes(ev, acc); });
-    acc.forEach(function (n) { thread.appendChild(n); });
+    var open = thread._openSteps || (thread._openSteps = new Set());
+    var run = [], runId = '';
+    function flush() {
+      if (run.length) thread.appendChild(stepGroup(run, runId, open.has(runId)));
+      run = [];
+    }
+    events.forEach(function (ev, i) {
+      var acc = [];
+      eventToNodes(ev, acc);
+      acc.forEach(function (n) {
+        if (n.dataset.step) { if (!run.length) runId = 'e' + (hidden + i); run.push(n); }
+        else { flush(); thread.appendChild(n); }
+      });
+    });
+    flush();
   }
 
   function Conversation(root, opts) {
@@ -220,6 +280,13 @@
         });
     }
     thread.addEventListener('click', function (e) {
+      var sh = e.target.closest && e.target.closest('.steps-h');
+      if (sh) {
+        var g = sh.parentNode, on = g.classList.toggle('open');
+        sh.setAttribute('aria-expanded', on ? 'true' : 'false');
+        if (on) thread._openSteps.add(g.dataset.id); else thread._openSteps.delete(g.dataset.id);
+        return;
+      }
       if (e.target.closest && e.target.closest('[data-more]')) { showAll = true; lastSig = null; if (current) paint({ events: current }, false); var top = thread.scrollTop; thread.scrollTop = top; }
     });
 
@@ -232,9 +299,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isPi ? { sid: sid, text: text } : { session_id: sid, text: text, mode: 'send' })
       })
-        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { d = d || {}; if (!r.ok && d.ok !== false && !d.error) d.error = 'Send failed (HTTP ' + r.status + ')'; return d; }); })
+        .then(function (r) {
+          // a 502 from the CCC proxy is {"error": ...} with no "ok": treat any HTTP error as a failed send
+          return r.json().catch(function () { return {}; }).then(function (d) {
+            if (!r.ok || (d && d.ok === false)) throw new Error((d && d.error) || 'send failed (HTTP ' + r.status + ')');
+            return d;
+          });
+        })
         .then(function (d) {
-          if (d && (d.ok === false || d.error)) throw new Error(d.error || 'send failed');
           box.value = '';
           autoGrow();
           if (isPi && d.run) { box.placeholder = 'Pi is working on it...'; watchPiRun(d.run); }

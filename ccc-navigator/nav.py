@@ -67,7 +67,7 @@ class NavigatorClient:
     def _request(self, path, method="GET", payload=None):
         url = self.base_url + path
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "X-Nav-Actor": os.environ.get("NAV_ACTOR", "cli")}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -99,6 +99,9 @@ class NavigatorClient:
 
     def post(self, path, payload):
         return self._request(path, method="POST", payload=payload)
+
+    def get(self, path):
+        return self._request(path)
 
 
 def parse_age(value):
@@ -448,6 +451,57 @@ def build_parser():
     _add_global_options(move, subcommand=True)
     _add_filter_options(move, with_dry_run=True, with_starred=True, with_include_starred=True)
     move.add_argument("--to", required=True, metavar="GROUP", help="destination group name")
+
+    dl = subparsers.add_parser("decisions", help="the decision inbox: what waits on Uri (open first; --answered for recent answers)")
+    _add_global_options(dl, subcommand=True)
+    dl.add_argument("--answered", action="store_true", help="show recent answers instead of open questions")
+
+    dc = subparsers.add_parser("decide", help="answer a decision (as the actor in $NAV_ACTOR), or --reopen it")
+    _add_global_options(dc, subcommand=True)
+    dc.add_argument("id", help="decision id (from nav decisions)")
+    dc.add_argument("choice", nargs="?", default="", help="one of its options, or 'other' with --note")
+    dc.add_argument("--note", default="", help="free-text answer or detail")
+    dc.add_argument("--reopen", action="store_true", help="remove the answer so it is open again")
+
+    ak = subparsers.add_parser("ask", help="put a question to Uri: it appears in his decision inbox (and on his phone)")
+    _add_global_options(ak, subcommand=True)
+    ak.add_argument("--question", required=True)
+    ak.add_argument("--option", action="append", required=True, help="answer option (repeat, 1-8)")
+    ak.add_argument("--lane", default="", help="lane/project, e.g. aba-cdl-launch")
+    ak.add_argument("--priority", type=int, default=2, choices=(1, 2, 3))
+    ak.add_argument("--deadline", help="YYYY-MM-DD")
+    ak.add_argument("--session", default="", help="session key that gets the answer as a message, e.g. claude:<uuid>")
+    ak.add_argument("--source", default="", help="where the question comes from (PR, report)")
+    ak.add_argument("--id", default="", help="stable id (default: derived from the question)")
+
+    mp = subparsers.add_parser("move-project", help="file sessions under another project than their folder's (--back undoes)")
+    _add_global_options(mp, subcommand=True)
+    _add_filter_options(mp, with_dry_run=True, with_starred=True, with_include_starred=True)
+    mp.add_argument("--key", action="append", default=[], metavar="KEY", help="exact session key (repeatable), e.g. claude:<uuid>")
+    dest = mp.add_mutually_exclusive_group(required=True)
+    dest.add_argument("--to", metavar="PROJECT", help="destination project: exact key, or a substring of its name/path matching one project")
+    dest.add_argument("--back", action="store_true", help="put the sessions back under their folder's project")
+
+    cp = subparsers.add_parser("copilot", help="show, set or clear Uri's co-pilot session (the Co-pilot button)")
+    _add_global_options(cp, subcommand=True)
+    cpx = cp.add_mutually_exclusive_group()
+    cpx.add_argument("--set", metavar="KEY", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
+    cpx.add_argument("--clear", action="store_true", help="remove the Co-pilot button")
+
+    dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
+    _add_global_options(dg, subcommand=True)
+
+    md = subparsers.add_parser("map-desktop-group", help="file a desktop sidebar group's sessions under a project")
+    _add_global_options(md, subcommand=True)
+    md.add_argument("group", metavar="GROUP", help="exact desktop group name, e.g. 'BoadsBridge'")
+    mdest = md.add_mutually_exclusive_group(required=True)
+    mdest.add_argument("--to", metavar="PROJECT", help="exact project key, or a substring matching one project")
+    mdest.add_argument("--clear", action="store_true", help="unmap: the group shows as its own project")
+
+    ua = subparsers.add_parser("unhide-all", help="unhide every hidden session in one project (or one of its groups), all time")
+    _add_global_options(ua, subcommand=True)
+    ua.add_argument("--repo", required=True, metavar="PROJECT", help="exact project key, or a substring matching one project")
+    ua.add_argument("--group", metavar="NAME", help="exact group name ('' for Ungrouped); omit for the whole project")
 
     for command, help_text in (("star", "star matching sessions"), ("unstar", "remove the star from matching sessions")):
         sub = subparsers.add_parser(command, help=help_text)
@@ -817,6 +871,166 @@ def cmd_move(args, client):
         print_mutation_table(result)
     else:
         print_json(result)
+    return 0
+
+
+def cmd_move_project(args, client):
+    if not args.key and not has_selector(args):
+        raise UsageError("move-project needs --key or at least one filter; --limit alone is not a filter")
+    tree = client.tree()
+    items = flatten_tree(tree)
+    if args.key:
+        want = set(args.key)
+        items = [i for i in items if i.get("key") in want]
+        missing = sorted(want - {i.get("key") for i in items})
+        if missing:
+            raise NavError("unknown session key(s): " + ", ".join(missing))
+    else:
+        items = filter_from_args(items, args)
+    skipped = []
+    if not args.key and not args.include_starred and not args.starred:   # named keys are moved as asked
+        items, skipped = split_starred(items, False)
+    items = [i for i in items if not str(i.get("key") or "").startswith("batch:")]
+    target = {"key": "", "name": "(its folder's project)"}
+    if not args.back:
+        repos = matching_repos(tree, args.to)
+        if len(repos) != 1:
+            names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+            raise UsageError(f"--to must match exactly one project, matched {len(repos)}: {names}")
+        target = repos[0]
+    keys = item_keys(items)
+    if keys and not args.dry_run:
+        client.post("/api/move-project", {"keys": keys, "repo": target["key"]})
+    result = {
+        "action": "move-project",
+        "project": target["key"],
+        "project_name": target["name"],
+        "count": len(keys),
+        "keys": keys,
+        "skipped_starred": item_keys(skipped),
+        "dry_run": bool(args.dry_run),
+    }
+    if args.table:
+        print_mutation_table(result)
+    else:
+        print_json(result)
+    return 0
+
+
+def cmd_copilot(args, client):
+    if args.set or args.clear:
+        key = args.set or ""
+        if key.startswith("local_"):          # Claude desktop id -> CLI session key
+            key = desktop_to_key(key)
+        res = client.post("/api/copilot", {"key": key})
+        print_json(res.get("copilot"))
+    else:
+        print_json(client.tree().get("copilot"))
+    return 0
+
+
+def desktop_to_key(local_id):
+    """claude:<cli id> for a Claude desktop session id, read from the desktop app's records."""
+    import glob
+    pattern = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions/*/*/%s.json" % local_id)
+    for path in glob.glob(pattern):
+        try:
+            with open(path) as fh:
+                sid = json.load(fh).get("cliSessionId")
+        except (OSError, ValueError):
+            continue
+        if sid:
+            return "claude:" + sid
+    raise UsageError("no Claude desktop session " + local_id)
+
+
+def cmd_desktop_groups(args, client):
+    rows = client.get("/api/desktop-groups").get("groups") or []
+    if args.table:
+        for g in rows:
+            print(f"{g['sessions']:>4}  {g['name']:<32}  -> {g['project']}{'' if g['mapped'] else '  (own project)'}")
+    else:
+        print_json(rows)
+    return 0
+
+
+def cmd_map_desktop_group(args, client):
+    groups = {g["name"] for g in client.get("/api/desktop-groups").get("groups") or []}
+    if args.group not in groups:
+        raise UsageError(f"unknown desktop group {args.group!r}; known: " + ", ".join(sorted(groups)))
+    repo = ""
+    path = os.path.expanduser(args.to or "")
+    if path.startswith("/") and os.path.isdir(path):     # a project folder with no sessions of its own yet
+        repo = os.path.realpath(path)
+    elif args.to:
+        repos = matching_repos(client.tree(), args.to)
+        if len(repos) != 1:
+            names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+            raise UsageError(f"--to must match exactly one project, matched {len(repos)}: {names}")
+        repo = repos[0]["key"]
+    res = client.post("/api/desktop-map", {"group": args.group, "repo": repo})
+    print_json({"action": "map-desktop-group", "group": args.group, "project": repo or None, "change": res.get("change")})
+    return 0
+
+
+def cmd_unhide_all(args, client):
+    repos = matching_repos(client.tree(), args.repo)
+    if len(repos) != 1:
+        names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+        raise UsageError(f"--repo must match exactly one project, matched {len(repos)}: {names}")
+    body = {"repo": repos[0]["key"]}
+    if args.group is not None:
+        body["group"] = args.group
+    res = client.post("/api/unhide-scope", body)
+    result = {"action": "unhide-all", "project": repos[0]["key"], "group": args.group,
+              "count": res.get("count", 0), "keys": []}
+    if args.table:
+        print_mutation_table(result)
+    else:
+        print_json(result)
+    return 0
+
+
+def cmd_decisions(args, client):
+    d = client.get("/api/decisions")
+    rows = d.get("answered" if args.answered else "open") or []
+    if not args.table:
+        print_json({"count": len(rows), "decisions": rows})
+        return 0
+    if not rows:
+        print("nothing answered yet" if args.answered else "nothing waits on Uri")
+    for x in rows:
+        if args.answered:
+            a = x.get("answer") or {}
+            print("%-24s -> %s%s  (by %s)" % (x["id"], a.get("choice"), (": " + a["note"]) if a.get("note") else "", a.get("by")))
+        else:
+            left = x.get("days_left")
+            due = "" if left is None else ("  [%dd left]" % left if left >= 0 else "  [%dd overdue]" % -left)
+            print("P%s %-24s %s%s\n     options: %s" % (x.get("priority", 3), x["id"], x.get("question", ""), due,
+                                                     " / ".join(map(str, x.get("options") or []))))
+    return 0
+
+
+def cmd_decide(args, client):
+    if args.reopen:
+        res = client.post("/api/decisions/reopen", {"id": args.id})
+    else:
+        if not args.choice and not args.note:
+            raise UsageError("give a choice (or 'other' with --note)")
+        res = client.post("/api/decisions/answer", {"id": args.id, "choice": args.choice, "note": args.note})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    print_json(res)
+    return 0
+
+
+def cmd_ask(args, client):
+    res = client.post("/api/decisions/ask", {"question": args.question, "options": args.option, "lane": args.lane,
+                                            "priority": args.priority, "deadline": args.deadline, "session": args.session,
+                                            "source": args.source, "id": args.id})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    print_json(res)
     return 0
 
 
@@ -1717,6 +1931,22 @@ def main(argv=None):
             return cmd_hide(args, client, args.command)
         if args.command == "move":
             return cmd_move(args, client)
+        if args.command == "decisions":
+            return cmd_decisions(args, client)
+        if args.command == "decide":
+            return cmd_decide(args, client)
+        if args.command == "ask":
+            return cmd_ask(args, client)
+        if args.command == "move-project":
+            return cmd_move_project(args, client)
+        if args.command == "unhide-all":
+            return cmd_unhide_all(args, client)
+        if args.command == "copilot":
+            return cmd_copilot(args, client)
+        if args.command == "desktop-groups":
+            return cmd_desktop_groups(args, client)
+        if args.command == "map-desktop-group":
+            return cmd_map_desktop_group(args, client)
         if args.command in ("star", "unstar"):
             return cmd_star(args, client, args.command == "star")
         if args.command in ("hide-group", "unhide-group"):

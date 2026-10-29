@@ -350,6 +350,120 @@ class PinnedLevels(unittest.TestCase):
         self.assertTrue(t2["repos"][0]["groups"][0]["pinned"])
 
 
+class DesktopTitles(unittest.TestCase):
+    """Claude desktop app titles replace CCC's guess and the titler's, never the user's own rename."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def item(self, nick, auto):
+        state = {"nicknames": {"claude:1": nick} if nick else {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {}}
+        t = navigator.build_tree([row("1", "/r/A", "First message text")], state, "all", [], "http://ccc",
+                                 desktop={"1": "phrasing"}, auto_titles={"claude:1": auto} if auto else {})
+        return t["repos"][0]["groups"][0]["items"][0]
+
+    def test_desktop_title_is_the_original(self):
+        self.assertEqual(self.item("", "")["original"], "phrasing")
+
+    def test_desktop_title_replaces_titler_name(self):
+        self.assertEqual(self.item("Marking Edges", "Marking Edges")["nick"], "")
+
+    def test_user_rename_is_kept(self):
+        self.assertEqual(self.item("My name", "Marking Edges")["nick"], "My name")
+
+    def test_reads_desktop_records(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_a.json").write_text(json.dumps({"cliSessionId": "abc", "title": "pubmed_audit"}))
+            (p / "local_b.json").write_text("not json")
+            self.assertEqual(navigator.desktop_titles(d), {"abc": "pubmed_audit"})
+
+
+class DesktopGroups(unittest.TestCase):
+    """A Claude desktop sidebar group decides the project; an explicit move still wins."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def keys_by_repo(self, state, groups):
+        t = navigator.build_tree([row("1", "/r/A", "One"), row("2", "/r/A", "Two"), row("3", "/r/A", "Three")],
+                                 dict({"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {}}, **state),
+                                 "all", [], "http://ccc", desktop_group=groups)
+        return {r["key"]: sorted(i["key"] for g in r["groups"] for i in g["items"]) for r in t["repos"]}
+
+    def test_mapped_unmapped_and_moved(self):
+        got = self.keys_by_repo({"desktop_map": {"Boards": "/r/B"}, "moved": {"claude:2": "/r/C"}},
+                                {"1": "Boards", "2": "Boards", "3": "CFO"})
+        self.assertEqual(got, {"/r/B": ["claude:1"], "/r/C": ["claude:2"], "desktop:CFO": ["claude:3"]})
+
+    def test_no_groups_keeps_folder(self):
+        self.assertEqual(self.keys_by_repo({}, {}), {"folder:A": ["claude:1", "claude:2", "claude:3"]})
+
+    def test_reads_desktop_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_a.json").write_text(json.dumps({"sessionId": "local_a", "cliSessionId": "abc", "title": "t"}))
+            (p / "local_b.json").write_text(json.dumps({"sessionId": "local_b", "cliSessionId": "def", "title": "u"}))
+            cfg = Path(d) / "cfg.json"
+            cfg.write_text(json.dumps({"preferences": {"epitaxyPrefs": {"dframe-group-scopes": {"acct/org": {
+                "groups": [{"id": "cg-1", "name": "Boards"}],
+                "assignments": {"code:local_a": "cg-1", "code:local_x": "cg-1", "code:local_b": "cg-gone"}}}}}}))
+            self.assertEqual(navigator.desktop_groups(d, cfg), {"abc": "Boards"})
+            cfg.write_text("not json")
+            self.assertEqual(navigator.desktop_groups(d, cfg), {})
+
+    def test_copilot_links(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_ab12cd34-0000.json").write_text(json.dumps({
+                "sessionId": "local_ab12cd34-0000", "cliSessionId": "cop1", "title": "Co-pilot",
+                "bridgeSessionIds": ["session_014ZRCMq4wQ5AEFfyCC9S1gV"]}))
+            (p / "local_ab12cd34-0001.json").write_text(json.dumps({
+                "sessionId": "local_ab12cd34-0001", "cliSessionId": "cop2", "title": "x", "bridgeSessionIds": ["bad id"]}))
+            self.assertEqual(navigator.desktop_links("cop1", d), {
+                "title": "Co-pilot", "url": "https://claude.ai/code/session_014ZRCMq4wQ5AEFfyCC9S1gV",
+                "mac_url": "claude://claude.ai/epitaxy/local_ab12cd34-0000"})
+            self.assertNotIn("url", navigator.desktop_links("cop2", d))
+            self.assertEqual(navigator.desktop_links("nope", d), {})
+
+    def test_map_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = navigator.State(Path(d) / "s.json")
+            self.assertIsNone(st.map_desktop_group("Boards", "/r/B"))
+            self.assertEqual(st.map_desktop_group("Boards", ""), "/r/B")
+            self.assertEqual(navigator.State(Path(d) / "s.json").snapshot()["desktop_map"], {})
+
+
+class MoveToProject(unittest.TestCase):
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = navigator.State(Path(self.tmp.name) / "state.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_moved_session_files_under_target_and_back(self):
+        rows = [row("1", "/r/A", "Work"), row("2", "/r/A", "Other")]
+        self.state.assign("claude:1", "/r/A", "mine")
+        self.state.move_to_project(["claude:1"], "/r/B")
+        t = navigator.build_tree(rows, self.state.snapshot(), "all", [], "http://ccc")
+        by = {r["key"]: r for r in t["repos"]}
+        moved = [i for g in by["/r/B"]["groups"] for i in g["items"]]
+        self.assertEqual([i["key"] for i in moved], ["claude:1"])
+        self.assertTrue(moved[0]["moved"])
+        self.assertNotIn("claude:1", self.state.snapshot()["assign"])   # old group dropped
+        self.state.move_to_project(["claude:1"], "")
+        t = navigator.build_tree(rows, self.state.snapshot(), "all", [], "http://ccc")
+        self.assertEqual([r["key"] for r in t["repos"]], ["folder:A"])   # back where its folder puts it
+
+
 class StaticAssets(unittest.TestCase):
     """The chat lives in static/; requests must never read outside it."""
 
