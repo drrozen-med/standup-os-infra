@@ -64,7 +64,8 @@ class State:
     {"nicknames": {key: name},
      "groups":    {repo_key: [group, ...]},
      "assign":    {key: {"repo": repo_key, "group": name}},
-     "moved":     {key: repo_key}}   # session filed under another project than its folder
+     "moved":     {key: repo_key},   # session filed under another project than its folder
+     "desktop_map": {desktop group name: repo_key}}   # unmapped desktop groups are their own project
     """
 
     def __init__(self, path: Path):
@@ -82,6 +83,7 @@ class State:
             "groups": {k: list(v) for k, v in (d.get("groups") or {}).items()},
             "assign": dict(d.get("assign") or {}),
             "moved": dict(d.get("moved") or {}),
+            "desktop_map": dict(d.get("desktop_map") or {}),
             "hidden": dict(d.get("hidden") or {}),
             "pinned": dict(d.get("pinned") or {}),
             "icons": dict(d.get("icons") or {}),
@@ -149,6 +151,18 @@ class State:
                     self.data["assign"].pop(key, None)
             self._save()
         return len(keys)
+
+    def map_desktop_group(self, group, repo):
+        """File a Claude desktop sidebar group's sessions under a project; an empty repo unmaps it."""
+        group = (group or "").strip()[:80]
+        with self.lock:
+            before = self.data["desktop_map"].get(group)
+            if repo:
+                self.data["desktop_map"][group] = repo
+            else:
+                self.data["desktop_map"].pop(group, None)
+            self._save()
+        return before
 
     def set_repo_name(self, key, name):
         with self.lock:
@@ -344,6 +358,8 @@ class CCCSource:
 
 
 DESKTOP_DIR = os.environ.get("CCC_NAV_DESKTOP_DIR", "~/Library/Application Support/Claude/claude-code-sessions")
+DESKTOP_CONFIG = os.environ.get("CCC_NAV_DESKTOP_CONFIG", "~/Library/Application Support/Claude/claude_desktop_config.json")
+DESKTOP_PREFIX = "desktop:"   # project key for a desktop group with no project mapped to it
 TITLER_STATE = os.environ.get("CCC_NAV_TITLER_STATE", "~/.ccc-navigator/titler.json")
 _desktop_cache: dict[str, tuple[float, dict]] = {}
 
@@ -361,13 +377,37 @@ def desktop_titles(root=DESKTOP_DIR):
         if not hit or hit[0] != m:
             try:
                 d = json.loads(f.read_text())
-                rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140)}
+                rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140),
+                       "lid": str(d.get("sessionId") or f.stem)}
             except (OSError, ValueError, AttributeError):
-                rec = {"sid": "", "title": ""}
+                rec = {"sid": "", "title": "", "lid": ""}
             _desktop_cache[str(f)] = hit = (m, rec)
         if hit[1]["sid"] and hit[1]["title"]:
             out[hit[1]["sid"]] = hit[1]["title"]
     return out
+
+
+def desktop_groups(root=DESKTOP_DIR, config=DESKTOP_CONFIG):
+    """Sidebar groups from the Claude desktop app: CLI session id -> group name. Read-only."""
+    try:
+        prefs = json.loads(Path(config).expanduser().read_text())["preferences"]["epitaxyPrefs"]
+        scopes = prefs.get("dframe-group-scopes") or {}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+    by_lid = {}
+    for scope in scopes.values() if isinstance(scopes, dict) else []:
+        try:
+            names = {g["id"]: str(g["name"]).strip() for g in scope.get("groups") or []}
+            for k, gid in (scope.get("assignments") or {}).items():
+                if names.get(gid) and str(k).startswith("code:"):
+                    by_lid[str(k)[5:]] = names[gid][:80]
+        except (KeyError, TypeError, AttributeError):
+            continue
+    if not by_lid:
+        return {}
+    desktop_titles(root)     # fills the record cache (local id -> CLI id)
+    return {rec["sid"]: by_lid[rec["lid"]] for _, rec in _desktop_cache.values()
+            if rec.get("sid") and rec.get("lid") in by_lid}
 
 
 def titler_titles(path=TITLER_STATE):
@@ -806,7 +846,9 @@ def is_running(r):
 
 
 def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
-               desktop=None, auto_titles=None):
+               desktop=None, auto_titles=None, desktop_group=None):
+    """desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
+    an explicit move, then the desktop group (its mapped project, or its own), then the folder."""
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
     inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r)]
@@ -836,16 +878,21 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
     nick = state["nicknames"]
     assign = state["assign"]
     moved = state.get("moved") or {}
+    dmap = state.get("desktop_map") or {}
     method_ct = collections.Counter()
     unresolved = collections.Counter()
     repos = {}
 
+    def dgroup(r):
+        return (desktop_group or {}).get(str(r.get("session_id") or "")) if str(r.get("engine") or "claude") == "claude" else None
+
     def place(r, item_key=None):
         cwd = r.get("session_cwd") or r.get("folder_path") or ""
-        if item_key in moved:
-            key = moved[item_key]
+        dg = dgroup(r) if item_key not in moved else None
+        if item_key in moved or dg:
+            key = moved[item_key] if item_key in moved else dmap.get(dg) or DESKTOP_PREFIX + dg
             name = key.split(":", 1)[1] if ":" in key and not key.startswith("/") else Path(key).name
-            method_ct["moved"] += 1
+            method_ct["moved" if item_key in moved else "desktop-group"] += 1
             repo = repos.setdefault(key, {"key": key, "name": state.get("repo_names", {}).get(key) or name,
                                           "orig_name": name, "path": short(key) if key.startswith("/") else "",
                                           "items": []})
@@ -901,6 +948,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "original": clean(original, 140),
             "nick": name,
             "moved": item_key in moved,
+            "desktop_group": dgroup(r) or "",
             "live": is_running(r),
             "pinned": bool(state.get("pinned", {}).get(item_key)),
             "notes": len(state.get("notes", {}).get(item_key) or []),
@@ -1144,12 +1192,29 @@ class App:
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
-                       show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles())
+                       show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
+                       desktop_group=desktop_groups())
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
         t["generated_at"] = time.time()
         return t
+
+    def desktop_group_list(self):
+        """Every Claude desktop sidebar group with its session count and the project it files under."""
+        dmap = self.state.snapshot()["desktop_map"]
+        counts = collections.Counter(desktop_groups().values())
+        return [{"name": g, "sessions": counts[g], "project": dmap.get(g) or DESKTOP_PREFIX + g,
+                 "mapped": g in dmap} for g in sorted(set(counts) | set(dmap), key=str.lower)]
+
+    @staticmethod
+    def project_folders(root="~/projects"):
+        """Git checkouts under ~/projects, so a group can be mapped to a project with no recent sessions."""
+        base = Path(root).expanduser()
+        try:
+            return sorted(str(p) for p in base.iterdir() if (p / ".git").exists())
+        except OSError:
+            return []
 
     def pi_transcript(self, sid):
         return pi_transcript(self.args.pi_dir, sid)
@@ -1296,7 +1361,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -1384,6 +1449,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/decisions":
             return self._send(200, dict(self.app.inbox.list(), ok=True))
+        if u.path == "/api/desktop-groups":
+            return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
+                                    "folders": self.app.project_folders()})
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1482,6 +1550,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"ok": False, "error": "no session keys"})
             return self._send(200, {"ok": True, "count": st.move_to_project(keys, str(body.get("repo") or "")),
                                     "repo": str(body.get("repo") or "")})
+        elif p == "/api/desktop-map":
+            group, repo = str(body.get("group") or "").strip(), str(body.get("repo") or "")
+            if not group:
+                return self._send(400, {"ok": False, "error": "group required"})
+            before = st.map_desktop_group(group, repo)
+            cid = self.app.changes.record(self._actor(), "desktop-group.map", {"group": group, "repo": repo},
+                                          {"desktop_map": {group: before}}, {"desktop_map": {group: repo or None}})
+            return self._send(200, {"ok": True, "group": group, "repo": repo, "change": cid})
         elif p == "/api/unhide-scope":
             repo = str(body.get("repo") or "")
             group = str(body.get("group")) if body.get("group") is not None else None

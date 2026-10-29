@@ -482,6 +482,16 @@ def build_parser():
     dest.add_argument("--to", metavar="PROJECT", help="destination project: exact key, or a substring of its name/path matching one project")
     dest.add_argument("--back", action="store_true", help="put the sessions back under their folder's project")
 
+    dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
+    _add_global_options(dg, subcommand=True)
+
+    md = subparsers.add_parser("map-desktop-group", help="file a desktop sidebar group's sessions under a project")
+    _add_global_options(md, subcommand=True)
+    md.add_argument("group", metavar="GROUP", help="exact desktop group name, e.g. 'BoadsBridge'")
+    mdest = md.add_mutually_exclusive_group(required=True)
+    mdest.add_argument("--to", metavar="PROJECT", help="exact project key, or a substring matching one project")
+    mdest.add_argument("--clear", action="store_true", help="unmap: the group shows as its own project")
+
     ua = subparsers.add_parser("unhide-all", help="unhide every hidden session in one project (or one of its groups), all time")
     _add_global_options(ua, subcommand=True)
     ua.add_argument("--repo", required=True, metavar="PROJECT", help="exact project key, or a substring matching one project")
@@ -898,6 +908,35 @@ def cmd_move_project(args, client):
         print_mutation_table(result)
     else:
         print_json(result)
+    return 0
+
+
+def cmd_desktop_groups(args, client):
+    rows = client.get("/api/desktop-groups").get("groups") or []
+    if args.table:
+        for g in rows:
+            print(f"{g['sessions']:>4}  {g['name']:<32}  -> {g['project']}{'' if g['mapped'] else '  (own project)'}")
+    else:
+        print_json(rows)
+    return 0
+
+
+def cmd_map_desktop_group(args, client):
+    groups = {g["name"] for g in client.get("/api/desktop-groups").get("groups") or []}
+    if args.group not in groups:
+        raise UsageError(f"unknown desktop group {args.group!r}; known: " + ", ".join(sorted(groups)))
+    repo = ""
+    path = os.path.expanduser(args.to or "")
+    if path.startswith("/") and os.path.isdir(path):     # a project folder with no sessions of its own yet
+        repo = os.path.realpath(path)
+    elif args.to:
+        repos = matching_repos(client.tree(), args.to)
+        if len(repos) != 1:
+            names = ", ".join(r.get("name", "?") for r in repos[:8]) or "none"
+            raise UsageError(f"--to must match exactly one project, matched {len(repos)}: {names}")
+        repo = repos[0]["key"]
+    res = client.post("/api/desktop-map", {"group": args.group, "repo": repo})
+    print_json({"action": "map-desktop-group", "group": args.group, "project": repo or None, "change": res.get("change")})
     return 0
 
 
@@ -1869,6 +1908,10 @@ def main(argv=None):
             return cmd_move_project(args, client)
         if args.command == "unhide-all":
             return cmd_unhide_all(args, client)
+        if args.command == "desktop-groups":
+            return cmd_desktop_groups(args, client)
+        if args.command == "map-desktop-group":
+            return cmd_map_desktop_group(args, client)
         if args.command in ("star", "unstar"):
             return cmd_star(args, client, args.command == "star")
         if args.command in ("hide-group", "unhide-group"):
