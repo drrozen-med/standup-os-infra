@@ -195,7 +195,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dother{display:flex;flex-direction:column;gap:8px}
 .dother textarea{width:100%;box-sizing:border-box;min-height:64px;resize:vertical;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;unicode-bidi:plaintext;text-align:start}
 .dother textarea:focus{outline:none;border-color:var(--primary-hi)}
-.drow{display:flex;gap:12px;align-items:center}.dopt.send{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.drow{display:flex;gap:12px;align-items:center}.dopt.dsend{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
 .danswered summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 .dans{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:12.5px}
 .dans .dq{font-size:12.5px;color:var(--muted);flex:1 1 100%}.dpick{font-weight:700}
@@ -445,7 +445,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${due(d)}</div>
         <div class="dq" dir="auto">${esc(d.question)}</div>
         <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
-        <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt send" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
+        <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt dsend" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
         ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}
       </div>`;
     const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
