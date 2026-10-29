@@ -381,6 +381,49 @@ class DesktopTitles(unittest.TestCase):
             self.assertEqual(navigator.desktop_titles(d), {"abc": "pubmed_audit"})
 
 
+class DesktopGroups(unittest.TestCase):
+    """A Claude desktop sidebar group decides the project; an explicit move still wins."""
+
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+
+    def keys_by_repo(self, state, groups):
+        t = navigator.build_tree([row("1", "/r/A", "One"), row("2", "/r/A", "Two"), row("3", "/r/A", "Three")],
+                                 dict({"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {}}, **state),
+                                 "all", [], "http://ccc", desktop_group=groups)
+        return {r["key"]: sorted(i["key"] for g in r["groups"] for i in g["items"]) for r in t["repos"]}
+
+    def test_mapped_unmapped_and_moved(self):
+        got = self.keys_by_repo({"desktop_map": {"Boards": "/r/B"}, "moved": {"claude:2": "/r/C"}},
+                                {"1": "Boards", "2": "Boards", "3": "CFO"})
+        self.assertEqual(got, {"/r/B": ["claude:1"], "/r/C": ["claude:2"], "desktop:CFO": ["claude:3"]})
+
+    def test_no_groups_keeps_folder(self):
+        self.assertEqual(self.keys_by_repo({}, {}), {"folder:A": ["claude:1", "claude:2", "claude:3"]})
+
+    def test_reads_desktop_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_a.json").write_text(json.dumps({"sessionId": "local_a", "cliSessionId": "abc", "title": "t"}))
+            (p / "local_b.json").write_text(json.dumps({"sessionId": "local_b", "cliSessionId": "def", "title": "u"}))
+            cfg = Path(d) / "cfg.json"
+            cfg.write_text(json.dumps({"preferences": {"epitaxyPrefs": {"dframe-group-scopes": {"acct/org": {
+                "groups": [{"id": "cg-1", "name": "Boards"}],
+                "assignments": {"code:local_a": "cg-1", "code:local_x": "cg-1", "code:local_b": "cg-gone"}}}}}}))
+            self.assertEqual(navigator.desktop_groups(d, cfg), {"abc": "Boards"})
+            cfg.write_text("not json")
+            self.assertEqual(navigator.desktop_groups(d, cfg), {})
+
+    def test_map_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = navigator.State(Path(d) / "s.json")
+            self.assertIsNone(st.map_desktop_group("Boards", "/r/B"))
+            self.assertEqual(st.map_desktop_group("Boards", ""), "/r/B")
+            self.assertEqual(navigator.State(Path(d) / "s.json").snapshot()["desktop_map"], {})
+
+
 class MoveToProject(unittest.TestCase):
     def setUp(self):
         navigator._repo_cache.clear()

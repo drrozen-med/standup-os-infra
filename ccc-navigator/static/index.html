@@ -1046,6 +1046,27 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { close(null); post('/api/note', { key: s.key, remove: +b.dataset.rm }); }));
     });
   }
+  /* Each Claude desktop sidebar group files its sessions under one project (or shows as its own). */
+  async function desktopGroups() {
+    const r = await fetch('/api/desktop-groups', { cache: 'no-store' }).then(x => x.json()).catch(() => ({ groups: [] }));
+    const repos = [...(tree ? tree.repos : [])].filter(x => !x.key.startsWith('desktop:'));
+    for (const f of [...(r.folders || []), ...(r.groups || []).filter(g => g.mapped).map(g => g.project)])
+      if (!repos.some(x => x.key === f)) repos.push({ key: f, name: f.split('/').pop() });
+    repos.sort((a, b) => a.name.localeCompare(b.name));
+    dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t">Claude desktop groups</div><div class="dlg-h">Sessions in a desktop sidebar group are filed under the project you pick here, whatever folder they run in. A session you moved by hand stays where you put it.</div>
+        <div class="dlg-notes">${(r.groups || []).map((g, i) => `<label class="dlg-note"><span dir="auto"><b>${esc(g.name)}</b> · ${g.sessions}</span>
+          <select data-dg="${i}"><option value="">Its own project</option>${repos.map(x => `<option value="${esc(x.key)}"${g.mapped && g.project === x.key ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>`).join('') || '<div class="dlg-h">No desktop groups found.</div>'}</div>
+        <div class="dlg-b"><button type="button" class="dlg-x">Close</button></div>`;
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      box.querySelectorAll('[data-dg]').forEach(s => s.addEventListener('change', () => {
+        const g = r.groups[+s.dataset.dg];
+        fetch('/api/desktop-map', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ group: g.name, repo: s.value }) })
+          .then(x => x.json()).then(res => { toast(res.ok ? g.name + ' → ' + s.selectedOptions[0].textContent : 'Could not save'); refresh(true); })
+          .catch(() => toast('Could not save'));
+      }));
+    });
+  }
   function addNote(s) {
     askText({ title: 'Note on “' + label(s) + '”', multiline: true, ok: 'Add note', hint: 'Enter saves, Shift+Enter adds a line' })
       .then(t => { if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); });
@@ -1226,6 +1247,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       <button type="button" class="it" data-dr="check">${upd.checking ? 'Checking…' : 'Check for update'}</button>
       <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
+      <button type="button" class="it" data-dr="dgroups">Claude desktop groups…</button>
       <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
   }
@@ -1244,6 +1266,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const u = e.target.closest('[data-undo]'); if (u) { u.disabled = true; return undoHide(u.dataset.undo).then(loadHideLog); }
     const b = e.target.closest('[data-dr]'); if (!b) return;
     const a = b.dataset.dr;
+    if (a === 'dgroups') { openDrawer(false); return desktopGroups(); }
     if (a === 'check') return checkUpdate(true);
     if (a === 'reload') return location.reload();
     if (a === 'mine') { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); openDrawer(false); return refresh(true); }

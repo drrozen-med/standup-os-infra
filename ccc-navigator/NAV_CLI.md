@@ -105,6 +105,17 @@ python3 nav.py move-project --key claude:<uuid> --back
 A moved session lands in the project's Ungrouped list (use `move` to put it in a
 group). Starred sessions are skipped by filters, but an explicit `--key` is moved.
 
+```bash
+# Claude desktop sidebar groups decide the project of their sessions.
+python3 nav.py desktop-groups --table
+python3 nav.py map-desktop-group "BoadsBridge" --to boardsBridge
+python3 nav.py map-desktop-group "CFO, Bookkeepping" --clear   # shows as its own project
+```
+
+Placement order: an explicit `move-project`, then the desktop group (its mapped
+project, or a project named after the group), then the folder. In the UI:
+Menu → Claude desktop groups….
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session
