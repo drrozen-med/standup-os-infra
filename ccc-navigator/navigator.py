@@ -1127,7 +1127,7 @@ class App:
             os.environ.get("CCC_NAV_DECISIONS") or home / "decisions.json",
             os.environ.get("CCC_NAV_ANSWERS") or home / "answers.json",
             os.environ.get("CCC_NAV_WATCHTOWER_DECISIONS",
-                           "~/projects/standup-os-watchtower/watchtower/decisions.json"))
+                           "~/projects/standup-os/watchtower/decisions.json"))
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
 
     def deliver(self, session_key, text):
