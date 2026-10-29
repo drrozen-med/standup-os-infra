@@ -169,6 +169,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-cnt .cnt{display:none}
 .v-off-livec .livec{display:none}
 .v-off-status #status{display:none}
+.v-off-status #status:has(.bad){display:flex}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
 .chip.dec.has{border-color:var(--accent);color:var(--text)}.chip.pilot{background:var(--accent);border-color:var(--accent);color:var(--bg);text-decoration:none}.chip.dec.has .n{color:var(--accent)}
@@ -312,6 +313,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 /* phones: one pane at a time. The list fills the screen; opening a session swaps to it, with a back button */
 .mback{display:none}
 @media (max-width: 760px){
+  .row1{flex-wrap:wrap;gap:6px}
+  #menuBtn,#theme,#foldAll,.dots,.eye,.star-b{min-width:36px;min-height:36px}
+  .chip,#viewBtn,#win button{min-height:34px}
   body{flex-direction:column;height:100dvh;overflow:hidden}
   #side{width:100%;height:100dvh;border-right:0;padding-top:env(safe-area-inset-top)}
   #main{display:none;height:100dvh;padding-top:env(safe-area-inset-top)}
@@ -986,7 +990,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     return k;
   }
   const hideKeys = async (keys, hidden = true) => {
-    if (!keys.length) return;
+    if (!keys.length) { toast('Nothing to hide here: no sessions match.'); return; }
     const lbl = hidden ? hideLabel(keys) : '';
     const r = await fetch('/api/hide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys, hidden, label: lbl }) }).then(x => x.json()).catch(() => ({}));
     await refresh(true);
