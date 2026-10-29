@@ -416,6 +416,21 @@ class DesktopGroups(unittest.TestCase):
             cfg.write_text("not json")
             self.assertEqual(navigator.desktop_groups(d, cfg), {})
 
+    def test_copilot_links(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "acct" / "org"
+            p.mkdir(parents=True)
+            (p / "local_ab12cd34-0000.json").write_text(json.dumps({
+                "sessionId": "local_ab12cd34-0000", "cliSessionId": "cop1", "title": "Co-pilot",
+                "bridgeSessionIds": ["session_014ZRCMq4wQ5AEFfyCC9S1gV"]}))
+            (p / "local_ab12cd34-0001.json").write_text(json.dumps({
+                "sessionId": "local_ab12cd34-0001", "cliSessionId": "cop2", "title": "x", "bridgeSessionIds": ["bad id"]}))
+            self.assertEqual(navigator.desktop_links("cop1", d), {
+                "title": "Co-pilot", "url": "https://claude.ai/code/session_014ZRCMq4wQ5AEFfyCC9S1gV",
+                "mac_url": "claude://claude.ai/epitaxy/local_ab12cd34-0000"})
+            self.assertNotIn("url", navigator.desktop_links("cop2", d))
+            self.assertEqual(navigator.desktop_links("nope", d), {})
+
     def test_map_state(self):
         with tempfile.TemporaryDirectory() as d:
             st = navigator.State(Path(d) / "s.json")

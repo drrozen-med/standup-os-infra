@@ -482,6 +482,12 @@ def build_parser():
     dest.add_argument("--to", metavar="PROJECT", help="destination project: exact key, or a substring of its name/path matching one project")
     dest.add_argument("--back", action="store_true", help="put the sessions back under their folder's project")
 
+    cp = subparsers.add_parser("copilot", help="show, set or clear Uri's co-pilot session (the Co-pilot button)")
+    _add_global_options(cp, subcommand=True)
+    cpx = cp.add_mutually_exclusive_group()
+    cpx.add_argument("--set", metavar="KEY", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
+    cpx.add_argument("--clear", action="store_true", help="remove the Co-pilot button")
+
     dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
     _add_global_options(dg, subcommand=True)
 
@@ -909,6 +915,33 @@ def cmd_move_project(args, client):
     else:
         print_json(result)
     return 0
+
+
+def cmd_copilot(args, client):
+    if args.set or args.clear:
+        key = args.set or ""
+        if key.startswith("local_"):          # Claude desktop id -> CLI session key
+            key = desktop_to_key(key)
+        res = client.post("/api/copilot", {"key": key})
+        print_json(res.get("copilot"))
+    else:
+        print_json(client.tree().get("copilot"))
+    return 0
+
+
+def desktop_to_key(local_id):
+    """claude:<cli id> for a Claude desktop session id, read from the desktop app's records."""
+    import glob
+    pattern = os.path.expanduser("~/Library/Application Support/Claude/claude-code-sessions/*/*/%s.json" % local_id)
+    for path in glob.glob(pattern):
+        try:
+            with open(path) as fh:
+                sid = json.load(fh).get("cliSessionId")
+        except (OSError, ValueError):
+            continue
+        if sid:
+            return "claude:" + sid
+    raise UsageError("no Claude desktop session " + local_id)
 
 
 def cmd_desktop_groups(args, client):
@@ -1908,6 +1941,8 @@ def main(argv=None):
             return cmd_move_project(args, client)
         if args.command == "unhide-all":
             return cmd_unhide_all(args, client)
+        if args.command == "copilot":
+            return cmd_copilot(args, client)
         if args.command == "desktop-groups":
             return cmd_desktop_groups(args, client)
         if args.command == "map-desktop-group":

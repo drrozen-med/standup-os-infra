@@ -116,6 +116,16 @@ Placement order: an explicit `move-project`, then the desktop group (its mapped
 project, or a project named after the group), then the folder. In the UI:
 Menu → Claude desktop groups….
 
+```bash
+# The Co-pilot button: one tap opens Uri's main assistant session in Claude
+# (claude.ai/code on the phone; needs Remote Control on for that session).
+python3 nav.py copilot                                   # show
+python3 nav.py copilot --set local_<uuid>                # or claude:<uuid>
+python3 nav.py copilot --clear
+```
+
+In the UI: a session's ⋯ menu → Make this my co-pilot.
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session
