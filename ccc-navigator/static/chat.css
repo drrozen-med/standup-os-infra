@@ -270,3 +270,36 @@
   .chat-head .eng { order: 3; }
   .chat-head .btn { order: 4; min-height: 34px; }
 }
+
+/* ---- a message you just sent, and "the model is working" ---- */
+.row.pend.sending .bubble { opacity: 0.6; }
+.row.pend.sent .bubble { opacity: 0.9; }
+.row.pend.failed .bubble { background: transparent; color: var(--text2); border: 1px dashed var(--danger); }
+.pstate { color: var(--dim); }
+.pstate .bad { color: var(--danger); font-weight: 600; }
+.pstate button {
+  background: transparent; border: 0; padding: 2px 4px; min-height: 24px;
+  color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+}
+.pstate button:hover { text-decoration: underline; }
+.typing {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 8px 14px; border-radius: 1rem; border-bottom-left-radius: 4px;
+  background: var(--panel); border: 1px solid var(--line);
+  color: var(--muted); font-size: 13px;
+}
+.typing .dots { display: inline-flex; gap: 4px; }
+.typing .dots i {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing .dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing .dots i:nth-child(3) { animation-delay: 0.3s; }
+.typing .t-el { color: var(--dim); font-variant-numeric: tabular-nums; }
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing .dots i { animation: none; opacity: 0.7; }
+}
