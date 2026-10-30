@@ -121,6 +121,8 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .grp-h:hover{background:var(--hover)}
 .grp-h .gname{color:var(--text2)}
 .grp-h .gname.none{color:var(--dim);font-style:italic}
+.ungrouped .s{padding-left:34px}
+.ungrouped.drop{background:var(--primary-soft);outline:1px dashed var(--primary-hi);outline-offset:-2px}
 .grp-h.drop{background:var(--primary-soft);outline:1px dashed var(--primary-hi);outline-offset:-2px}
 .tag{font-size:9.5px;letter-spacing:.4px;padding:0 5px;border-radius:3px;line-height:15px;font-weight:700;text-transform:uppercase}
 .tag.orca{color:var(--info);background:color-mix(in oklab,var(--info) 15%,transparent)}
@@ -654,7 +656,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         const items = g.items.filter(s => matches(s, repo, g));
         if (!items.length) continue;
         const gk = 'g:' + repo.key + '|' + g.name;
-        const gOpen = forceOpen() || !ui.collapsed[gk];
+        const gOpen = forceOpen() || !g.name || !ui.collapsed[gk];   // sessions outside any group sit straight under the project, no header
         let rows = '';
         for (const s of items) {
           if (tree.copilot && s.key === tree.copilot.key) continue;
@@ -677,6 +679,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
             <span class="eye" role="button" tabindex="0" data-hide="${esc(s.key)}" data-hidden="${s.hidden ? 1 : 0}" title="${s.hidden ? 'Unhide' : 'Hide'}">${s.hidden ? EYE_OFF : EYE}</span>
             <span class="ago">${ago(s.mtime)}</span><span class="dots" role="button" tabindex="0" data-menu="s" data-key="${esc(s.key)}" title="More actions" aria-label="More actions">${DOTS}</span></button>`;
         }
+        if (!g.name) { groupsHtml += `<div class="open ungrouped" data-drop-repo="${esc(repo.key)}" data-drop-group=""><div class="items">${rows}</div></div>`; continue; }
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
           <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
@@ -1217,7 +1220,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   });
   $('#list').addEventListener('dragover', e => {
     const h = e.target.closest('[data-drop-repo]');
-    document.querySelectorAll('.grp-h.drop').forEach(x => x !== h && x.classList.remove('drop'));
+    document.querySelectorAll('.grp-h.drop,.ungrouped.drop').forEach(x => x !== h && x.classList.remove('drop'));
     if (h && dragKey && h.dataset.dropRepo === dragRepo) { e.preventDefault(); h.classList.add('drop'); }
   });
   $('#list').addEventListener('drop', e => {
@@ -1226,7 +1229,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (h.dataset.dropRepo === dragRepo) post('/api/assign', { key: dragKey, repo: dragRepo, group: h.dataset.dropGroup });
     dragKey = null;
   });
-  $('#list').addEventListener('dragend', () => { dragKey = null; document.querySelectorAll('.grp-h.drop').forEach(x => x.classList.remove('drop')); });
+  $('#list').addEventListener('dragend', () => { dragKey = null; document.querySelectorAll('.grp-h.drop,.ungrouped.drop').forEach(x => x.classList.remove('drop')); });
 
   document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
