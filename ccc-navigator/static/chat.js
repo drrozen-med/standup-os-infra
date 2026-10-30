@@ -313,7 +313,8 @@
       var keep = thread.scrollTop;
       lastSig = s; render(ev, thread, showAll); current = ev;
       reconcile(); decorate();
-      if (scroll !== false && (atEnd || keep === 0)) thread.scrollTop = thread.scrollHeight; else thread.scrollTop = keep;
+      // a reader already at the bottom follows new replies, including on background polls (scroll === false)
+      if (atEnd || (scroll !== false && keep === 0)) thread.scrollTop = thread.scrollHeight; else thread.scrollTop = keep;
       if (opts.onEngine) opts.onEngine(d.engine || '');
     }
     function load(scroll) {
