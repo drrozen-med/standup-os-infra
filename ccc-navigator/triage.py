@@ -60,8 +60,9 @@ def classify(item, messages, now=None):
     now = now or time.time()
     if item.get("state") == "working":
         return "working", "agent is mid-turn"
-    if item.get("needs_you"):
-        return "needs-you", "waiting on an approval or question in CCC"
+    if item.get("state") == "needs-you" or item.get("needs_you"):   # same answer as the dot
+        reason = item.get("needs_reason") or item.get("triage_reason") or "waiting on an approval or question in CCC"
+        return "needs-you", reason
     tail = last_assistant_text(messages)[-TAIL:]
     first_line = next((ln.strip() for ln in tail.splitlines()[::-1] if ln.strip()), "")[:160]
     if tail and ASK_RE.search(tail):
@@ -71,8 +72,6 @@ def classify(item, messages, now=None):
         if asked.rstrip("*").endswith(":") and hit + 1 < len(lines):  # a heading: show what follows it
             asked = asked + " " + lines[hit + 1]
         return "needs-you", (asked or first_line)[:160] or "last message asks you something"
-    if item.get("state") == "needs-you":
-        return "needs-you", "last message asks you something"
     if tail and BLOCK_RE.search(tail) and not DONE_RE.search(tail[-200:]):
         return "blocked", first_line
     if tail and DONE_RE.search(tail):

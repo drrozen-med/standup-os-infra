@@ -475,6 +475,17 @@ def _session_mark(app, params, actor):
     return {"ok": True, "action": "session.mark", "change": cid, "result": {"ok": True, "changed": changed}}
 
 
+def _session_dismiss(app, params, actor):
+    st = _state(app)
+    key, _ = _require_key_or_ref(params, lambda: app.tree("all"), app, ("session",))
+    before = {"triage": {str(key): copy.deepcopy(st.snapshot().get("triage", {}).get(str(key)))}}
+    entries = {str(key): {"label": "dismissed", "reason": params.get("reason") or "", "by": "you"}}
+    changed = st.set_triage(entries)
+    after = {"triage": {str(key): st.snapshot().get("triage", {}).get(str(key))}}
+    cid = _record(app, actor, "session.dismiss", {"key": key, "label": "dismissed"}, before, after, undoable=True)
+    return {"ok": True, "action": "session.dismiss", "change": cid, "result": {"ok": True, "changed": changed}}
+
+
 def _session_send(app, params, actor):
     key, _ = _require_key_or_ref(params, lambda: app.tree("all"), app, ("session",))
     text = params.get("text") or ""
@@ -501,6 +512,7 @@ def _session_send(app, params, actor):
 register(Action("session.note", "Add note to session", (Param("key", "str", required=False), Param("ref", "ref", required=False), Param("text", "str")), ("session",), True, True, _session_note))
 register(Action("session.note-remove", "Remove note from session", (Param("key", "str", required=False), Param("ref", "ref", required=False), Param("remove", "int")), ("session",), True, True, _session_note_remove))
 register(Action("session.mark", "Mark/triage a session", (Param("key", "str", required=False), Param("ref", "ref", required=False), Param("label", "str", required=False), Param("reason", "str", required=False)), ("session",), True, True, _session_mark))
+register(Action("session.dismiss", "Dismiss session as not waiting on me", (Param("key", "str", required=False), Param("ref", "ref", required=False), Param("reason", "str", required=False)), ("session",), True, True, _session_dismiss))
 register(Action("session.send", "Send text to session", (Param("key", "str", required=False), Param("ref", "ref", required=False), Param("text", "str"), Param("sid", "str", required=False), Param("engine", "str", required=False)), ("session",), True, False, _session_send))
 
 
