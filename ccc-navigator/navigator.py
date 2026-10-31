@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import datetime
 import hashlib
 import json
 import os
@@ -825,6 +826,102 @@ def mtime_of(r):
     return v / 1000 if v > 1e11 else v
 
 
+_TRANSCRIPT_TAIL = 256 * 1024
+_TRANSCRIPT_MAX = 2 * 1024 * 1024
+_transcript_cache: dict[str, tuple[tuple[int, int], dict | None]] = {}
+
+
+def _event_time(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / 1000 if value > 1e11 else float(value)
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _meaningful_event(o):
+    """The state-relevant part of a Claude, Pi, or simple Codex JSONL event."""
+    message = o.get("message") if isinstance(o.get("message"), dict) else {}
+    payload = o.get("payload") if isinstance(o.get("payload"), dict) else {}
+    outer = o.get("type")
+    role = outer if outer in ("user", "assistant") else (message.get("role") if outer in (None, "message") else None)
+    content = message.get("content")
+    timestamp = o.get("timestamp") or message.get("timestamp")
+    if role not in ("user", "assistant") and payload.get("type") == "message":
+        role = payload.get("role")
+        content = payload.get("content")
+        timestamp = timestamp or payload.get("timestamp")
+    if role not in ("user", "assistant"):
+        return None
+    if content is None:
+        content = o.get("content")
+    blocks = content if isinstance(content, list) else []
+    last = blocks[-1] if blocks and isinstance(blocks[-1], dict) else {}
+    kind = str(last.get("type") or ("text" if isinstance(content, str) else ""))
+    kind = {"output_text": "text", "input_text": "text", "function_call": "tool_use",
+            "reasoning": "thinking"}.get(kind, kind)
+    texts = [str(p.get("text") or "") for p in blocks
+             if isinstance(p, dict) and p.get("type") in ("text", "output_text")]
+    text = str(content) if isinstance(content, str) else "\n".join(texts)
+    tool = ""
+    if kind == "tool_use" and isinstance(last, dict):
+        tool = last.get("name") or ""
+    return {"role": role, "kind": kind, "text": text, "tool": tool,
+            "mtime": _event_time(timestamp)}
+
+
+def _read_transcript_activity(path, st):
+    size = st.st_size
+    limit = min(_TRANSCRIPT_TAIL, size)
+    while True:
+        start = max(0, size - limit)
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            lines = fh.read(limit).decode("utf-8", errors="replace").splitlines()
+        if start:
+            lines = lines[1:]  # the tail normally starts midway through a JSON line
+        for line in reversed(lines):
+            try:
+                event = _meaningful_event(json.loads(line))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if event:
+                return event
+        if start == 0 or limit >= _TRANSCRIPT_MAX:
+            return None
+        limit = min(limit * 2, _TRANSCRIPT_MAX, size)
+
+
+def transcript_activity(path):
+    """Last real user/assistant transcript event, cached by file signature."""
+    if not path:
+        return None
+    path = str(Path(path).expanduser())
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    hit = _transcript_cache.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        event = _read_transcript_activity(path, st)
+    except OSError:
+        event = None
+    _transcript_cache[path] = (sig, event)
+    return event
+
+
+def transcript_mtime(path):
+    """Timestamp of the last real user/assistant event, or None."""
+    event = transcript_activity(path)
+    return event.get("mtime") if event else None
+
+
 def clean(text, n=90):
     t = re.sub(r"\s+", " ", str(text or "")).strip()
     return t[:n] + ("…" if len(t) > n else "")
@@ -879,6 +976,33 @@ def is_running(r):
             or time.time() - mtime_of(r) < 600)
 
 
+ASK_RE = re.compile(
+    r"(\?\s*$|\bshould i\b|\bwant me to\b|\bshall i\b|\bdo you want\b|\bwould you like\b|\bplease (confirm|approve|choose|decide)"
+    r"|\bwaiting (for|on) (you|your)\b|\byour (call|decision|approval)\b|\blet me know\b)",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def session_state(r, event=None, now=None):
+    """One activity state; a live process alone does not mean working."""
+    now = now or time.time()
+    if r.get("needs_approval") or r.get("question_waiting"):
+        return "needs-you"
+    mtime = event.get("mtime") if event and event.get("mtime") is not None else mtime_of(r)
+    age = now - mtime
+    if event and event.get("role") == "assistant" and event.get("kind") == "tool_use" and event.get("tool") in ("AskUserQuestion", "ExitPlanMode") and age < 3 * 86400:
+        return "needs-you"
+    if is_running(r) and (r.get("pending_tool") or r.get("tool_pending") or r.get("pending_tool_use")):
+        return "working"
+    if event and age < 15 * 60:
+        if event.get("role") == "user" or (event.get("role") == "assistant"
+                                           and event.get("kind") in ("tool_use", "thinking")):
+            return "working"
+    if (event and event.get("role") == "assistant" and event.get("kind") == "text"
+            and age < 3 * 86400 and ASK_RE.search(event.get("text") or "")):
+        return "needs-you"
+    return "resting" if age <= 86400 else "dormant"
+
+
 def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
                desktop=None, auto_titles=None, desktop_group=None, always=None, archived_sids=None):
     """always: a session key that is never filtered out or hidden (the co-pilot). desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
@@ -888,7 +1012,27 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
     def is_always(r):
         return bool(always) and "%s:%s" % (r.get("engine") or "claude", r.get("session_id")) == always
 
-    inwin = [r for r in rows if mtime_of(r) >= cutoff or is_running(r) or is_always(r)]
+    def transcript_path(r):
+        return r.get("jsonl_path") or r.get("rollout_path")
+
+    def candidate(r):
+        if mtime_of(r) >= cutoff or is_running(r) or is_always(r):
+            return True
+        path = transcript_path(r)
+        try:
+            return bool(path) and os.stat(Path(path).expanduser()).st_mtime >= cutoff
+        except OSError:
+            return False
+
+    # Stat everything if necessary, but only read transcripts that can be in the window.
+    candidates = [r for r in rows if candidate(r)]
+    activities = {id(r): transcript_activity(transcript_path(r)) for r in candidates if transcript_path(r)}
+
+    def true_mtime(r):
+        event = activities.get(id(r))
+        return event.get("mtime") if event and event.get("mtime") is not None else mtime_of(r)
+
+    inwin = [r for r in candidates if true_mtime(r) >= cutoff or is_always(r)]
 
     hidden = collections.Counter()
     keep, origins = [], {}
@@ -999,7 +1143,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "triage_reason": (state.get("triage", {}).get(item_key) or {}).get("reason") or "",
             "triage_by": (state.get("triage", {}).get(item_key) or {}).get("by") or "",
             "needs_you": bool(r.get("needs_approval") or r.get("question_waiting")),
-            "mtime": mtime_of(r),
+            "state": session_state(r, activities.get(id(r)), now),
+            "mtime": true_mtime(r),
             "cost": float(r.get("cost_usd") or 0),
             "cwd": short(cwd), "branch": r.get("git_branch") or r.get("branch") or "",
             "wt": wt or r.get("worktree_label") or "",
@@ -1019,18 +1164,22 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         repo["items"].append(base_item(r, key, repo, cwd, wt, ws))
 
     for pk, runs in batches.items():
-        runs.sort(key=mtime_of, reverse=True)
+        runs.sort(key=true_mtime, reverse=True)
         head = runs[0]
         repo, cwd, wt, ws = place(head)
         key = "batch:" + hashlib.sha1((repo["key"] + "|" + pk).encode()).hexdigest()[:12]
         item = base_item(head, key, repo, cwd, wt, ws)
+        run_states = [session_state(x, activities.get(id(x)), now) for x in runs]
         item.update({
             "original": clean(head.get("first_message"), 140),
             "batch": len(runs),
             "live": any(is_running(x) for x in runs),
+            "state": ("needs-you" if "needs-you" in run_states else
+                      "working" if "working" in run_states else item["state"]),
             "cost": sum(float(x.get("cost_usd") or 0) for x in runs),
             "runs": [{"sid": str(x.get("session_id")), "engine": x.get("engine") or "",
-                      "mtime": mtime_of(x), "live": is_running(x),
+                      "mtime": true_mtime(x), "live": is_running(x),
+                      "state": session_state(x, activities.get(id(x)), now),
                       "open_url": f"{ccc_base}/?ccc_popout=conversation&conv={urllib.parse.quote(str(x.get('session_id')))}"}
                      for x in runs[:50]],
         })
@@ -1090,7 +1239,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
                        key=lambda g: (not pmap.get("g:%s|%s" % (repo["key"], g)), g.lower()))
         groups = []
         for g in names + ([UNGROUPED] if UNGROUPED in by_group else []):
-            items = sorted(by_group[g], key=lambda x: (not x["pinned"], -x["mtime"]))
+            state_rank = {"needs-you": 0, "working": 1}
+            items = sorted(by_group[g], key=lambda x: (not x["pinned"], state_rank.get(x["state"], 2), -x["mtime"]))
             srcs = {x["group_source"] for x in items}
             groups.append({"name": g, "source": "manual" if "manual" in srcs or g in manual
                            else ("orca" if "orca" in srcs else "none"), "items": items,
@@ -1104,6 +1254,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "pinned": bool(pmap.get("r:" + repo["key"])),
             "count": len(all_items),
             "live": sum(1 for x in all_items if x["live"]),
+            "working": sum(1 for x in all_items if x["state"] == "working"),
+            "needs_you": sum(1 for x in all_items if x["state"] == "needs-you"),
             "cost": round(sum(x["cost"] for x in all_items), 2),
             "latest": max((x["mtime"] for x in all_items), default=0),
             "groups": groups,

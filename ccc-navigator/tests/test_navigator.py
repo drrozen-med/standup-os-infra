@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import sqlite3
@@ -6,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -110,6 +112,99 @@ def row(sid, cwd, prompt, mins=1, **kw):
          "folder_path": cwd, "first_message": prompt, "modified": time.time() - mins * 60}
     r.update(kw)
     return r
+
+
+class TranscriptActivity(unittest.TestCase):
+    def setUp(self):
+        navigator._transcript_cache.clear()
+
+    def write(self, entries):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        path = Path(d.name) / "session.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        return path
+
+    def test_true_time_reads_tail_and_ignores_admin_events(self):
+        path = self.write([
+            {"type": "user", "timestamp": "2026-10-31T10:00:00Z", "message": {"content": "start"}},
+            {"type": "assistant", "timestamp": "2026-10-31T10:05:00Z",
+             "message": {"content": [{"type": "text", "text": "finished"}]}},
+            {"type": "attachment", "timestamp": "2026-10-31T12:00:00Z"},
+            {"type": "queue-operation", "timestamp": "2026-10-31T13:00:00Z"},
+        ])
+        expected = datetime.datetime(2026, 10, 31, 10, 5, tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(navigator.transcript_mtime(path), expected)
+
+    def test_reader_grows_past_initial_tail(self):
+        path = self.write([
+            {"type": "assistant", "timestamp": "2026-10-31T10:05:00Z",
+             "message": {"content": [{"type": "text", "text": "done"}]}},
+            {"type": "attachment", "timestamp": "2026-10-31T12:00:00Z", "data": "x" * 300_000},
+        ])
+        self.assertIsNotNone(navigator.transcript_mtime(path))
+
+    def test_tree_uses_true_time_for_finished_live_session(self):
+        now = time.time()
+        timestamp = datetime.datetime.fromtimestamp(now - 300, datetime.timezone.utc).isoformat()
+        path = self.write([
+            {"type": "assistant", "timestamp": timestamp,
+             "message": {"content": [{"type": "text", "text": "Finished."}]}},
+            {"type": "custom-title", "timestamp": datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat()},
+        ])
+        state = {"nicknames": {}, "groups": {}, "assign": {}}
+        stale = row("done", "/r/A", "Finished work", mins=60 * 17, is_live=True, jsonl_path=str(path))
+        tree = navigator.build_tree([stale], state, "now", [], "http://ccc", now=now)
+        item = tree["repos"][0]["groups"][0]["items"][0]
+        self.assertAlmostEqual(item["mtime"], now - 300, delta=1)
+        self.assertEqual(item["state"], "resting")
+        self.assertAlmostEqual(tree["repos"][0]["latest"], now - 300, delta=1)
+
+    def test_cache_avoids_rereading_unchanged_file(self):
+        path = self.write([{"type": "user", "timestamp": "2026-10-31T10:00:00Z"}])
+        original = navigator._read_transcript_activity
+        with mock.patch.object(navigator, "_read_transcript_activity", wraps=original) as read:
+            navigator.transcript_mtime(path)
+            navigator.transcript_mtime(path)
+        self.assertEqual(read.call_count, 1)
+
+
+class SessionState(unittest.TestCase):
+    NOW = time.time()
+
+    def row(self, age, **kw):
+        return dict({"modified": self.NOW - age}, **kw)
+
+    def event(self, role, kind, age, text=""):
+        return {"role": role, "kind": kind, "text": text, "mtime": self.NOW - age}
+
+    def test_working_from_recent_turn_activity(self):
+        self.assertEqual(navigator.session_state(self.row(300), self.event("user", "tool_result", 300), self.NOW),
+                         "working")
+        self.assertEqual(navigator.session_state(self.row(300), self.event("assistant", "thinking", 300), self.NOW),
+                         "working")
+
+    def test_needs_you_from_recent_assistant_question(self):
+        event = self.event("assistant", "text", 3600, "The fix is ready. Should I deploy it?")
+        self.assertEqual(navigator.session_state(self.row(3600), event, self.NOW), "needs-you")
+
+    def test_resting_when_turn_finished_within_a_day(self):
+        event = self.event("assistant", "text", 3600, "Done.")
+        self.assertEqual(navigator.session_state(self.row(3600), event, self.NOW), "resting")
+
+    def test_dormant_after_a_day(self):
+        event = self.event("assistant", "text", 25 * 3600, "Done.")
+        self.assertEqual(navigator.session_state(self.row(25 * 3600), event, self.NOW), "dormant")
+
+    def test_live_but_finished_is_resting_not_working(self):
+        event = self.event("assistant", "text", 300, "All done.")
+        self.assertEqual(navigator.session_state(self.row(300, is_live=True), event, self.NOW), "resting")
+
+    def test_needs_you_from_ask_user_question_pending(self):
+        event = {"role": "assistant", "kind": "tool_use", "tool": "AskUserQuestion", "text": "", "mtime": self.NOW - 60}
+        self.assertEqual(navigator.session_state(self.row(60), event, self.NOW), "needs-you")
+        event = {"role": "assistant", "kind": "tool_use", "tool": "AskUserQuestion", "text": "", "mtime": self.NOW - 2 * 3600}
+        self.assertEqual(navigator.session_state(self.row(2 * 3600), event, self.NOW), "needs-you")
 
 
 class Tree(unittest.TestCase):
