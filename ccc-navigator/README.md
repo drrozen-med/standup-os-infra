@@ -14,7 +14,7 @@ web app that reads CCC's API and shows the same sessions organised the way you a
   trashed sessions. Three or more sessions with the same opening prompt collapse into one "batch" row.
 - **Sources:** everything CCC ingests (Claude, Codex, Devin, Cursor, …) via `GET /api/conversations?all=1`,
   plus **Pi** sessions read from `~/.pi/agent/sessions` (CCC doesn't read Pi), plus **Orca** workspaces read
-  from Orca's profile database.
+  from Orca's profile database, plus **Outsourcerer** jobs from `~/.outsourcerer/jobs` (read-only), plus **Server .251** agents via `agent-status.json` over SSH.
 
 Nicknames, groups, stars and hides live in `~/.ccc-navigator/state.json`. CCC's and Orca's data are only
 read, never written.
@@ -75,6 +75,16 @@ Orca keeps per-profile state in SQLite at `<userData>/profiles/<profileId>/profi
 the database (with its WAL) to a temp folder and reads the copy, at most every 10 s and only when it changed.
 A workspace's name is its `displayName`, else its current branch (what Orca shows). Orca renames a workspace's
 folder after the first prompt, so a session pointing at the old folder is matched by branch instead.
+
+## Server .251 agent status
+
+Install `bin/vm251-status.sh` on the server as user `claude-agent`. Add to crontab:
+
+```bash
+*/3 * * * * ~/bin/vm251-status.sh
+```
+
+The script writes `~/agent-status.json` atomically (write tmp then mv) with container/agent info from `incus` and host-level processes. Set `CCC_NAV_VM251=0` to disable in the navigator.
 
 ## Tests
 
