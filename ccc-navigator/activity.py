@@ -442,15 +442,29 @@ def _read_activity_inner(path, st):
 
 
 def mtime_of_row(r):
-    try:
-        if navigator and hasattr(navigator, 'mtime_of'):
-            return navigator.mtime_of(r)
-    except Exception:
-        pass
     v = float((r or {}).get('modified') or (r or {}).get('mtime') or 0)
     if v > 1e11:
         return v / 1000.0
     return v
+
+
+def _ask_line(text):
+    """The line that asks: a question mark wins, then a request ("please"), then any ASK_RE match."""
+    hits = [l.strip() for l in text.splitlines() if l.strip() and (ASK_RE.search(l) or re.search(r"\bplease\b", l, re.I))]
+    for pick in (lambda l: l.rstrip("*_ ").endswith("?"), lambda l: re.search(r"\bplease\b", l, re.I), lambda l: True):
+        for l in reversed(hits):
+            if pick(l):
+                return _ask_sentence(l)
+    return text.strip()
+
+
+def _ask_sentence(line):
+    """In a long line, the sentence that asks (a question, or a please), so it fits the reason."""
+    parts = re.split(r"(?<=[.?!])\s+", line)
+    for p in parts:
+        if p.rstrip("*_ ").endswith("?") or re.search(r"\bplease\b", p, re.I):
+            return p.strip()
+    return line
 
 
 def state(row, act, now, running=False, dismissed_ts=None):
@@ -505,6 +519,19 @@ def state(row, act, now, running=False, dismissed_ts=None):
                     reason = ASK_TOOLS.get(last['tool'])
                     return ("needs-you", reason, None)
 
+    # a session that is mid-turn is working, whatever an earlier line in the turn asked
+    codex_done = act.get('codex_done') if act else False
+    turn_over = codex_done or bool(act and act.get('turn_wrapped'))   # wrap_up ends a Claude desktop turn
+    if not turn_over:
+        if age < 15 * 60:
+            if act and act.get('last'):
+                last = act['last']
+                if last.get('role') == 'user' or (last.get('role') == 'assistant' and last.get('kind') in ('tool_use', 'thinking')):
+                    return ("working", "", "")
+        if running and pending:
+            if not (pending.get('name') in ASK_TOOLS):
+                return ("working", "", "")
+
     if act:
         if act.get('turn_wrapped'):
             if act.get('turn_ask'):
@@ -515,27 +542,11 @@ def state(row, act, now, running=False, dismissed_ts=None):
             final_text = act.get('final_text') if act else ""
             if final_text and age < 3 * 86400:
                 if ASK_RE.search(final_text):
-                    lines = final_text.splitlines()
-                    reason = final_text
-                    for l in reversed(lines):
-                        if ASK_RE.search(l):
-                            reason = l.strip()
-                            break
+                    reason = _ask_line(final_text)
                     if len(reason) > 160:
                         reason = reason[:160]
                     if not (dismissed_ts and act_mtime is not None and dismissed_ts > act_mtime):
                         return ("needs-you", reason, None)
-
-    codex_done = act.get('codex_done') if act else False
-    if not codex_done:
-        if age < 15 * 60:
-            if act and act.get('last'):
-                last = act['last']
-                if last.get('role') == 'user' or (last.get('role') == 'assistant' and last.get('kind') in ('tool_use', 'thinking')):
-                    return ("working", "", "")
-        if running and pending:
-            if not (pending.get('name') in ASK_TOOLS):
-                return ("working", "", "")
 
     stopped_reason = None
     if pending and pending.get('name') not in ASK_TOOLS:

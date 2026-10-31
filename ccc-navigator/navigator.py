@@ -963,15 +963,12 @@ def _read_transcript_activity(path, st):
 
 def transcript_activity(path):
     """Last real user/assistant transcript event, cached by file signature."""
-    try:
-        act = activity.read_activity(path)
-        if act:
-            # adapt to old format
-            ev = {'mtime': act.get('mtime'), 'role': act.get('last',{}).get('role'), 'kind': act.get('last',{}).get('kind'), 'tool': act.get('last',{}).get('tool'), 'text': act.get('final_text') or ''}
-            return ev
-        return None
-    except Exception:
-        pass
+    act = activity.read_activity(path)          # kept for callers of the old shape
+    if act:
+        last = act.get('last') or {}
+        return {'mtime': act.get('mtime'), 'role': last.get('role'), 'kind': last.get('kind'),
+                'tool': last.get('tool'), 'text': act.get('final_text') or ''}
+    return None
     if not path:
         return None
     path = str(Path(path).expanduser())
@@ -1051,22 +1048,13 @@ def is_running(r):
             or time.time() - mtime_of(r) < 600)
 
 
-try:
-    from activity import ASK_RE
-except Exception:
-    import activity
-    ASK_RE = activity.ASK_RE
+ASK_RE = activity.ASK_RE
 
 
 
 def session_state(r, event=None, now=None, dismissed_ts=None):
     """Thin wrapper using activity.state."""
-    try:
-        st, reason, stopped_reason = activity.state(r, event, now or time.time(), running=is_running(r), dismissed_ts=dismissed_ts)
-        # return just state for backward compat?
-        return st
-    except Exception:
-        pass
+    return activity.state(r, event, now or time.time(), running=is_running(r), dismissed_ts=dismissed_ts)[0]
     # fallback old
     now = now or time.time()
     if r.get("needs_approval") or r.get("question_waiting"):
@@ -1268,7 +1256,6 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         repo, cwd, wt, ws = place(head)
         key = "batch:" + hashlib.sha1((repo["key"] + "|" + pk).encode()).hexdigest()[:12]
         item = base_item(head, key, repo, cwd, wt, ws)
-        run_states = [session_state(x, activities.get(id(x)), now) for x in runs]
         # compute batch states with activity
         run_states_new = []
         for x in runs:
