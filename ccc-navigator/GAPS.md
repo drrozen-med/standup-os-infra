@@ -61,7 +61,7 @@ One place (the Navigator) to see and move everything, plus a Co-pilot that keeps
 | G10, G11 what the Co-pilot may do alone | needs Uri's rules | |
 | B10 renaming an Orca-sourced group loses its manual order position | open, minor | |
 | B11 sending a chat answer to a Claude desktop session resumes it headless through CCC; untested against the open app | partly fixed | Tested 2026-10-31 on a real answer. A session with one log copy (e.g. the Co-pilot) gets the message. A session that moved folders has two copies; CCC resumed the old one and forked it, so the Claude app never saw the answer. The Navigator now reads the newest copy and refuses to send into a moved session: it copies the answer and offers "Open in Claude". |
-| B12 CCC uses the first copy it finds of a moved session's log (`_find_session_jsonl`), so its chat view and its resume show an old copy | open, CCC (not this repo) | 5 sessions affected on 2026-10-31. Needs CCC to pick the newest copy. |
+| B12 CCC uses the first copy it finds of a moved session's log (`_find_session_jsonl`), so its chat view and its resume show an old copy | fixed locally | `ccc-patches/newest_copy.py` patches the installed CCC (reads the newest copy, resumes from the session's current folder). Verified with a throwaway moved session. `brew upgrade ccc` drops it: re-run the script. While it is missing, the Navigator falls back to "Open in Claude" for moved sessions. Not sent upstream to Amir Fish's CCC. |
 
 ## Work plan
 

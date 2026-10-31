@@ -264,6 +264,16 @@ class MovedSessionTests(unittest.TestCase):
         self.assertEqual(out[1], rows[1])
         self.assertEqual(out[2], rows[2])
 
+    def test_ccc_patch_detected_on_newest_version_only(self):
+        root = Path(self.tmp.name)
+        for ver, body in (("5.9.0", "# standup-os patch: newest copy\n"), ("5.10.0", "plain\n")):
+            (root / ver).mkdir()
+            (root / ver / "server.py").write_text(body)
+        self.assertFalse(navigator.ccc_patched(str(root / "*" / "server.py")))   # 5.10 is newest and unpatched
+        (root / "5.10.0" / "server.py").write_text("x\n# standup-os patch: newest copy\n")
+        self.assertTrue(navigator.ccc_patched(str(root / "*" / "server.py")))
+        self.assertFalse(navigator.ccc_patched(str(root / "none" / "*.py")))
+
     def test_deliver_refuses_moved_session(self):
         fake = SimpleNamespace(args=SimpleNamespace(pi_dir=self.tmp.name), moved=lambda sid: sid == "s1",
                                ccc=SimpleNamespace(base="http://127.0.0.1:9"))
