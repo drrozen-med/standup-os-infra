@@ -328,7 +328,9 @@ class CapTests(CheckinCase):
         self.online = False
         self.run_main()
         self.assertEqual(self.last_line(), "skip: offline")
-        self.assertEqual(self.state_json(), {"sent_day": TODAY, "sent_count": 15})
+        st = self.state_json()
+        self.assertEqual(st.get("sent_day"), TODAY)
+        self.assertEqual(st.get("sent_count"), 15)
 
 
 class OfflineTests(CheckinCase):
@@ -348,6 +350,25 @@ class OfflineTests(CheckinCase):
         self.assertEqual(len(self.runs.argvs("ask")), 1)             # the alert goes out anyway
         self.assertEqual(self.runs.argvs("send"), [])
         self.assertEqual([ln.split(" ", 1)[1] for ln in self.log_lines()], ["skip: offline"])
+
+    def test_consec_offline_alert_fires_at_4(self):
+        self.online = False
+        for _ in range(3):
+            self.run_main()
+        self.assertEqual(len(self.runs.argvs("ask")), 0)
+        self.run_main()
+        self.assertEqual(len(self.runs.argvs("ask")), 1)
+        self.assertIn("check-ins have been skipped for 2 hours (thinks it is offline)", self.runs.argvs("ask")[0][6])
+
+    def test_consec_offline_resets_after_send(self):
+        self.online = False
+        for _ in range(3):
+            self.run_main()
+        self.online = True
+        self.run_main()
+        self.online = False
+        self.run_main()
+        self.assertEqual(len(self.runs.argvs("ask")), 0)
 
 
 class WakeTests(CheckinCase):
@@ -389,31 +410,44 @@ class _CM:
 
 
 class OnlineTests(unittest.TestCase):
-    """The network probe itself: any HTTP status is online, DNS/connection errors are not."""
+    """The network probe itself: TCP connect to api.anthropic.com:443."""
 
-    def probe(self, exc):
+    def probe(self, exc=None, side_effect=None):
         seen = []
 
-        def fake_urlopen(req, timeout=None):
-            seen.append((req.full_url, req.get_method(), timeout))
-            return _CM(exc)
+        class DummySock:
+            def close(self):
+                pass
 
-        with mock.patch.object(cc.urllib.request, "urlopen", fake_urlopen):
-            return cc.online(), seen
+        def fake_create_connection(addr, timeout=None):
+            seen.append((addr, timeout))
+            if side_effect is not None:
+                raise side_effect
+            if exc is not None:
+                raise exc
+            return DummySock()
+
+        urlopen_seen = []
+
+        def fake_urlopen(*args, **kwargs):
+            urlopen_seen.append((args, kwargs))
+            raise AssertionError("urlopen should not be called")
+
+        with mock.patch.object(cc.socket, "create_connection", fake_create_connection), \
+             mock.patch.object(cc.urllib.request, "urlopen", fake_urlopen):
+            return cc.online(), seen, urlopen_seen
 
     def test_reachable_is_online(self):
-        online, seen = self.probe(None)
+        online, seen, urlopen_seen = self.probe(None)
         self.assertTrue(online)
-        self.assertEqual(seen, [(cc.NET_URL, "HEAD", cc.NET_TIMEOUT)])
-
-    def test_http_status_is_online(self):
-        self.assertTrue(self.probe(urllib.error.HTTPError(cc.NET_URL, 403, "Forbidden", None, None))[0])
+        self.assertEqual(seen, [(("api.anthropic.com", 443), cc.NET_TIMEOUT)])
+        self.assertEqual(urlopen_seen, [])
 
     def test_dns_failure_is_offline(self):
-        self.assertFalse(self.probe(urllib.error.URLError("name resolution failed"))[0])
+        self.assertFalse(self.probe(exc=OSError("name resolution failed"))[0])
 
     def test_timeout_is_offline(self):
-        self.assertFalse(self.probe(TimeoutError("timed out"))[0])
+        self.assertFalse(self.probe(side_effect=TimeoutError("timed out"))[0])
 
 
 if __name__ == "__main__":
