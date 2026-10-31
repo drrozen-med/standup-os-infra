@@ -386,14 +386,21 @@ def desktop_titles(root=DESKTOP_DIR):
             try:
                 d = json.loads(f.read_text())
                 rec = {"sid": str(d.get("cliSessionId") or ""), "title": clean(d.get("title"), 140),
+                       "archived": bool(d.get("isArchived")),
                        "lid": str(d.get("sessionId") or f.stem),
                        "bridge": str((d.get("bridgeSessionIds") or [""])[-1] or "")}
             except (OSError, ValueError, AttributeError, TypeError):
-                rec = {"sid": "", "title": "", "lid": "", "bridge": ""}
+                rec = {"sid": "", "title": "", "archived": False, "lid": "", "bridge": ""}
             _desktop_cache[str(f)] = hit = (m, rec)
         if hit[1]["sid"] and hit[1]["title"]:
             out[hit[1]["sid"]] = hit[1]["title"]
     return out
+
+
+def desktop_archived(root=DESKTOP_DIR):
+    """CLI session ids that Uri archived in the Claude desktop app. Read-only."""
+    desktop_titles(root)
+    return {r["sid"] for _, r in _desktop_cache.values() if r.get("archived") and r.get("sid")}
 
 
 BRIDGE_RE = re.compile(r"^session_[0-9A-Za-z]{10,40}$")
@@ -873,7 +880,7 @@ def is_running(r):
 
 
 def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
-               desktop=None, auto_titles=None, desktop_group=None, always=None):
+               desktop=None, auto_titles=None, desktop_group=None, always=None, archived_sids=None):
     """always: a session key that is never filtered out or hidden (the co-pilot). desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
     an explicit move, then the desktop group (its mapped project, or its own), then the folder."""
     now = now or time.time()
@@ -889,7 +896,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         if is_always(r):
             keep.append(r)
             origins[id(r)] = transcript_origin(r)
-        elif r.get("trashed") or r.get("archived"):
+        elif r.get("trashed") or r.get("archived") or str(r.get("session_id") or "") in (archived_sids or ()):
             hidden["Archived or trashed"] += 1
         elif is_scratch(r):
             hidden["CCC's own title-generation runs"] += 1
@@ -1228,7 +1235,8 @@ class App:
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
-                       desktop_group=desktop_groups(), always=self.state.snapshot()["copilot"] or None)
+                       desktop_group=desktop_groups(), always=self.state.snapshot()["copilot"] or None,
+                       archived_sids=desktop_archived())
         t["copilot"] = self.copilot()
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
