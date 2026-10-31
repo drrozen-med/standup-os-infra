@@ -859,6 +859,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           <a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener">Open in CCC</a>
         </div>
         <div class="thread" id="thread"></div>
+        <div id="askCard" class="ask-card" style="display:none" aria-live="polite"></div>
         <div class="composer">
           <span class="sr">Message</span>
           <textarea id="cmp" dir="auto" rows="1" placeholder="${'Reply to ' + esc(s.nick || s.original) + '…'}"></textarea>
@@ -873,6 +874,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           sid: s.sid_raw || s.sid,
           engine: s.engine,
           live: !!s.live,
+          key: s.key,
           onEngine: () => {},
           onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); toast('Not sent: ' + m); }
         });

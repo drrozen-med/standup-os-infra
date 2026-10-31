@@ -325,6 +325,7 @@ def _read_activity_inner(path, st):
 
     turn_wrapped = False
     turn_ask = ""
+    turn_actions = []
     for ev in current_turn_events:
         if ev.get('role') == 'assistant':
             blocks = ev.get('blocks') or []
@@ -339,6 +340,27 @@ def _read_activity_inner(path, st):
                             if isinstance(inp, dict):
                                 ask = inp.get('ask') or ''
                                 turn_ask = str(ask).strip()
+                                actions = inp.get('actions') or []
+                                if isinstance(actions, list):
+                                    for a in actions:
+                                        if not isinstance(a, dict):
+                                            continue
+                                        label = a.get('label')
+                                        if not label or not isinstance(label, str) or not label.strip():
+                                            continue
+                                        lbl = label.strip()
+                                        # drop app-only actions like "commit"/"create_pr"
+                                        low = lbl.lower()
+                                        if low in ('commit', 'create_pr', 'create pr'):
+                                            continue
+                                        actv = a.get('action')
+                                        if isinstance(actv, str) and actv.lower() in ('commit', 'create_pr'):
+                                            continue
+                                        msg = a.get('message')
+                                        if isinstance(msg, str) and msg.strip():
+                                            turn_actions.append({'label': lbl, 'message': msg.strip()})
+                                        else:
+                                            turn_actions.append({'label': lbl})
     if not turn_wrapped:
         for ev in current_turn_events:
             if ev.get('role') == 'assistant' and ev.get('tool') == 'mcp__ccd_turn__wrap_up':
@@ -346,23 +368,46 @@ def _read_activity_inner(path, st):
                 break
 
     pending = None
+    pending_input = None
+    pending_tool_use_block = None
     if is_codex:
         calls = []
         for i, ev in enumerate(events):
             if ev.get('_codex_call'):
-                calls.append((i, ev.get('call_id') or '', ev.get('tool') or (ev.get('blocks') or [{}])[0].get('name') or '', ev.get('mtime')))
+                calls.append((i, ev.get('call_id') or '', ev.get('tool') or (ev.get('blocks') or [{}])[0].get('name') or '', ev.get('mtime'), ev))
         outs = set()
         for ev in events:
             if ev.get('_codex_out'):
                 outs.add(ev.get('call_id') or '')
-        for idx, cid, name, mtime_c in reversed(calls):
+        for idx, cid, name, mtime_c, cev in reversed(calls):
             if cid and cid in outs:
                 continue
             if cid and cid not in outs:
                 pending = {'name': name, 'mtime': mtime_c}
+                # capture input if AskUserQuestion
+                if name == 'AskUserQuestion':
+                    blocks = cev.get('blocks') or []
+                    for b in blocks:
+                        if isinstance(b, dict) and b.get('type') == 'tool_use':
+                            inp = b.get('input')
+                            if inp is None and isinstance(b.get('arguments'), dict):
+                                inp = b.get('arguments')
+                            pending_input = inp
+                    if pending_input is None:
+                        p = cev.get('raw') or {}
+                        pp = p.get('payload') or {}
+                        pending_input = pp.get('arguments') or pp.get('input')
                 break
             elif not cid:
                 pending = {'name': name, 'mtime': mtime_c}
+                if name == 'AskUserQuestion':
+                    blocks = cev.get('blocks') or []
+                    for b in blocks:
+                        if isinstance(b, dict) and b.get('type') == 'tool_use':
+                            inp = b.get('input')
+                            if inp is None and isinstance(b.get('arguments'), dict):
+                                inp = b.get('arguments')
+                            pending_input = inp
                 break
     else:
         tool_uses = []
@@ -372,7 +417,7 @@ def _read_activity_inner(path, st):
                 for b in blocks:
                     if isinstance(b, dict) and b.get('type') == 'tool_use':
                         tid = b.get('id') or ''
-                        tool_uses.append((i, tid, b.get('name') or ev.get('tool') or '', ev.get('mtime')))
+                        tool_uses.append((i, tid, b.get('name') or ev.get('tool') or '', ev.get('mtime'), ev, b))
         tool_results = set()
         for ev in events:
             if ev.get('role') == 'user':
@@ -381,11 +426,14 @@ def _read_activity_inner(path, st):
                     if isinstance(b, dict) and b.get('type') == 'tool_result':
                         trid = b.get('tool_use_id') or b.get('id') or ''
                         tool_results.add(trid)
-        for idx, tid, name, mtime_c in reversed(tool_uses):
+        for idx, tid, name, mtime_c, cev, bblock in reversed(tool_uses):
             if tid and tid in tool_results:
                 continue
             if tid and tid not in tool_results:
                 pending = {'name': name, 'mtime': mtime_c}
+                if name == 'AskUserQuestion':
+                    inp = bblock.get('input') if isinstance(bblock, dict) else None
+                    pending_input = inp
                 break
             elif not tid:
                 has_res = False
@@ -399,6 +447,9 @@ def _read_activity_inner(path, st):
                         break
                 if not has_res:
                     pending = {'name': name, 'mtime': mtime_c}
+                    if name == 'AskUserQuestion':
+                        inp = bblock.get('input') if isinstance(bblock, dict) else None
+                        pending_input = inp
                     break
 
     codex_done = False
@@ -427,6 +478,8 @@ def _read_activity_inner(path, st):
         'final_text': final_text or "",
         'turn_wrapped': bool(turn_wrapped),
         'turn_ask': turn_ask or "",
+        'turn_actions': turn_actions,
+        'pending_input': pending_input,
         'pending': pending,
         'codex_done': bool(codex_done),
     }
