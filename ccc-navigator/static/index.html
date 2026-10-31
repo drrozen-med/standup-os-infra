@@ -769,14 +769,15 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
           const eng = ENGINES.has(s.engine) ? s.engine : 'other';
           const dot = dotState(s);
-          const tri = s.triage && !['idle', 'working'].includes(s.triage) && !needsYou(s) ? s.triage : '';
+          const tri = s.triage && !['idle', 'working', 'needs-you', 'dismissed'].includes(s.triage) ? s.triage : '';   // needs-you comes only from the live state
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
             <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}<bdi>${esc(label(s))}</bdi></span>
               <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
-                ${needsYou(s) ? '<span class="you">needs you</span>' : ''}
+                ${needsYou(s) ? `<span class="you" title="${esc(s.needs_reason || 'needs you')}">${esc((s.needs_reason || 'needs you').replace(/\s+/g, ' ').slice(0, 80))}${(s.needs_reason || '').length > 80 ? '…' : ''}</span>` : ''}
+                ${s.stopped ? `<span class="stopped" title="${esc(s.stopped_reason || '')}" style="color:var(--danger);border:1px solid var(--danger);padding:0 4px;border-radius:3px;font-size:10px">stopped</span>` : ''}
                 ${tri ? `<span class="tri ${esc(tri)}" title="${esc((s.triage_by === 'you' ? 'Marked by you' : 'Sorter') + (s.triage_reason ? ': ' + s.triage_reason : ''))}">${esc(tri.replace('-', ' '))}</span>` : ''}
                 ${s.notes ? `<span class="note-m" title="${esc(s.last_note)}">✎ ${s.notes}</span>` : ''}</span></span>
             <span class="eng ${eng}">${esc(s.engine)}</span>
@@ -1326,6 +1327,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         { label: 'Add note…', fn: () => addNote(s) },
         ...(s.notes ? [{ label: `Notes (${s.notes})…`, fn: () => showNotes(s) }] : []),
         { hd: 'Mark as' + (s.triage ? ' · now: ' + s.triage + (s.triage_by === 'you' ? ' (you)' : '') : '') },
+        ...(s.state === 'needs-you' ? [{ label: 'Not waiting on me', fn: () => post('/api/triage', { key: s.key, label: 'dismissed', by: 'you' }) }] : []),
         ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => post('/api/triage', { entries: { [s.key]: { label: l, by: 'you' } } }) })),
         ...(s.triage_by === 'you' ? [{ label: 'Let the sorter decide', fn: () => post('/api/triage', { entries: { [s.key]: { label: '', by: 'you' } } }) }] : []),
         '-',
