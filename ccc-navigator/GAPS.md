@@ -1,6 +1,6 @@
 # Navigator and Co-pilot: goal, known bugs, work plan
 
-Updated 2026-10-31. Percentages are a judgment, not a measurement.
+Updated 2026-10-31 (evening). Percentages are a judgment, not a measurement.
 
 ## Goal
 
@@ -8,9 +8,9 @@ One place (the Navigator) to see and move everything, plus a Co-pilot that keeps
 
 | Part | Done | Gaps |
 |---|---|---|
-| One place | ~80% | G1, G2, G3, G4, D1-D4, B5, B8 |
-| Co-pilot keeps Uri on top | ~50% | G5, G6, G7, G8, G9 |
-| Co-pilot gives orders | ~10% | G10, G11, G12 |
+| One place | ~92% | G2, G4 (steps 3-5) |
+| Co-pilot keeps Uri on top | ~70% | G9 |
+| Co-pilot gives orders | ~15% | G10, G11 |
 
 ## Known bugs and gaps
 
@@ -39,6 +39,24 @@ One place (the Navigator) to see and move everything, plus a Co-pilot that keeps
 - **G10** No written rules for what the Co-pilot may do without asking Uri.
 - **G11** It does not nudge worker sessions, start jobs or unblock agents on its own.
 - **G12** The Co-pilot row cannot be reached by keyboard or screen reader.
+
+
+## Status (2026-10-31)
+
+| Item | State | PR |
+|---|---|---|
+| D1-D4 session state | done | #36 |
+| G5, G7, G8 check-in reliability | done | #35 |
+| B5, B8, G3, G12 | done | #37 |
+| G6 Top for you + B9 phone project names | done | #38 |
+| G1 reorder projects and groups | done | #39 |
+| G4 issue #14 step 2 (registry, /nav/v1) | done | #40 |
+| G4 issue #14 step 3 (Recent changes + Undo in UI) | in progress | |
+| G4 issue #14 step 4 (CLI: changes, undo, capabilities, do) | in progress | |
+| G4 issue #14 step 5 (docs, deprecate /api) and old-route aliasing | open | |
+| G2, G9 real phone check | needs Uri's phone | |
+| G10, G11 what the Co-pilot may do alone | needs Uri's rules | |
+| B10 renaming an Orca-sourced group loses its manual order position | open, minor | |
 
 ## Work plan
 
