@@ -232,6 +232,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .s:hover .star-b,.s[aria-current="true"] .star-b,.star-b.on{opacity:1}
 .star-b:hover{background:var(--line2);color:var(--text)}.star-b.on{color:var(--accent)}
 .gicon{font-size:14px;line-height:1;flex:none}
+  .repo-h.drop-above{box-shadow:inset 0 2px 0 var(--primary-hi)}
+  .repo-h.drop-below{box-shadow:inset 0 -2px 0 var(--primary-hi)}
+  .grp-h.drop-above{box-shadow:inset 0 2px 0 var(--primary-hi)}
+  .grp-h.drop-below{box-shadow:inset 0 -2px 0 var(--primary-hi)}
 .picker{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:4px}
 .picker button{padding:5px 0!important;text-align:center!important;font-size:17px!important;line-height:1}
 .picker-in{width:calc(100% - 8px);margin:4px;background:var(--bg);border:1px solid var(--line2);border-radius:6px;padding:6px 9px;color:var(--text);font-size:12px;outline:none}
@@ -738,6 +742,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (g) $('#focusCopy').onclick = () => copyText(wsUrl(info.repo.key, g), 'Workspace link copied');
   }
 
+  function getRepoOrderKeys() { return (tree.repos || []).map(r => r.key); }
+  function getGroupOrderKeys(repo) { return (repo.groups || []).map(g => g.name); }
+
   function renderList() {
     flat = [];
     renderPinned();
@@ -779,7 +786,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         }
         if (!g.name) { groupsHtml += `<div class="open ungrouped" data-drop-repo="${esc(repo.key)}" data-drop-group=""><div class="items">${rows}</div></div>`; continue; }
         groupsHtml += `<div class="${gOpen ? 'open' : ''}">
-          <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" aria-expanded="${!!gOpen}">
+          <button type="button" class="grp-h ${g.hidden ? 'ishidden' : ''}" draggable="true" data-toggle="${esc(gk)}" data-drop-repo="${esc(repo.key)}" data-drop-group="${esc(g.name)}" data-grp="${esc(g.name)}" data-repo-key="${esc(repo.key)}" aria-expanded="${!!gOpen}">
             ${CHEV.replace('width="12" height="12"', 'width="10" height="10"')}
             ${tree.icons && tree.icons['g:' + repo.key + '|' + g.name] ? `<span class="gicon">${esc(tree.icons['g:' + repo.key + '|' + g.name])}</span>` : ''}<span class="gname ${g.name ? '' : 'none'}"><bdi>${esc(g.name || 'Ungrouped')}</bdi></span>
             ${g.source === 'orca' ? '<span class="tag orca" title="Orca workspace">🐋</span>' : ''}
@@ -793,7 +800,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const activity = [repoWorking ? `${repoWorking} working` : '', repoNeeds ? `${repoNeeds} needs you` : ''].filter(Boolean).join(' · ');
       const activityCompact = `<span class="livec compact" aria-label="${esc(activity)}" title="${esc(activity)}">${repoWorking ? `<span class="pair"><span class="dot working"></span><span class="num">${repoWorking}</span></span>` : ''}${repoNeeds ? `<span class="pair"><span class="dot needs-you"></span><span class="num">${repoNeeds}</span></span>` : ''}</span>`;
       html += `<div class="${rOpen ? 'open' : ''}">
-        <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
+        <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" draggable="true" data-toggle="${esc(repo.key)}" data-repo-header="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
           ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
           ${(repoWorking || repoNeeds) ? `<span class="livec full">${activity}</span>${activityCompact}` : ''}
           <span class="cnt">${repoCount}</span>
@@ -1239,6 +1246,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const its = g.items, vis = its.filter(s => !s.hidden);
       return [
         { hd: (g.name || 'Ungrouped') + ' · ' + its.length },
+        { label: 'Move up', fn: () => moveGroupBy('up', repo.key, g.name) },
+        { label: 'Move down', fn: () => moveGroupBy('down', repo.key, g.name) },
+        '-',
         { label: 'Show all sessions here (incl. hidden)', fn: () => focusGroup(repo.key, g) },
         { label: 'Copy link to this workspace', fn: () => copyText(wsUrl(repo.key, g), 'Workspace link copied') },
         '-',
@@ -1257,6 +1267,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
     return [
       { hd: repo.name + ' · ' + all.length },
+      { label: 'Move up', fn: () => moveRepoBy('up', repo.key) },
+      { label: 'Move down', fn: () => moveRepoBy('down', repo.key) },
+      '-',
       { label: 'Hide older than 1 day', fn: () => hideKeys(older(vis, 1)) },
       { label: 'Hide older than 7 days', fn: () => hideKeys(older(vis, 7)) },
       { label: 'Hide older than 30 days', fn: () => hideKeys(older(vis, 30)) },
@@ -1313,31 +1326,186 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     select(s.dataset.key); const n = $('#nick'); if (n) { n.focus(); n.select(); }
   });
 
-  // drag a session onto a group header (same repo) to file it
-  let dragKey = null, dragRepo = null;
+  // drag a session onto a group header (same repo) to file it; also drag projects/groups to reorder
+  let dragKey = null, dragRepo = null, dragType = null, dragRepoKey = null, dragGroupName = null;
+  function clearDragMarkers() {
+    document.querySelectorAll('.grp-h.drop,.ungrouped.drop,.repo-h.drop-above,.repo-h.drop-below,.grp-h.drop-above,.grp-h.drop-below').forEach(x => {
+      x.classList.remove('drop','drop-above','drop-below');
+    });
+  }
   $('#list').addEventListener('dragstart', e => {
+    const rh = e.target.closest('.repo-h');
+    if (rh && rh.dataset.repoHeader && !e.target.closest('.dots,.eye,.star-b')) {
+      dragType = 'repo'; dragRepoKey = rh.dataset.repoHeader; dragKey = null; dragRepo = null;
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/x-nav-repo', dragRepoKey); } catch(_){}
+      try { e.dataTransfer.setData('text/plain', dragRepoKey); } catch(_){}
+      return;
+    }
+    const gh = e.target.closest('.grp-h');
+    if (gh && gh.dataset.grp && gh.dataset.repoKey && !e.target.closest('.dots,.eye,.star-b')) {
+      dragType = 'group'; dragRepoKey = gh.dataset.repoKey; dragGroupName = gh.dataset.grp; dragKey = null; dragRepo = null;
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/x-nav-group', dragRepoKey + '|' + dragGroupName); } catch(_){}
+      try { e.dataTransfer.setData('text/plain', dragGroupName); } catch(_){}
+      return;
+    }
     const s = e.target.closest('.s'); if (!s) return;
-    dragKey = s.dataset.key; dragRepo = s.dataset.repo;
-    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragKey);
+    dragType = 'session'; dragKey = s.dataset.key; dragRepo = s.dataset.repo;
+    e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', dragKey); } catch(_){}
   });
   $('#list').addEventListener('dragover', e => {
+    if (dragType === 'repo') {
+      const rh = e.target.closest('.repo-h');
+      if (rh && rh.dataset.repoHeader && rh.dataset.repoHeader !== dragRepoKey) {
+        e.preventDefault(); e.stopPropagation();
+        clearDragMarkers();
+        const rect = rh.getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height/2) rh.classList.add('drop-above'); else rh.classList.add('drop-below');
+        return;
+      }
+      return;
+    }
+    if (dragType === 'group') {
+      const gh = e.target.closest('.grp-h');
+      if (gh && gh.dataset.grp && gh.dataset.repoKey === dragRepoKey && gh.dataset.grp !== dragGroupName) {
+        e.preventDefault(); e.stopPropagation();
+        clearDragMarkers();
+        const rect = gh.getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height/2) gh.classList.add('drop-above'); else gh.classList.add('drop-below');
+        return;
+      }
+      return;
+    }
     const h = e.target.closest('[data-drop-repo]');
-    document.querySelectorAll('.grp-h.drop,.ungrouped.drop').forEach(x => x !== h && x.classList.remove('drop'));
+    clearDragMarkers();
     if (h && dragKey && h.dataset.dropRepo === dragRepo) { e.preventDefault(); h.classList.add('drop'); }
   });
   $('#list').addEventListener('drop', e => {
+    if (dragType === 'repo') {
+      const rh = e.target.closest('.repo-h');
+      if (rh && rh.dataset.repoHeader && rh.dataset.repoHeader !== dragRepoKey) {
+        e.preventDefault(); e.stopPropagation();
+        clearDragMarkers();
+        const rect = rh.getBoundingClientRect();
+        const keys = getRepoOrderKeys();
+        const arr = keys.slice();
+        const from = arr.indexOf(dragRepoKey);
+        const toIdx = arr.indexOf(rh.dataset.repoHeader);
+        if (from >= 0 && toIdx >= 0) {
+          arr.splice(from, 1);
+          let insert = toIdx;
+          if (e.clientY >= rect.top + rect.height/2) insert = toIdx + 1;
+          if (from < toIdx) insert = insert - 1;
+          if (insert < 0) insert = 0;
+          arr.splice(insert, 0, dragRepoKey);
+          // optimistic: reorder in tree
+          const map = {};
+          for (const r of tree.repos) map[r.key] = r;
+          tree.repos = arr.map(k => map[k]).filter(Boolean).concat(tree.repos.filter(r => !arr.includes(r.key)));
+          renderList();
+          post('/api/order', { kind: 'repos', keys: arr }).then(()=>refresh(true)).catch(()=>refresh(true));
+        }
+        dragType=null; dragRepoKey=null; return;
+      }
+      dragType=null; dragRepoKey=null; clearDragMarkers(); return;
+    }
+    if (dragType === 'group') {
+      const gh = e.target.closest('.grp-h');
+      if (gh && gh.dataset.grp && gh.dataset.repoKey === dragRepoKey && gh.dataset.grp !== dragGroupName) {
+        e.preventDefault(); e.stopPropagation();
+        clearDragMarkers();
+        const rect = gh.getBoundingClientRect();
+        const repo = tree.repos.find(r=>r.key===dragRepoKey);
+        if (repo) {
+          const names = getGroupOrderKeys(repo);
+          const arr = names.slice();
+          const from = arr.indexOf(dragGroupName);
+          const toIdx = arr.indexOf(gh.dataset.grp);
+          if (from >= 0 && toIdx >= 0) {
+            arr.splice(from, 1);
+            let insert = toIdx;
+            if (e.clientY >= rect.top + rect.height/2) insert = toIdx + 1;
+            if (from < toIdx) insert = insert - 1;
+            if (insert < 0) insert = 0;
+            arr.splice(insert, 0, dragGroupName);
+            // optimistic reorder groups in repo
+            const gmap = {};
+            for (const g of repo.groups) gmap[g.name] = g;
+            repo.groups = arr.map(n=>gmap[n]).filter(Boolean).concat(repo.groups.filter(g=>!arr.includes(g.name)));
+            renderList();
+            post('/api/order', { kind: 'groups', repo: dragRepoKey, names: arr }).then(()=>refresh(true)).catch(()=>refresh(true));
+          }
+        }
+        dragType=null; dragRepoKey=null; dragGroupName=null; return;
+      }
+      dragType=null; dragRepoKey=null; dragGroupName=null; clearDragMarkers(); return;
+    }
     const h = e.target.closest('[data-drop-repo]'); if (!h || !dragKey) return;
     e.preventDefault(); h.classList.remove('drop');
     if (h.dataset.dropRepo === dragRepo) post('/api/assign', { key: dragKey, repo: dragRepo, group: h.dataset.dropGroup });
-    dragKey = null;
+    dragKey = null; dragType=null;
   });
-  $('#list').addEventListener('dragend', () => { dragKey = null; document.querySelectorAll('.grp-h.drop,.ungrouped.drop').forEach(x => x.classList.remove('drop')); });
+  $('#list').addEventListener('dragend', () => { dragKey = null; dragRepo=null; dragType=null; dragRepoKey=null; dragGroupName=null; clearDragMarkers(); });
+
+  function moveRepoBy(dir, key) {   // key from the ⋯ menu; without it, the focused header (Alt+Arrow)
+    const keys = getRepoOrderKeys();
+    const el = document.activeElement;
+    const rh = !key && el && el.closest ? el.closest('.repo-h') : null;
+    const k = key || (rh && rh.dataset.repoHeader);
+    if (!k) return;
+    const arr = keys.slice();
+    const i = arr.indexOf(k);
+    if (i < 0) return;
+    const j = dir === 'up' ? i-1 : i+1;
+    if (j < 0 || j >= arr.length) return;
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    const map = {};
+    for (const r of tree.repos) map[r.key] = r;
+    tree.repos = arr.map(x=>map[x]).filter(Boolean).concat(tree.repos.filter(r=>!arr.includes(r.key)));
+    renderList();
+    setTimeout(()=>{
+      const nh = document.querySelector('.repo-h[data-repo-header="'+CSS.escape(k)+'"]');
+      if (nh) { nh.focus(); nh.scrollIntoView({block:'nearest'}); }
+    }, 0);
+    post('/api/order', { kind: 'repos', keys: arr }).then(()=>refresh(true)).catch(()=>refresh(true));
+  }
+  function moveGroupBy(dir, repoKey, name) {   // from the ⋯ menu; without them, the focused header (Alt+Arrow)
+    const el = document.activeElement;
+    const gh = !repoKey && el && el.closest ? el.closest('.grp-h') : null;
+    const rk = repoKey || (gh && gh.dataset.repoKey);
+    const k = repoKey ? name : (gh && gh.dataset.grp);
+    if (!rk || !k) return;
+    const repo = tree.repos.find(r=>r.key===rk);
+    if (!repo) return;
+    const names = getGroupOrderKeys(repo);
+    const arr = names.slice();
+    const i = arr.indexOf(k);
+    if (i < 0) return;
+    const j = dir === 'up' ? i-1 : i+1;
+    if (j < 0 || j >= arr.length) return;
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    const gmap = {};
+    for (const g of repo.groups) gmap[g.name] = g;
+    repo.groups = arr.map(x=>gmap[x]).filter(Boolean).concat(repo.groups.filter(g=>!arr.includes(g.name)));
+    renderList();
+    setTimeout(()=>{
+      const nh = document.querySelector('.grp-h[data-grp="'+CSS.escape(k)+'"][data-repo-key="'+CSS.escape(repo.key)+'"]');
+      if (nh) { nh.focus(); nh.scrollIntoView({block:'nearest'}); }
+    }, 0);
+    post('/api/order', { kind: 'groups', repo: repo.key, names: arr }).then(()=>refresh(true)).catch(()=>refresh(true));
+  }
 
   document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
     if (e.key === '/' && !typing) { e.preventDefault(); $('#q').focus(); return; }
     if (e.key === 'Escape' && document.activeElement === $('#q')) { $('#q').value = ''; ui.query = ''; $('#q').blur(); renderList(); return; }
     if (typing && document.activeElement !== $('#q')) return;
+    if (e.altKey && !e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      const el = document.activeElement;
+      if (el && (el.classList.contains('repo-h') || el.closest('.repo-h'))) { e.preventDefault(); moveRepoBy(e.key === 'ArrowUp' ? 'up' : 'down'); return; }
+      if (el && (el.classList.contains('grp-h') || el.closest('.grp-h'))) { e.preventDefault(); moveGroupBy(e.key === 'ArrowUp' ? 'up' : 'down'); return; }
+    }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       if (!flat.length) return;
       e.preventDefault();

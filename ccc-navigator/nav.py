@@ -273,6 +273,16 @@ def item_keys(items):
     return [str(item.get("key")) for item in items if item.get("key")]
 
 
+def resolve_repo_key(tree, needle):
+    repos = matching_repos(tree, needle)
+    if not repos:
+        raise NavError("no project matches %r" % needle)
+    if len(repos) > 1:
+        keys = [str(r.get("key") or "") for r in repos]
+        raise NavError("multiple projects match %r: %s" % (needle, ", ".join(keys)))
+    return str(repos[0].get("key") or "")
+
+
 def filter_items(
     items,
     *,
@@ -563,6 +573,17 @@ def build_parser():
     rename.add_argument("rest", nargs="*", metavar="ARG", help="session KEY, or the NEW_NAME")
     rename.add_argument("--repo", metavar="SUBSTR", help="substring of repo key, name, or path")
     rename.add_argument("--group", metavar="SUBSTR", help="substring of group name")
+
+    order = subparsers.add_parser("order", help="reorder projects or groups")
+    _add_global_options(order, subcommand=True)
+    order_sub = order.add_subparsers(dest="order_kind", required=True)
+    orep = order_sub.add_parser("repos", help="set project order")
+    _add_global_options(orep, subcommand=True)
+    orep.add_argument("keys", nargs="+", metavar="KEY_OR_NAME", help="repo keys or names in order")
+    og = order_sub.add_parser("groups", help="set group order within a project")
+    _add_global_options(og, subcommand=True)
+    og.add_argument("--repo", required=True, metavar="REPO", help="repo key or substring")
+    og.add_argument("names", nargs="+", metavar="NAME", help="group names in order")
 
     audit = subparsers.add_parser("audit", help="summarise projects, groups and stale sessions")
     _add_global_options(audit, subcommand=True)
@@ -1163,6 +1184,40 @@ def cmd_icon(args, client):
     else:
         print_json(result)
     return 0
+
+
+def cmd_order(args, client):
+    tree = client.tree()
+    if args.order_kind == "repos":
+        keys = []
+        for k in args.keys:
+            k = str(k)
+            # try as exact key first
+            if any(str(r.get("key") or "") == k for r in tree.get("repos") or []):
+                keys.append(k)
+                continue
+            try:
+                keys.append(resolve_repo_key(tree, k))
+            except Exception:
+                keys.append(k)
+        resp = client.post("/api/order", {"kind": "repos", "keys": keys})
+        result = {"action": "order.repos", "keys": resp.get("keys") or keys, "ok": bool(resp.get("ok", True))}
+        if args.table:
+            print(", ".join(result["keys"]))
+        else:
+            print_json(result)
+        return 0
+    elif args.order_kind == "groups":
+        repo = resolve_repo_key(tree, args.repo)
+        names = [str(n) for n in args.names]
+        resp = client.post("/api/order", {"kind": "groups", "repo": repo, "names": names})
+        result = {"action": "order.groups", "repo": repo, "names": resp.get("names") or names, "ok": bool(resp.get("ok", True))}
+        if args.table:
+            print(", ".join(result["names"]))
+        else:
+            print_json(result)
+        return 0
+    raise UsageError("bad order kind")
 
 
 def cmd_rename(args, client):
@@ -1949,6 +2004,8 @@ def main(argv=None):
     try:
         if args.command == "ls":
             return cmd_ls(args, client)
+        if args.command == "order":
+            return cmd_order(args, client)
         if args.command in ("hide", "unhide"):
             return cmd_hide(args, client, args.command)
         if args.command == "move":

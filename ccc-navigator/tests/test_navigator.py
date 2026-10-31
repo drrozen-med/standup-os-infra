@@ -727,3 +727,94 @@ class PiTranscript(unittest.TestCase):
         app = navigator.App(args)
         res = app.rename({"kind": "session", "key": "pi:u5", "sid": sid, "engine": "pi", "name": "new name"})
         self.assertIn("pi-busy", res["applied"])
+
+
+class WP5Ordering(unittest.TestCase):
+    def setUp(self):
+        navigator._repo_cache.clear()
+        navigator._origin_cache.clear()
+        self.state = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {},
+                      "repo_order": [], "group_order": {}}
+
+    def build(self, rows, state=None, window="all"):
+        if state is None:
+            state = self.state
+        return navigator.build_tree(rows, state, window, [], "http://ccc")
+
+    def test_set_repo_order_dedupes_and_drops_empties(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = navigator.State(Path(d) / "s.json")
+            st.set_repo_order(["/r/A", "", "/r/B", "/r/A", "   ", "/r/C"])
+            self.assertEqual(st.data["repo_order"], ["/r/A", "/r/B", "/r/C"])
+
+    def test_build_tree_repo_order_puts_projects_first(self):
+        rows = [
+            row("1", "/r/A", "Old work", mins=60 * 24),
+            row("2", "/r/B", "Fresh work"),
+        ]
+        t = self.build(rows, {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {},
+                               "repo_order": ["/r/A"], "group_order": {}})
+        self.assertEqual([r["key"] for r in t["repos"]], ["/r/A", "folder:B"])
+
+    def test_build_tree_starred_inside_repo_order_keeps_position(self):
+        rows = [
+            row("1", "/r/A", "Old work", mins=60 * 24),
+            row("2", "/r/B", "Fresh work"),
+        ]
+        state = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {"r:/r/B": True},
+                 "repo_order": ["/r/A", "/r/B"], "group_order": {}}
+        t = self.build(rows, state)
+        self.assertEqual([r["key"] for r in t["repos"]], ["/r/A", "/r/B"])
+
+    def test_group_order_puts_listed_first_and_no_name_last(self):
+        rows = [
+            row("1", "/r/A", "g1", mins=60),
+            row("2", "/r/A", "g2", mins=30),
+            row("3", "/r/A", "ungrouped", mins=10),
+        ]
+        repo_key = "/r/A"
+        st = {"nicknames": {}, "groups": {repo_key: ["zzz", "aaa"]},
+              "assign": {"claude:1": {"repo": repo_key, "group": "zzz"},
+                         "claude:2": {"repo": repo_key, "group": "aaa"}},
+              "hidden": {}, "pinned": {}, "repo_order": [], "group_order": {repo_key: ["aaa"]}}
+        t = self.build(rows, st)
+        groups = t["repos"][0]["groups"]
+        names = [g["name"] for g in groups]
+        self.assertEqual(names[0], "aaa")
+        self.assertIn("zzz", names)
+        self.assertEqual(names[-1], "")
+
+    def test_rename_group_keeps_position(self):
+        rows = [row("1", "/r/A", "x")]
+        repo_key = "/r/A"
+        st = navigator.State.__new__(navigator.State)
+        st.data = {"nicknames": {}, "groups": {repo_key: ["old"]}, "assign": {"claude:1": {"repo": repo_key, "group": "old"}},
+                   "moved": {}, "desktop_map": {}, "hidden": {}, "pinned": {}, "icons": {}, "repo_names": {}, "notes": {},
+                   "triage": {}, "copilot": "", "hide_log": [], "repo_order": [], "group_order": {repo_key: ["old"]}}
+        st.lock = __import__('threading').RLock()
+        st._save = lambda: None
+        st.rename_group(repo_key, "old", "new")
+        self.assertEqual(st.data["group_order"][repo_key], ["new"])
+        self.assertEqual(st.data["assign"]["claude:1"]["group"], "new")
+
+    def test_remove_group_updates_group_order(self):
+        rows = [row("1", "/r/A", "x")]
+        repo_key = "/r/A"
+        st = navigator.State.__new__(navigator.State)
+        st.data = {"nicknames": {}, "groups": {repo_key: ["old", "keep"]}, "assign": {"claude:1": {"repo": repo_key, "group": "old"}},
+                   "moved": {}, "desktop_map": {}, "hidden": {}, "pinned": {}, "icons": {}, "repo_names": {}, "notes": {},
+                   "triage": {}, "copilot": "", "hide_log": [], "repo_order": [], "group_order": {repo_key: ["old", "keep"]}}
+        st.lock = __import__('threading').RLock()
+        st._save = lambda: None
+        st.remove_group(repo_key, "old")
+        self.assertEqual(st.data["group_order"].get(repo_key), ["keep"])
+        self.assertNotIn("claude:1", st.data["assign"])
+
+    def test_old_state_files_without_these_keys_still_load(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps({"nicknames": {"k": "n"}}))
+            st = navigator.State(p)
+            self.assertEqual(st.data["repo_order"], [])
+            self.assertEqual(st.data["group_order"], {})
+            self.assertEqual(st.data["nicknames"], {"k": "n"})

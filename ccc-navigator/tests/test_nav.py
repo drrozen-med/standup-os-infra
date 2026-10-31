@@ -469,6 +469,17 @@ class NavParser(unittest.TestCase):
         for command, argv in samples.items():
             self.assertEqual(self.parser.parse_args(argv).command, command)
 
+    def test_order_parser_repos_and_groups(self):
+        args = self.parser.parse_args(["order", "repos", "/r/A", "site"])
+        self.assertEqual(args.command, "order")
+        self.assertEqual(args.order_kind, "repos")
+        self.assertEqual(args.keys, ["/r/A", "site"])
+        args = self.parser.parse_args(["order", "groups", "--repo", "R", "a", "b"])
+        self.assertEqual(args.command, "order")
+        self.assertEqual(args.order_kind, "groups")
+        self.assertEqual(args.repo, "R")
+        self.assertEqual(args.names, ["a", "b"])
+
     def test_starred_filter_exists_where_it_should(self):
         for command in ("ls", "hide", "unhide", "move", "star"):
             extra = ["--to", "infra"] if command == "move" else []
