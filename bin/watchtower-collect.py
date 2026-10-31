@@ -310,8 +310,8 @@ def new_flags(current, previous=None):
 
 def new_blocker_count(current, previous=None):
     cur_nums = set(_blockers_of(current))
-    if previous is None:
-        prev_nums = set()
+    if not previous:
+        return 0  # no baseline yet: nothing counts as new
     elif isinstance(previous, list):
         prev_nums = set(previous)
     elif isinstance(previous, dict):
@@ -532,7 +532,7 @@ def render(snapshot, decisions, now):
         has_gh = False
         for r in repos:
             base_repo = baseline.get(r["repo"], {}) if isinstance(baseline, dict) else {}
-            nf = new_flags(r, base_repo)
+            nf = new_flags(r, base_repo) if base_repo else []  # no snapshot from yesterday yet: nothing is "new"
             if (nf or r.get("flags") or r.get("blockers") or r.get("open_prs")
                     or r.get("default_ci") == "red" or r.get("access") is False):
                 has_gh = True
@@ -555,8 +555,10 @@ def render(snapshot, decisions, now):
             lines.append(f"- working: {r['title']} [{r['project']}, {r['engine']}]")
         for r, base_repo, nf in gh_items:
             repo_key = r["repo"]
-            for f in nf:
+            for f in nf[:5]:
                 lines.append(f"- GitHub `{repo_key}`: NEW: {f}")
+            if len(nf) > 5:
+                lines.append(f"- GitHub `{repo_key}`: NEW: {len(nf) - 5} more")
             since = ci_red_since.get(repo_key) if isinstance(ci_red_since, dict) else None
             lines.append(f"- {repo_summary(r, base_repo, since)}")
         lines.append("")
