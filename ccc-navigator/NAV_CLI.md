@@ -384,6 +384,22 @@ python3 nav.py ws "<link>" --table      # project, workspace, path, every sessio
 python3 nav.py ws "<link>"              # same as JSON
 ```
 
+## API v1
+
+```bash
+python3 nav.py capabilities        # list actions/params
+python3 nav.py capabilities --table
+python3 nav.py changes --limit 10 --actor cli --ref nav://session/claude:1234
+python3 nav.py changes --table
+python3 nav.py resolve nav://session/claude:1234
+python3 nav.py find "billing"
+python3 nav.py undo CHANGE_ID
+python3 nav.py do session.star --key claude:1234
+python3 nav.py do session.hide --keys claude:1234 --keys claude:5678
+```
+
+`do` fetches capabilities and builds params at runtime (`ref`/`str`/`enum` → string, `int` → int, `bool` → flag, `refs` → repeatable). Unknown actions suggest close matches. Server errors from actions are raised as `NavError` with code/message and exit non-zero.
+
 ## Phone access (issue #5)
 
 The navigator is reachable from the phone at `https://cmd-m110rk.vera.baby`
