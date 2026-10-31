@@ -50,7 +50,7 @@ PROMPT = """[Automatic check-in, every 15 min. Uri is not typing this.]
 You own Uri's repos. Rules: ~/.ccc-navigator/briefs/COPILOT-OWNER.md (what you may do alone, what stays Uri's) and ~/.ccc-navigator/briefs/RULES.md (workers). Read both if they are not in your context.
 NAV=~/projects/standup-os/ccc-navigator/nav.py
 1. Read `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
-2. Workers waiting on a question: answer it in that session when the answer is inside the rules; otherwise make it one decision for Uri.
+2. Workers waiting on a question: if the answer is inside the rules, read the session's last messages first. Type into it only if it is idle, ends on that question and went quiet under 24 h ago; otherwise start a new session in that repo with a short brief. Questions outside the rules become one decision for Uri.
 3. Blocked, failed or stuck workers: unblock, restart, or hand the job to a new worker (free models first).
 4. Red CI on a default branch, or a stuck PR with no owner: start a free-model worker to fix it. Merge only green PRs reviewed by a second model.
 5. Inbox: close decisions that are verifiably done (`NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`), add new ones only for what is Uri's (`NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`), rank the top 5 (`NAV_ACTOR=copilot python3 $NAV rank <id1> ... --why <id>=<reason>`). Never pick an answer for Uri on a real choice.
