@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import difflib
 import json
 import time
 import os
@@ -669,6 +670,32 @@ def build_parser():
     status = subparsers.add_parser("status", help="show navigator and CCC status")
     _add_global_options(status, subcommand=True)
 
+    caps = subparsers.add_parser("capabilities", help="list API v1 capabilities")
+    _add_global_options(caps, subcommand=True)
+
+    chg = subparsers.add_parser("changes", help="list recent changes")
+    _add_global_options(chg, subcommand=True)
+    chg.add_argument("--limit", type=int)
+    chg.add_argument("--actor")
+    chg.add_argument("--ref")
+
+    undo = subparsers.add_parser("undo", help="undo a change")
+    _add_global_options(undo, subcommand=True)
+    undo.add_argument("change_id")
+
+    do_cmd = subparsers.add_parser("do", help="run an action")
+    _add_global_options(do_cmd, subcommand=True)
+    do_cmd.add_argument("action")
+    do_cmd.add_argument("params", nargs=argparse.REMAINDER)
+
+    resolve_cmd = subparsers.add_parser("resolve", help="resolve a ref")
+    _add_global_options(resolve_cmd, subcommand=True)
+    resolve_cmd.add_argument("ref")
+
+    find_cmd = subparsers.add_parser("find", help="find targets")
+    _add_global_options(find_cmd, subcommand=True)
+    find_cmd.add_argument("text")
+
     return parser
 
 
@@ -678,6 +705,26 @@ def print_json(value):
 
 def print_error(exc):
     print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+
+
+def human_age(ts):
+    """Format a unix timestamp as a short human age like 5m, 3h, 2d."""
+    try:
+        now = time.time()
+        seconds = max(0, int(now - float(ts)))
+    except Exception:
+        return ""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    if seconds < 86400 * 7:
+        return f"{seconds // 86400}d"
+    if seconds < 86400 * 30:
+        return f"{seconds // (86400 * 7)}w"
+    return f"{seconds // (86400 * 30)}mo"
 
 
 def _display_time(value):
@@ -1993,6 +2040,211 @@ def cmd_status(args, client):
     return 0
 
 
+def cmd_capabilities(args, client):
+    res = client.get("/nav/v1/capabilities")
+    if args.table:
+        actions = res.get("actions") or []
+        for act in actions:
+            name = act.get("name", "")
+            mut = "mut" if act.get("mutates") else ""
+            und = "undo" if act.get("undoable") else ""
+            summary = act.get("summary", "")
+            params = act.get("params") or []
+            param_str = ", ".join([f"{p.get('name')}({p.get('kind')}{'*' if p.get('required') else ''})" for p in params])
+            print(f"{name}  {mut}/{und}  {summary}  [{param_str}]")
+        return 0
+    print_json(res)
+    return 0
+
+
+def cmd_changes(args, client):
+    q = []
+    if args.limit is not None:
+        q.append(f"limit={args.limit}")
+    if getattr(args, "actor", None):
+        q.append("actor=" + urllib.parse.quote(str(args.actor)))
+    if getattr(args, "ref", None):
+        q.append("ref=" + urllib.parse.quote(str(args.ref)))
+    path = "/nav/v1/changes" + ("?" + "&".join(q) if q else "")
+    res = client.get(path)
+    if args.table:
+        changes = res.get("changes") or []
+        rows = []
+        for c in changes:
+            age_val = c.get("age") if c.get("age") is not None else c.get("ts")
+            # If it's a number/epoch-like value, format as human age
+            age_str = ""
+            if age_val is not None:
+                # Try to detect if it's epoch seconds
+                try:
+                    # If it's already a string like "5m", keep as-is? But requirement says "from the ts epoch" -> human age like 5m
+                    # Check if it's all digits (epoch) or float
+                    if isinstance(age_val, (int, float)) and age_val > 1_000_000_000:  # looks like epoch
+                        age_str = human_age(age_val)
+                    elif isinstance(age_val, str) and re.match(r'^\d+(\.\d+)?$', age_val):
+                        age_float = float(age_val)
+                        if age_float > 1_000_000_000:
+                            age_str = human_age(age_float)
+                        else:
+                            age_str = age_val
+                    else:
+                        # Might already be formatted or small number
+                        age_str = str(age_val)
+                except Exception:
+                    age_str = str(age_val)
+            rows.append([
+                c.get("id", ""),
+                age_str,
+                c.get("actor", ""),
+                c.get("action", ""),
+                "yes" if c.get("undoable") else "",
+                "yes" if c.get("undone") else "",
+            ])
+        print_table(["ID", "AGE", "ACTOR", "ACTION", "UNDOABLE", "UNDONE"], rows)
+        return 0
+    print_json(res)
+    return 0
+
+
+def cmd_undo(args, client):
+    res = client.post("/nav/v1/actions/undo", {"change": args.change_id})
+    if not res.get("ok"):
+        err = res.get("error") or {}
+        raise NavError(err.get("message") or f"undo failed ({err.get('code')})")
+    if args.table:
+        print_json(res)
+    else:
+        print_json(res)
+    return 0
+
+
+def cmd_resolve(args, client):
+    path = "/nav/v1/resolve?ref=" + urllib.parse.quote(str(args.ref))
+    res = client.get(path)
+    print_json(res)
+    return 0
+
+
+def cmd_find(args, client):
+    path = "/nav/v1/resolve?q=" + urllib.parse.quote(str(args.text))
+    res = client.get(path)
+    print_json(res)
+    return 0
+
+
+def _format_action_help(act):
+    """Generate parameter help for an action."""
+    name = act.get("name", "")
+    summary = act.get("summary") or ""
+    params = act.get("params") or []
+    lines = []
+    if summary:
+        lines.append(summary)
+    if params:
+        lines.append("Parameters:")
+        for p in params:
+            pname = p.get("name", "")
+            kind = p.get("kind") or ""
+            required = bool(p.get("required"))
+            desc = p.get("description") or ""
+            req = "required" if required else "optional"
+            if kind:
+                lines.append(f"  --{pname} <{kind}> ({req}) {desc}".rstrip())
+            else:
+                lines.append(f"  --{pname} ({req}) {desc}".rstrip())
+    else:
+        lines.append("Parameters: none")
+    return "\n".join(lines)
+
+
+def cmd_do(args, client):
+    action = args.action
+    rem = getattr(args, "params") or []
+    # Check for help
+    if rem and rem[0] in ("--help", "-h"):
+        caps = client.get("/nav/v1/capabilities")
+        actions_list = caps.get("actions") or []
+        act = None
+        for a in actions_list:
+            if a.get("name") == action:
+                act = a
+                break
+        if act is None:
+            names = [a.get("name") for a in actions_list]
+            close = difflib.get_close_matches(action, names, n=5, cutoff=0.6)
+            if not close:
+                close = [n for n in names if action in n or n in action]
+            msg = f"unknown action {action}"
+            if close:
+                msg += f"; did you mean: {', '.join(close)}"
+            raise NavError(msg)
+        print(_format_action_help(act))
+        return 0
+    # fetch capabilities to build params
+    caps = client.get("/nav/v1/capabilities")
+    actions_list = caps.get("actions") or []
+    act = None
+    for a in actions_list:
+        if a.get("name") == action:
+            act = a
+            break
+    if act is None:
+        names = [a.get("name") for a in actions_list]
+        close = difflib.get_close_matches(action, names, n=5, cutoff=0.6)
+        if not close:
+            close = [n for n in names if action in n or n in action]
+        msg = f"unknown action {action}"
+        if close:
+            msg += f"; did you mean: {', '.join(close)}"
+        raise NavError(msg)
+    # parse params from remainder: --foo bar or --flag
+    params = {}
+    i = 0
+    params_defs = {p.get("name"): p for p in (act.get("params") or [])}
+    while i < len(rem):
+        tok = rem[i]
+        if tok.startswith("--"):
+            key = tok[2:]
+            pdef = params_defs.get(key)
+            if pdef is None:
+                i += 1
+                continue
+            kind = pdef.get("kind")
+            if kind == "bool":
+                params[key] = True
+                i += 1
+                continue
+            if i + 1 < len(rem) and not rem[i + 1].startswith("--"):
+                val = rem[i + 1]
+                i += 2
+            else:
+                i += 1
+                continue
+            if kind == "int":
+                try:
+                    params[key] = int(val)
+                except Exception:
+                    params[key] = val
+                continue
+            if kind == "refs":
+                if key not in params or not isinstance(params[key], list):
+                    params[key] = []
+                params[key].append(val)
+                continue
+            params[key] = val
+            continue
+        i += 1
+    res = client.post(f"/nav/v1/actions/{action}", params)
+    if not res.get("ok"):
+        err = res.get("error") or {}
+        raise NavError(err.get("message") or f"action failed ({err.get('code')})")
+    if args.table:
+        print_json(res)
+    else:
+        print_json(res)
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2066,6 +2318,18 @@ def main(argv=None):
             return cmd_ws(args, client)
         if args.command == "remote":
             return cmd_remote(args, client)
+        if args.command == "capabilities":
+            return cmd_capabilities(args, client)
+        if args.command == "changes":
+            return cmd_changes(args, client)
+        if args.command == "undo":
+            return cmd_undo(args, client)
+        if args.command == "do":
+            return cmd_do(args, client)
+        if args.command == "resolve":
+            return cmd_resolve(args, client)
+        if args.command == "find":
+            return cmd_find(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2

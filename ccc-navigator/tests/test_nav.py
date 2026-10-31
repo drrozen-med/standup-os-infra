@@ -1,3 +1,4 @@
+import time
 import argparse
 import contextlib
 import io
@@ -625,6 +626,193 @@ class WorkspaceLink(unittest.TestCase):
         self.assertEqual(nav.parse_workspace_link("#g=g:folder:tmp|main")[:2], ("folder:tmp", "main"))
         with self.assertRaises(nav.UsageError):
             nav.parse_workspace_link("http://127.0.0.1:8095/")
+
+
+class NavApiV1(unittest.TestCase):
+    def setUp(self):
+        self.parser = nav.build_parser()
+        self.tree = {"repos": []}
+
+    def test_do_help_prints_params_and_no_post(self):
+        caps = {
+            "actions": [
+                {
+                    "name": "build",
+                    "summary": "Build something",
+                    "params": [
+                        {"name": "count", "kind": "int", "required": True},
+                        {"name": "force", "kind": "bool", "required": False},
+                    ],
+                }
+            ]
+        }
+
+        class CapClient:
+            def __init__(self):
+                self.posts = []
+                self.gets = []
+
+            def tree(self):
+                return {"repos": []}
+
+            def get(self, path):
+                self.gets.append(path)
+                if path == "/nav/v1/capabilities":
+                    return caps
+                return {}
+
+            def post(self, path, payload):
+                self.posts.append((path, payload))
+                return {"ok": True}
+
+        client = CapClient()
+        args = self.parser.parse_args(["do", "build", "--help"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = nav.cmd_do(args, client)
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("count", out)
+        self.assertIn("force", out)
+        self.assertEqual(client.posts, [])
+
+    def test_do_help_with_dash_h_no_post(self):
+        caps = {"actions": [{"name": "test", "params": []}]}
+
+        class CapClient:
+            def __init__(self):
+                self.posts = []
+            def tree(self):
+                return {"repos": []}
+            def get(self, path):
+                if path == "/nav/v1/capabilities":
+                    return caps
+                return {}
+            def post(self, path, payload):
+                self.posts.append((path, payload))
+                return {"ok": True}
+
+        client = CapClient()
+        args = self.parser.parse_args(["do", "test", "-h"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = nav.cmd_do(args, client)
+        self.assertEqual(code, 0)
+        self.assertEqual(client.posts, [])
+
+    def test_do_builds_params_from_fake_capabilities(self):
+        caps = {
+            "actions": [
+                {
+                    "name": "run",
+                    "params": [
+                        {"name": "count", "kind": "int", "required": True},
+                        {"name": "force", "kind": "bool", "required": False},
+                        {"name": "refs", "kind": "refs", "required": False},
+                    ],
+                }
+            ]
+        }
+
+        class CapClient:
+            def __init__(self):
+                self.posts = []
+            def tree(self):
+                return {"repos": []}
+            def get(self, path):
+                if path == "/nav/v1/capabilities":
+                    return caps
+                return {}
+            def post(self, path, payload):
+                self.posts.append((path, payload))
+                return {"ok": True}
+
+        client = CapClient()
+        args = self.parser.parse_args(["do", "run", "--count", "3", "--force", "--refs", "a", "--refs", "b"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = nav.cmd_do(args, client)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(client.posts), 1)
+        path, payload = client.posts[0]
+        self.assertEqual(path, "/nav/v1/actions/run")
+        self.assertEqual(payload.get("count"), 3)
+        self.assertTrue(payload.get("force"))
+        self.assertEqual(payload.get("refs"), ["a", "b"])
+
+    def test_do_unknown_suggests_close_names(self):
+        caps = {"actions": [{"name": "build"}, {"name": "deploy"}]}
+
+        class CapClient:
+            def tree(self):
+                return {"repos": []}
+            def get(self, path):
+                if path == "/nav/v1/capabilities":
+                    return caps
+                return {}
+            def post(self, path, payload):
+                return {"ok": True}
+
+        client = CapClient()
+        args = self.parser.parse_args(["do", "buil"])
+        with self.assertRaises(nav.NavError) as cm:
+            nav.cmd_do(args, client)
+        msg = str(cm.exception)
+        self.assertIn("did you mean: build", msg)
+
+    def test_undo_maps_non_ok_to_naverror(self):
+        class Client:
+            def tree(self):
+                return {"repos": []}
+            def get(self, path):
+                return {}
+            def post(self, path, payload):
+                return {"ok": False, "error": {"message": "cannot undo"}}
+
+        client = Client()
+        args = self.parser.parse_args(["undo", "c1"])
+        with self.assertRaises(nav.NavError):
+            nav.cmd_undo(args, client)
+
+    def test_changes_table_age_formatting(self):
+        now = time.time()   # ages are computed against the real clock
+        changes = {
+            "changes": [
+                {"id": "c1", "ts": now - 300, "actor": "a", "action": "x", "undoable": True},
+                {"id": "c2", "ts": now - 7200, "actor": "b", "action": "y"},
+                {"id": "c3", "ts": now - 172800, "actor": "c", "action": "z"},
+            ]
+        }
+
+        class Client:
+            def tree(self):
+                return {"repos": []}
+            def get(self, path):
+                if path.startswith("/nav/v1/changes"):
+                    return changes
+                return {}
+            def post(self, path, payload):
+                return {"ok": True}
+
+        client = Client()
+        args = self.parser.parse_args(["changes", "--table"])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = nav.cmd_changes(args, client)
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        # Should show human ages like 5m, 2h, 2d
+        for age in ('5m', '2h', '2d'):
+            self.assertIn(age, out)
+
+    def test_parser_for_new_commands(self):
+        p = self.parser
+        self.assertEqual(p.parse_args(["capabilities"]).command, "capabilities")
+        self.assertEqual(p.parse_args(["changes"]).command, "changes")
+        self.assertEqual(p.parse_args(["undo", "abc"]).command, "undo")
+        self.assertEqual(p.parse_args(["do", "build"]).command, "do")
+        self.assertEqual(p.parse_args(["resolve", "x"]).command, "resolve")
+        self.assertEqual(p.parse_args(["find", "x"]).command, "find")
 
 
 if __name__ == "__main__":
