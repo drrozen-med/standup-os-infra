@@ -817,6 +817,8 @@ def _resolve_pattern(path):
     if "-wt-" in base:
         main, wt = base.split("-wt-", 1)
         return os.path.join(head, main), "heuristic", wt
+    if os.path.basename(head).endswith("-wt"):  # ~/projects/<repo>-wt/<package>
+        return head[:-3], "heuristic", base
     return None
 
 
@@ -1055,6 +1057,8 @@ def session_state(r, event=None, now=None):
     now = now or time.time()
     if r.get("needs_approval") or r.get("question_waiting"):
         return "needs-you"
+    if r.get("source") == "outsourcerer" and r.get("job_status") in ("launching", "running"):
+        return "working"
     mtime = event.get("mtime") if event and event.get("mtime") is not None else mtime_of(r)
     age = now - mtime
     if event and event.get("role") == "assistant" and event.get("kind") == "tool_use" and event.get("tool") in ("AskUserQuestion", "ExitPlanMode") and age < 3 * 86400:

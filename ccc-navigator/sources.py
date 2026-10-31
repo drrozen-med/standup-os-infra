@@ -77,10 +77,15 @@ def _read_outsourcerer_job(job_dir: Path, status_file: Path, st):
     verb = meta.get("verb") or ""
 
     prompt = meta.get("prompt") or meta.get("task") or meta.get("message") or ""
-    if prompt:
-        display_name = f"{provider}/{model}: {prompt[:60]}"
-    else:
-        display_name = f"{provider}/{model}: {verb}" if (provider or model) else verb
+    # meta.json has no prompt; the job's own one-line summary ("OSRC::DONE#id <summary>") is the best title
+    summary = next((ln.split(" ", 1)[1] for ln in last_text_full.splitlines()
+                    if ln.startswith("OSRC::") and " " in ln), "")
+    what = (prompt or summary or (f"{verb} in {Path(cwd).name}" if cwd else verb))[:60]
+    display_name = f"{model or provider}: {what}"
+    flag = {"failed": "FAILED", "wedged": "STUCK", "timeout": "TIMED OUT", "blocked": "BLOCKED",
+            "permission-blocked": "BLOCKED", "interrupted": "INTERRUPTED"}.get(status)
+    if flag:
+        display_name = f"{flag} · {display_name}"
 
     is_live = status in ("launching", "running")
 
@@ -117,15 +122,13 @@ def vm251_agents(host="187.124.181.251", ttl=180):
 
     with _vm251_cache_lock:
         now = time.time()
-        if _vm251_cache["at"] > 0 and now - _vm251_cache["at"] < ttl:
+        if (_vm251_cache["at"] > 0 and now - _vm251_cache["at"] < ttl) or _vm251_cache.get("refreshing"):
             return _vm251_cache["val"]
-        # Need refresh
-        need_refresh = True
-    if need_refresh:
-        t = threading.Thread(target=_vm251_refresh, args=(host,), daemon=True)
-        t.start()
-        if _vm251_cache["at"] == 0:  # first ever call: wait briefly
-            t.join(2)
+        _vm251_cache["refreshing"] = True  # one ssh at a time, however often the tree is built
+    t = threading.Thread(target=_vm251_refresh, args=(host,), daemon=True)
+    t.start()
+    if _vm251_cache["at"] == 0:  # first ever call: wait briefly
+        t.join(2)
     return _vm251_cache["val"]
 
 
@@ -142,6 +145,7 @@ def _vm251_refresh(host):
         data = json.loads(proc.stdout)
         rows = []
         generated_at = data.get("generated_at") or time.time()
+        fresh = time.time() - float(generated_at) < 600  # the cron job stopped if older than 10 min
         containers = data.get("containers") or []
         for c in containers:
             cname = c.get("name") or ""
@@ -158,8 +162,8 @@ def _vm251_refresh(host):
                     "folder_path": f"/vm251/{cname}",
                     "display_name": f"{cname}: {cmd[:60]}",
                     "modified": generated_at,
-                    "is_live": True,
-                    "live": True,
+                    "is_live": fresh,
+                    "live": fresh,
                 }
                 rows.append(row)
         age_s = time.time() - float(generated_at)
@@ -167,9 +171,11 @@ def _vm251_refresh(host):
         with _vm251_cache_lock:
             _vm251_cache["at"] = time.time()
             _vm251_cache["val"] = (rows, meta)
+            _vm251_cache["refreshing"] = False
     except Exception as e:
         with _vm251_cache_lock:
             _vm251_cache["at"] = time.time()
+            _vm251_cache["refreshing"] = False
             # return cached/empty without raising
             if _vm251_cache["val"][0]:  # has cached rows
                 meta = dict(_vm251_cache["val"][1])
