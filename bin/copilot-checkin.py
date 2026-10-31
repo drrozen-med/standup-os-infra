@@ -25,6 +25,7 @@ COPILOT_CHECKIN_STATE / COPILOT_CHECKIN_LOG override the paths (for tests).
 import datetime
 import json
 import os
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -116,15 +117,13 @@ def last_activity(key):
 
 
 def online():
-    """True when the network is up: any HTTP answer from the API host counts; DNS/connection failure does not."""
+    """True when the network is up: TCP connect to api.anthropic.com:443 succeeds."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(NET_URL, method="HEAD"), timeout=NET_TIMEOUT):
-            pass
-    except urllib.error.HTTPError:      # an HTTP status came back: we are online
+        s = socket.create_connection(("api.anthropic.com", 443), timeout=NET_TIMEOUT)
+        s.close()
         return True
-    except Exception:
+    except (OSError, socket.timeout, TimeoutError):
         return False
-    return True
 
 
 def woke():
@@ -187,32 +186,56 @@ def alert(st, open_ids, answered, failed, reason):
 def main():
     now = datetime.datetime.now()
     if QUIET[0] <= now.hour < QUIET[1]:
+        st = load_state()
+        st.pop("consec_skip_offline_wake", None)
+        save_state(st)
         return log("skip: quiet hours")
     st = load_state()
     open_ids, answered = decisions()
     if paused(st, open_ids, answered):
+        st.pop("consec_skip_offline_wake", None)
+        save_state(st)
         return log("skip: paused by Uri")
     cp = (get("/api/tree?window=7d").get("copilot") or {}).get("key")
     if not cp:
+        st.pop("consec_skip_offline_wake", None)
+        save_state(st)
         return log("skip: no co-pilot set")
     last, failed, txt = last_activity(cp)
     alert(st, open_ids, answered, failed, " ".join(txt.split())[:80] or "no reply")
     if last:
         ago = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
         if ago < IDLE_MIN:
+            st.pop("consec_skip_offline_wake", None)
+            save_state(st)
             return log("skip: co-pilot active %.0f min ago" % ago)
         if failed and ago < BACKOFF_MIN:     # its last reply was an API/credit error: do not pile more onto it
+            st.pop("consec_skip_offline_wake", None)
+            save_state(st)
             return log("skip: last reply was an error %.0f min ago" % ago)
     if not online():
+        consec = int(st.get("consec_skip_offline_wake") or 0) + 1
+        st["consec_skip_offline_wake"] = consec
+        save_state(st)
+        if consec >= 4:
+            alert(st, open_ids, answered, True, "check-ins have been skipped for 2 hours (thinks it is offline)")
         return log("skip: offline")
     if woke():
+        consec = int(st.get("consec_skip_offline_wake") or 0) + 1
+        st["consec_skip_offline_wake"] = consec
+        save_state(st)
+        if consec >= 4:
+            alert(st, open_ids, answered, True, "check-ins have been skipped for 2 hours (thinks it is offline)")
         return log("skip: just woke")
     today = now.strftime("%Y-%m-%d")
     sent = st.get("sent_count", 0) if st.get("sent_day") == today else 0
     if sent >= MAX_PER_DAY:
+        st.pop("consec_skip_offline_wake", None)
+        save_state(st)
         return log("skip: daily cap")
     code, out = nav("send", cp, PROMPT)
     st["sent_day"], st["sent_count"] = today, sent + 1
+    st.pop("consec_skip_offline_wake", None)
     save_state(st)
     log("sent to %s (exit %d) %s" % (cp, code, out))
 
