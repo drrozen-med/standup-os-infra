@@ -3,6 +3,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -27,9 +28,13 @@ class ClassifyTests(unittest.TestCase):
     def label(self, it, msgs):
         return triage.classify(it, msgs, NOW)[0]
 
-    def test_live_and_flagged_win(self):
-        self.assertEqual(self.label(item(live=True), said("Should I merge?")), "working")
+    def test_state_and_flagged_win(self):
+        self.assertEqual(self.label(item(live=True, state="working"), []), "working")
         self.assertEqual(self.label(item(needs_you=True), []), "needs-you")
+
+    def test_live_alone_does_not_mean_working(self):
+        self.assertEqual(self.label(item(live=True, state="resting"), []), "idle")
+        self.assertEqual(self.label(item(live=True), []), "idle")
 
     def test_question_needs_you_and_reason_is_the_question(self):
         label, reason = triage.classify(item(), said("Done with A.\nShould I also do B?\nNotes below."), NOW)
@@ -49,6 +54,34 @@ class ClassifyTests(unittest.TestCase):
 
     def test_stale_after_three_days(self):
         self.assertEqual(self.label(item(mtime=NOW - 4 * 86400), []), "stale")
+
+
+class RunPassTests(unittest.TestCase):
+    def test_true_mtime_controls_transcript_rereads(self):
+        session = item(sid="x", engine="claude", live=True, state="resting")
+        tree = {"repos": [{"key": "/r", "groups": [{"items": [session]}]}]}
+
+        class Client:
+            def __init__(self):
+                self.reads = 0
+
+            def _request(self, path):
+                if path.startswith("/api/tree"):
+                    return tree
+                self.reads += 1
+                return {"events": [{"type": "assistant", "text": "Done."}]}
+
+            def post(self, path, body):
+                return {"changed": 1}
+
+        client = Client()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(triage, "CACHE", Path(d) / "cache.json"):
+            triage.run_pass(client, now=NOW)
+            triage.run_pass(client, now=NOW)
+            self.assertEqual(client.reads, 1)
+            session["mtime"] += 1
+            triage.run_pass(client, now=NOW)
+            self.assertEqual(client.reads, 2)
 
 
 class StateTests(unittest.TestCase):

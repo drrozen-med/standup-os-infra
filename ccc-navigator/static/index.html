@@ -113,9 +113,13 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .repo-h .name{font:700 13.5px var(--display);letter-spacing:-.005em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chev{flex:none;transition:transform .12s}
 .open>.repo-h .chev,.open>.grp-h .chev{transform:rotate(90deg)}
-.livec{display:flex;align-items:center;gap:5px;color:var(--live);font-size:11.5px;font-weight:600}
+.livec{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;font-weight:600}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--idle)}
-.dot.live{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklab,var(--live) 20%,transparent)}.dot.you{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.dot.working{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklab,var(--live) 20%,transparent);animation:dot-pulse 2.4s ease-in-out infinite}
+.dot.needs-you{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.dot.dormant{opacity:.45}
+@keyframes dot-pulse{50%{box-shadow:0 0 0 5px color-mix(in oklab,var(--live) 8%,transparent)}}
+@media(prefers-reduced-motion:reduce){.dot.working{animation:none}}
 .cnt{color:var(--muted);font-size:11.5px;min-width:18px;text-align:right}
 .grp-h{width:100%;display:flex;align-items:center;gap:6px;padding:5px 16px 5px 34px;background:transparent;border:0;cursor:pointer;text-align:left;color:var(--muted);font-size:11.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase}
 .grp-h:hover{background:var(--hover)}
@@ -481,12 +485,13 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   // a session counts as starred when it, its group or its project is starred
-  const needsYou = s => !!(s.needs_you || s.triage === 'needs-you');
+  const needsYou = s => s.state === 'needs-you';
+  const dotState = s => s && ['working', 'needs-you', 'resting', 'dormant'].includes(s.state) ? s.state : '';
   const isStarred = (s, repo, group) => !!(s.pinned || group.pinned || repo.pinned);
 
   function matches(s, repo, group) {
     if (ui.f.star && !isStarred(s, repo, group)) return false;
-    if (ui.f.live && !s.live) return false;
+    if (ui.f.live && s.state !== 'working') return false;
     if (ui.f.needs && !needsYou(s)) return false;
     const q = ui.query.trim().toLowerCase();
     if (!q) return true;
@@ -494,7 +499,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   const forceOpen = () => ui.query || ui.f.star || ui.f.live || ui.f.needs || ui.focus;
-  const VIEW_ITEMS = [['orca', '🐋  Orca marker on groups'], ['wt', '⎇  Worktree / branch line under sessions'], ['eng', 'Agent pill (Claude, Codex, Devin…)'], ['ago', 'Time since last activity'], ['cnt', 'Counts on projects and groups'], ['livec', '“N live” badge on projects'], ['status', 'Status line (CCC · Pi · Orca)']];
+  const VIEW_ITEMS = [['orca', '🐋  Orca marker on groups'], ['wt', '⎇  Worktree / branch line under sessions'], ['eng', 'Agent pill (Claude, Codex, Devin…)'], ['ago', 'Time since last activity'], ['cnt', 'Counts on projects and groups'], ['livec', 'Working / needs-you counts on projects'], ['status', 'Status line (CCC · Pi · Orca)']];
   function applyView() { for (const [k] of VIEW_ITEMS) $('#side').classList.toggle('v-off-' + k, !ui.view[k]); }
   function openViewMenu(anchor) {
     closeMenu(); menuAnchor = anchor; anchor.classList.add('on'); menuEl.style.width = '';
@@ -521,7 +526,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const cp = tree.copilot, hit = cp && flatSessions().find(x => x.s.key === cp.key);
     const n = decs.open.length;
     box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-current="${!!hit && ui.selected === cp.key}">
-        <span class="dot ${hit && hit.s.needs_you ? 'you' : (hit && hit.s.live ? 'live' : '')}"></span><span class="pn"><bdi>${esc((hit && (hit.s.nick || hit.s.original)) || cp.name || 'Co-pilot')}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
+        <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc((hit && (hit.s.nick || hit.s.original)) || cp.name || 'Co-pilot')}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
       + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-current="${!!ui.inbox}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`;
   }
   function flatSessions() { const out = []; for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) out.push({ s, repo, g }); return out; }
@@ -534,16 +539,16 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
   });
   function renderChips() {
-    let st = 0, lv = 0, nd = 0;
+    let st = 0, working = 0, nd = 0;
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
       if (isStarred(s, r, g)) st++;
-      if (s.live) lv++;
+      if (s.state === 'working') working++;
       if (needsYou(s)) nd++;
     }
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
     applyView();
     renderPinned();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Live', lv, '<span class="dot live"></span>') + c('needs', 'Needs you', nd, '<span class="dot you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -649,7 +654,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     let focusInfo = null;
     for (const repo of tree.repos) {
       if (ui.focus && repo.key !== ui.focus.repo) continue;
-      let groupsHtml = '', repoCount = 0, repoLive = 0;
+      let groupsHtml = '', repoCount = 0, repoWorking = 0, repoNeeds = 0;
       for (const g of repo.groups) {
         if (ui.focus && !isFocusGroup(g)) continue;
         if (ui.focus) focusInfo = { repo, g };
@@ -660,18 +665,20 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         let rows = '';
         for (const s of items) {
           if (tree.copilot && s.key === tree.copilot.key) continue;
-          repoCount++; if (s.live) repoLive++;
+          repoCount++;
+          if (s.state === 'working') repoWorking++;
+          if (needsYou(s)) repoNeeds++;
           if (gOpen && !ui.collapsed[repo.key]) flat.push(s.key);
           const eng = ENGINES.has(s.engine) ? s.engine : 'other';
-          const dot = s.live ? (s.needs_you ? 'you' : 'live') : (needsYou(s) ? 'you' : '');
-          const tri = s.triage && !['idle', 'working'].includes(s.triage) && !s.needs_you ? s.triage : '';
+          const dot = dotState(s);
+          const tri = s.triage && !['idle', 'working'].includes(s.triage) && !needsYou(s) ? s.triage : '';
           rows += `<button type="button" class="s ${s.hidden ? 'ishidden' : ''}" role="treeitem" draggable="true" data-key="${esc(s.key)}" data-repo="${esc(repo.key)}" aria-current="${ui.selected === s.key}">
             <span class="dot ${dot}"></span>
             <span class="mid"><span class="t ${s.nick ? 'nick' : ''}">${s.pinned ? '<span class="pin" title="Starred">★</span> ' : ''}<bdi>${esc(label(s))}</bdi></span>
               <span class="meta">
                 ${s.wt ? `<span class="wt">⎇ ${esc(s.wt)}</span>` : ''}
                 ${s.batch ? `<span>${s.batch} runs</span>` : ''}
-                ${s.needs_you ? '<span class="you">needs you</span>' : ''}
+                ${needsYou(s) ? '<span class="you">needs you</span>' : ''}
                 ${tri ? `<span class="tri ${esc(tri)}" title="${esc((s.triage_by === 'you' ? 'Marked by you' : 'Sorter') + (s.triage_reason ? ': ' + s.triage_reason : ''))}">${esc(tri.replace('-', ' '))}</span>` : ''}
                 ${s.notes ? `<span class="note-m" title="${esc(s.last_note)}">✎ ${s.notes}</span>` : ''}</span></span>
             <span class="eng ${eng}">${esc(s.engine)}</span>
@@ -692,10 +699,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       }
       if (!repoCount) continue;
       const rOpen = forceOpen() || !ui.collapsed[repo.key];
+      const activity = [repoWorking ? `${repoWorking} working` : '', repoNeeds ? `${repoNeeds} needs you` : ''].filter(Boolean).join(' · ');
       html += `<div class="${rOpen ? 'open' : ''}">
         <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
           ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
-          ${repoLive ? `<span class="livec" title="Live = a session with a running process (Claude, Codex), or a Devin session active in the last 10 minutes"><span class="dot live"></span>${repoLive} live</span>` : ''}
+          ${activity ? `<span class="livec">${activity}</span>` : ''}
           <span class="cnt">${repoCount}</span>
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
           <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
@@ -736,7 +744,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (!hit) { main.innerHTML = (ui.inbox || decs.open.length) ? inboxHtml() : overview(); return; }
     const { s, repo } = hit;
     if (chat) {
-      const dotc = s.needs_you ? 'you' : (s.live ? 'live' : '');
+      const dotc = dotState(s);
       main.innerHTML = `<div class="chat-head">
           <button type="button" class="mback" data-mback aria-label="Back to sessions">‹</button>
           <span class="dot ${dotc}"></span>
@@ -791,8 +799,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           </div>
         </div>`;
     const manualGroup = s.group && s.group_source === 'manual';
-    const status = s.needs_you ? 'Live, waiting on you' : (s.live ? 'Live, working' : 'Idle');
-    const dot = s.needs_you ? 'you' : (s.live ? 'live' : '');
+    const status = { working: 'Working', 'needs-you': 'Needs you', resting: 'Resting', dormant: 'Dormant' }[s.state] || 'Unknown';
+    const dot = dotState(s);
     main.innerHTML = `<div class="detail"><button type="button" class="mback" data-mback>‹ Sessions</button>
       <div class="crumb">${esc(repo.name)} <span style="color:var(--dim)">/</span> ${esc(s.group || 'Ungrouped')}${s.group_source === 'orca' ? ' <span class="tag orca" title="Orca workspace">🐋 Orca</span>' : ''}</div>
       <label style="display:flex;flex-direction:column;gap:6px">
@@ -821,7 +829,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         ${s.ccc_label ? `<span class="k">CCC shows it under</span><span class="v">${esc(s.ccc_label)}</span>` : ''}
         ${s.file ? `<span class="k">Transcript</span><span class="v mono">${esc(s.file)}</span>` : ''}
       </div>
-      ${s.batch ? `<div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Runs</span><div class="runs">${s.runs.map(r => `<a href="${esc(r.open_url)}" target="_blank" rel="noopener"><span class="dot ${r.live ? 'live' : ''}" style="margin-top:4px"></span><span style="flex:1;font-family:var(--mono)">${esc(r.sid.slice(0, 8))}</span><span>${esc(r.engine)}</span><span style="color:var(--dim)">${ago(r.mtime)}</span></a>`).join('')}</div></div>` : ''}
+      ${s.batch ? `<div style="display:flex;flex-direction:column;gap:8px"><span class="lbl">Runs</span><div class="runs">${s.runs.map(r => `<a href="${esc(r.open_url)}" target="_blank" rel="noopener"><span class="dot ${dotState(r)}" style="margin-top:4px"></span><span style="flex:1;font-family:var(--mono)">${esc(r.sid.slice(0, 8))}</span><span>${esc(r.engine)}</span><span style="color:var(--dim)">${ago(r.mtime)}</span></a>`).join('')}</div></div>` : ''}
       <div class="actions">
         ${(s.open_url || s.engine === 'pi') && !s.batch ? `<button type="button" class="btn primary" id="toChat">Show conversation</button>` : ''}
         ${s.open_url ? `<a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">Open in CCC</a>` : ''}
@@ -1005,7 +1013,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   function warmOnIdle() {
     if (idleDone || !tree) return; idleDone = true;
     const picks = [];
-    for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) if (s.live || s.pinned || s.needs_you) picks.push(s);
+    for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) if (['working', 'needs-you'].includes(s.state) || s.pinned) picks.push(s);
     for (const k of flat.slice(0, 6)) { const s = itemByKey(k); if (s) picks.push(s); }
     picks.slice(0, 14).forEach((s, i) => setTimeout(() => warm(s), 400 + i * 350));
   }

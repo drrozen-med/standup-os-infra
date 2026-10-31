@@ -28,15 +28,13 @@ import time
 from pathlib import Path
 
 import nav
+import navigator
 
 STALE_SECONDS = 3 * 86400
 CACHE = Path(os.path.expanduser(os.environ.get("CCC_NAV_TRIAGE_CACHE", "~/.ccc-navigator/triage-cache.json")))
 TAIL = 600  # characters of the last message the rules look at
 
-ASK_RE = re.compile(
-    r"(\?\s*$|\bshould i\b|\bwant me to\b|\bshall i\b|\bdo you want\b|\bwould you like\b|\bplease (confirm|approve|choose|decide)"
-    r"|\bwaiting (for|on) (you|your)\b|\byour (call|decision|approval)\b|\blet me know\b)",
-    re.IGNORECASE | re.MULTILINE)
+ASK_RE = navigator.ASK_RE
 BLOCK_RE = re.compile(
     r"(\b(i'?m|i am|we'?re|still|currently) blocked\b|\bblocked (on|by)\b|\bi can(no|')t (proceed|continue|go further)\b"
     r"|\bi was unable to\b|\bstill failing\b|\bpermission denied\b|\bnot (authorized|authenticated)\b"
@@ -60,8 +58,8 @@ def last_assistant_text(messages):
 def classify(item, messages, now=None):
     """(label, reason) for one tree item and its flattened messages."""
     now = now or time.time()
-    if item.get("live"):
-        return "working", "agent is running"
+    if item.get("state") == "working":
+        return "working", "agent is mid-turn"
     if item.get("needs_you"):
         return "needs-you", "waiting on an approval or question in CCC"
     tail = last_assistant_text(messages)[-TAIL:]
@@ -73,6 +71,8 @@ def classify(item, messages, now=None):
         if asked.rstrip("*").endswith(":") and hit + 1 < len(lines):  # a heading: show what follows it
             asked = asked + " " + lines[hit + 1]
         return "needs-you", (asked or first_line)[:160] or "last message asks you something"
+    if item.get("state") == "needs-you":
+        return "needs-you", "last message asks you something"
     if tail and BLOCK_RE.search(tail) and not DONE_RE.search(tail[-200:]):
         return "blocked", first_line
     if tail and DONE_RE.search(tail):
@@ -117,10 +117,11 @@ def run_pass(client, window="7d", dry_run=False, now=None):
             out.append({"key": key, "label": item.get("triage"), "by": "you"})
             continue
         prev = cache.get(key) or {}
-        live_or_flagged = item.get("live") or item.get("needs_you")
-        if prev.get("mtime") == item.get("mtime") and not live_or_flagged and prev.get("messages") is not None:
+        unchanged = (prev.get("mtime") == item.get("mtime")
+                     and (prev.get("state") == item.get("state") or "state" not in prev))
+        if unchanged and prev.get("messages") is not None:
             messages = [tuple(m) for m in prev["messages"]]
-        elif live_or_flagged:
+        elif item.get("state") == "working" or item.get("needs_you"):
             messages = []
         else:
             try:
@@ -129,8 +130,8 @@ def run_pass(client, window="7d", dry_run=False, now=None):
                 errors.append({"key": key, "error": str(exc)[:200]})
                 continue
         label, reason = classify(item, messages, now)
-        if not live_or_flagged:
-            cache[key] = {"mtime": item.get("mtime"), "messages": [[r, t[-TAIL:]] for r, t in messages]}
+        cache[key] = {"mtime": item.get("mtime"), "state": item.get("state"),
+                      "messages": [[r, t[-TAIL:]] for r, t in messages]}
         entries[key] = {"label": label, "reason": reason, "by": "sorter"}
         out.append({"key": key, "title": item.get("nick") or item.get("original"), "label": label, "reason": reason})
     changed = 0
