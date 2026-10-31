@@ -40,6 +40,8 @@ import decisions
 import orca
 import pi_run
 import remote
+import actions
+import refs
 
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
@@ -1755,6 +1757,52 @@ class Handler(BaseHTTPRequestHandler):
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
             return self._send(200, {"key": key, "notes": notes.get(key, [])} if key else {"notes": notes})
+        # nav/v1
+        if u.path.startswith("/nav/v1/"):
+            try:
+                if u.path == "/nav/v1/tree":
+                    q = urllib.parse.parse_qs(u.query)
+                    w = q.get("window", ["1d"])[0]
+                    return self._send(200, self.app.tree(w if w in WINDOWS else "1d", q.get("hidden", ["0"])[0] == "1"))
+                if u.path == "/nav/v1/resolve":
+                    q = urllib.parse.parse_qs(u.query)
+                    ref = q.get("ref", [""])[0]
+                    qv = q.get("q", [""])[0]
+                    tree = self.app.tree("all")
+                    if qv:
+                        return self._send(200, {"ok": True, "candidates": refs.find(qv, tree)})
+                    if ref:
+                        try:
+                            r = refs.parse_ref(ref)
+                        except Exception as e:
+                            if hasattr(e, 'code') and e.code == 'unknown_desktop_id':
+                                return self._send(400, {"ok": False, "error": {"code": "unknown_ref", "message": str(e)}})
+                            return self._send(400, {"ok": False, "error": {"code": getattr(e, 'code', 'bad_ref'), "message": str(e)}})
+                        targets = refs.resolve(r, tree)
+                        return self._send(200, {"ok": True, "targets": targets})
+                    return self._send(200, {"ok": True, "targets": []})
+                if u.path == "/nav/v1/changes":
+                    q = urllib.parse.parse_qs(u.query)
+                    limit = int(q.get("limit", ["50"])[0])
+                    actor = q.get("actor", [None])[0]
+                    refk = q.get("ref", [None])[0]
+                    ch = self.app.changes.recent(limit=limit, actor=actor, key=refk) if hasattr(self.app.changes, 'recent') else []
+                    return self._send(200, {"ok": True, "changes": ch})
+                if u.path == "/nav/v1/capabilities":
+                    caps = []
+                    for name, act in sorted(actions.REGISTRY.items()):
+                        caps.append({
+                            "name": act.name,
+                            "summary": act.summary,
+                            "params": [{"name": p.name, "kind": p.kind, "required": p.required, "choices": list(p.choices), "max_len": p.max_len, "help": p.help} for p in act.params],
+                            "targets": list(act.targets),
+                            "mutates": act.mutates,
+                            "undoable": act.undoable,
+                        })
+                    return self._send(200, {"version": "1", "app_version": app_version(), "actions": caps, "ref_formats": ["nav://session/<engine>:<id>", "nav://group/<project>|<name>", "nav://project/<key>"], "errors": ["unknown_route", "unknown_param", "missing_param", "bad_param", "ambiguous_ref", "unknown_ref", "wrong_target", "bad_actor", "conflict", "not_undoable", "already_undone"]})
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": {"code": "error", "message": str(e)}})
+            return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
         if u.path != "/api/tree":
             return self._proxy()
         if u.path == "/api/tree":
@@ -1778,6 +1826,47 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return self._send(400, {"error": "bad json"})
             return self._remote_api(path, body)
+        # nav/v1
+        if path.startswith("/nav/v1/"):
+            if path.startswith("/nav/v1/actions/"):
+                name = path.split("/nav/v1/actions/")[-1].strip()
+                if not name:
+                    return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
+                if "application/json" not in (self.headers.get("Content-Type") or ""):   # same CSRF guard as /api/*
+                    return self._send(415, {"ok": False, "error": {"code": "bad_content_type", "message": "Content-Type must be application/json"}})
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+                except ValueError:
+                    return self._send(400, {"ok": False, "error": {"code": "bad_json", "message": "bad json"}})
+                try:
+                    res = actions.dispatch(self, name, body)
+                    if isinstance(res, dict) and "ok" in res and "action" in res:
+                        return self._send(200, res)
+                    # normalize
+                    out = {"ok": True, "action": name, "change": res.get("change") if isinstance(res, dict) else None, "result": res}
+                    return self._send(200, out)
+                except actions.ActionError as e:
+                    code = e.code
+                    # map to status
+                    if code == "unknown_route":
+                        return self._send(404, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "ambiguous_ref":
+                        return self._send(400, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "unknown_ref":
+                        return self._send(404, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "wrong_target":
+                        return self._send(400, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "bad_actor":
+                        return self._send(400, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "conflict":
+                        return self._send(409, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "not_undoable":
+                        return self._send(409, {"ok": False, "error": {"code": code, "message": e.message}})
+                    if code == "already_undone":
+                        return self._send(409, {"ok": False, "error": {"code": code, "message": e.message}})
+                    return self._send(400, {"ok": False, "error": {"code": code, "message": e.message, "field": e.field}})
+            return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
         if path not in self.NAV_POST:
             return self._proxy()
         if "application/json" not in (self.headers.get("Content-Type") or ""):
