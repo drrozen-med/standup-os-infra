@@ -5,14 +5,6 @@ import re
 import time
 from pathlib import Path
 
-try:
-    from . import navigator
-except Exception:
-    try:
-        import navigator
-    except Exception:
-        navigator = None
-
 _TRANSCRIPT_TAIL = 256 * 1024
 _TRANSCRIPT_MAX = 2 * 1024 * 1024
 _cache = {}
