@@ -114,6 +114,7 @@
   function eventToNodes(ev, acc) {
     var t = ev.type;
     if (t === 'user_text') {
+      if (/^\[Automatic check-in/.test(ev.text || '')) { acc.push(note(ICONS.dot + ' Automatic check-in')); return; }   // the long standing prompt is not a message from Uri
       var img = (ev.images || []).length;
       acc.push(bubble('me', md(ev.text || '') + (img ? '<div class="stamp">' + img + ' image' + (img > 1 ? 's' : '') + '</div>' : '')));
       return;
