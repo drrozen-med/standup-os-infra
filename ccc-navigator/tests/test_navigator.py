@@ -438,6 +438,20 @@ class DesktopGroups(unittest.TestCase):
         self.assertEqual(keys(navigator.build_tree(rows, base, "all", [], "http://ccc")), ["claude:1"])
         self.assertEqual(keys(navigator.build_tree(rows, base, "all", [], "http://ccc", always="claude:2")), ["claude:1", "claude:2"])
 
+    def test_desktop_archived_sessions_are_left_out(self):
+        navigator._desktop_cache.clear()
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d) / "a" / "b"
+            sub.mkdir(parents=True)
+            (sub / "local_1.json").write_text(json.dumps({"sessionId": "local_1", "cliSessionId": "2", "title": "Old", "isArchived": True}))
+            (sub / "local_2.json").write_text(json.dumps({"sessionId": "local_2", "cliSessionId": "1", "title": "Kept"}))
+            self.assertEqual(navigator.desktop_archived(d), {"2"})
+            rows = [row("1", "/r/A", "One"), row("2", "/r/A", "Two")]
+            base = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {}}
+            keys = lambda t: sorted(i["key"] for r in t["repos"] for g in r["groups"] for i in g["items"])
+            t = navigator.build_tree(rows, base, "all", [], "http://ccc", archived_sids=navigator.desktop_archived(d))
+            self.assertEqual(keys(t), ["claude:1"])
+
     def test_map_state(self):
         with tempfile.TemporaryDirectory() as d:
             st = navigator.State(Path(d) / "s.json")
