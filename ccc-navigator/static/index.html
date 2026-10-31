@@ -1215,6 +1215,101 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     askText({ title: 'Note on “' + label(s) + '”', multiline: true, ok: 'Add note', hint: 'Enter saves, Shift+Enter adds a line' })
       .then(t => { if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); });
   }
+
+  function describeChange(ch) {
+    const action = ch.action || '';
+    const params = ch.params || {};
+    if (action === 'session.rename') return 'Renamed a session';
+    if (action === 'hide' || action === 'session.hide') {
+      const n = params.count || (Array.isArray(params.keys) ? params.keys.length : 1);
+      return n === 1 ? 'Hid 1 item' : `Hid ${n} items`;
+    }
+    if (action === 'unhide' || action === 'session.unhide') return 'Unhid items';
+    if (action === 'decision.answer') return 'Answered a decision';
+    if (action === 'decision.ask') return 'Asked you a decision';
+    if (action === 'decision.reopen') return 'Reopened a decision';
+    if (action === 'undo') return 'Undid a change';
+    if (action === 'decision.rank') return 'Ranked the top decisions';
+    if (action === 'order.repos') return 'Reordered projects';
+    if (action === 'order.groups') return 'Reordered groups';
+    if (action === 'group.rename') return 'Renamed a group';
+    if (action === 'group.remove') return 'Removed a group';
+    if (action === 'repo.rename') return 'Renamed a project';
+    if (action === 'assign') return 'Moved a session';
+    if (action === 'pin' || action === 'star') return 'Updated stars';
+    if (action === 'triage') return 'Updated triage';
+    if (action === 'copilot.set') return 'Changed co-pilot';
+    if (action === 'icon.set') return 'Updated icon';
+    if (action === 'note.add') return 'Added a note';
+    if (action === 'note.remove') return 'Removed a note';
+    if (action === 'desktop.map') return 'Updated desktop group mapping';
+    if (action === 'hide.undo') return 'Undid a hide';
+    return action || 'Changed something';
+  }
+
+  async function openRecentChanges() {
+    openDrawer(false);
+    await dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t">Recent changes</div>
+        <div class="dlg-h">Last 30 changes</div>
+        <div id="chgList" style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto;min-width:0"></div>
+        <div class="dlg-b"><button type="button" class="dlg-x">Close</button></div>`;
+      const listEl = box.querySelector('#chgList');
+      listEl.innerHTML = '<div class="dlg-h">Loading…</div>';
+      fetch('/nav/v1/changes?limit=30')
+        .then(r => r.json())
+        .then(data => {
+          const changes = (data && data.changes) || [];
+          if (!changes.length) {
+            listEl.innerHTML = '<div class="dlg-h">No changes yet.</div>';
+            return;
+          }
+          listEl.innerHTML = changes.map(ch => {
+            const desc = describeChange(ch);
+            const actor = ch.actor === 'you' ? 'you' : (ch.actor || 'system');
+            const when = agoLong(ch.ts);
+            const undone = !!ch.undone;
+            const undoable = ch.undoable && !undone;
+            return `<div role="listitem" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;min-width:0">
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" dir="auto">${esc(desc)}</div>
+                <div style="font-size:11px;color:var(--dim)">${esc(actor)} · ${esc(when)}</div>
+              </div>
+              ${undone ? '<div style="color:var(--dim);font-size:12px;padding:6px 8px;opacity:.7" aria-label="Undone">undone</div>' : (undoable ? `<button type="button" data-undo-ch="${esc(ch.id)}" style="min-height:36px;padding:6px 12px;border-radius:8px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;cursor:pointer">Undo</button>` : '')}
+            </div>`;
+          }).join('');
+          listEl.querySelectorAll('[data-undo-ch]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              btn.disabled = true;
+              try {
+                const resp = await fetch('/nav/v1/actions/undo', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ change: btn.dataset.undoCh })
+                });
+                const res = await resp.json().catch(() => ({}));
+                if (res && res.ok) {
+                  toast('Undone');
+                  close(null);
+                  refresh(true);
+                } else {
+                  const msg = (res && res.error && res.error.message) || 'Could not undo';
+                  toast(msg);
+                  btn.disabled = false;
+                }
+              } catch (e) {
+                toast('Could not undo');
+                btn.disabled = false;
+              }
+            });
+          });
+        })
+        .catch(() => {
+          listEl.innerHTML = '<div class="dlg-h">Could not load changes.</div>';
+        });
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+    });
+  }
   function menuFor(anchor) {
     const kind = anchor.dataset.menu;
     if (kind === 's') {
@@ -1554,6 +1649,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
       <button type="button" class="it" data-dr="dgroups">Claude desktop groups…</button>
       <button type="button" class="it" data-dr="copilot">Co-pilot session…</button>
+      <button type="button" class="it" data-dr="changes">Recent changes…</button>
       <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
   }
@@ -1574,6 +1670,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const a = b.dataset.dr;
     if (a === 'dgroups') { openDrawer(false); return desktopGroups(); }
     if (a === 'copilot') { openDrawer(false); return openCopilotDialog(); }
+    if (a === 'changes') { return openRecentChanges(); }
     if (a === 'check') return checkUpdate(true);
     if (a === 'reload') return location.reload();
     if (a === 'mine') { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); openDrawer(false); return refresh(true); }
