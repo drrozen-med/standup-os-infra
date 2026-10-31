@@ -7,7 +7,8 @@ work (closes stale decisions, files new ones). Skips when:
   - no Co-pilot is set,
   - it is quiet hours (00:00-07:00 local),
   - the Co-pilot was active in the last 10 minutes (Uri is talking to it, or it
-    is still busy).
+    is still busy),
+  - its last reply was an API/usage-limit error less than 4 hours ago.
 Every run appends one line to ~/.ccc-navigator/copilot-checkin.log.
 """
 import datetime
@@ -22,6 +23,7 @@ NAV = os.path.expanduser("~/projects/standup-os/ccc-navigator/nav.py")
 LOG = os.path.expanduser("~/.ccc-navigator/copilot-checkin.log")
 QUIET = (0, 7)          # local hours [start, end)
 IDLE_MIN = 10           # minutes the Co-pilot must have been quiet
+BACKOFF_MIN = 240       # after an API/credit error reply, wait this long before the next check-in
 
 PROMPT = """[Automatic check-in, every 30 min. Uri is not typing this.]
 NAV=~/projects/standup-os/ccc-navigator/nav.py
@@ -43,14 +45,22 @@ def get(path):
 
 
 def last_activity(key):
-    """UTC datetime of the Co-pilot's newest transcript event, or None."""
+    """(UTC datetime of the newest transcript event, whether the newest reply was an API/limit error)."""
     sid = key.split(":", 1)[1]
     ev = get("/api/conversations/" + sid).get("events") or []
+    when = None
     for e in reversed(ev):
         ts = e.get("ts")
         if ts:
-            return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    return None
+            when = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            break
+    failed = False
+    for e in reversed(ev):
+        if e.get("type") == "assistant":
+            txt = " ".join(b.get("text") or "" for b in e.get("blocks") or [] if b.get("kind") == "text")
+            failed = txt.startswith("API Error") or "out of usage credits" in txt
+            break
+    return when, failed
 
 
 def main():
@@ -60,11 +70,13 @@ def main():
     cp = (get("/api/tree?window=7d").get("copilot") or {}).get("key")
     if not cp:
         return log("skip: no co-pilot set")
-    last = last_activity(cp)
+    last, failed = last_activity(cp)
     if last:
         ago = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds() / 60
         if ago < IDLE_MIN:
             return log("skip: co-pilot active %.0f min ago" % ago)
+        if failed and ago < BACKOFF_MIN:     # its last reply was an API/credit error: do not pile more onto it
+            return log("skip: last reply was an error %.0f min ago" % ago)
     r = subprocess.run([sys.executable, NAV, "send", cp, PROMPT],
                        capture_output=True, text=True, timeout=60,
                        env=dict(os.environ, NAV_ACTOR="copilot-checkin"))
