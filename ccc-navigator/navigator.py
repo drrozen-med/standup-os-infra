@@ -22,6 +22,7 @@ import datetime
 import hashlib
 import json
 import os
+import activity
 import re
 import sys
 import threading
@@ -962,6 +963,15 @@ def _read_transcript_activity(path, st):
 
 def transcript_activity(path):
     """Last real user/assistant transcript event, cached by file signature."""
+    try:
+        act = activity.read_activity(path)
+        if act:
+            # adapt to old format
+            ev = {'mtime': act.get('mtime'), 'role': act.get('last',{}).get('role'), 'kind': act.get('last',{}).get('kind'), 'tool': act.get('last',{}).get('tool'), 'text': act.get('final_text') or ''}
+            return ev
+        return None
+    except Exception:
+        pass
     if not path:
         return None
     path = str(Path(path).expanduser())
@@ -1041,14 +1051,23 @@ def is_running(r):
             or time.time() - mtime_of(r) < 600)
 
 
-ASK_RE = re.compile(
-    r"(\?\s*$|\bshould i\b|\bwant me to\b|\bshall i\b|\bdo you want\b|\bwould you like\b|\bplease (confirm|approve|choose|decide)"
-    r"|\bwaiting (for|on) (you|your)\b|\byour (call|decision|approval)\b|\blet me know\b)",
-    re.IGNORECASE | re.MULTILINE)
+try:
+    from activity import ASK_RE
+except Exception:
+    import activity
+    ASK_RE = activity.ASK_RE
 
 
-def session_state(r, event=None, now=None):
-    """One activity state; a live process alone does not mean working."""
+
+def session_state(r, event=None, now=None, dismissed_ts=None):
+    """Thin wrapper using activity.state."""
+    try:
+        st, reason, stopped_reason = activity.state(r, event, now or time.time(), running=is_running(r), dismissed_ts=dismissed_ts)
+        # return just state for backward compat?
+        return st
+    except Exception:
+        pass
+    # fallback old
     now = now or time.time()
     if r.get("needs_approval") or r.get("question_waiting"):
         return "needs-you"
@@ -1091,7 +1110,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
 
     # Stat everything if necessary, but only read transcripts that can be in the window.
     candidates = [r for r in rows if candidate(r)]
-    activities = {id(r): transcript_activity(transcript_path(r)) for r in candidates if transcript_path(r)}
+    activities = {id(r): activity.read_activity(transcript_path(r)) for r in candidates if transcript_path(r)}
 
     def true_mtime(r):
         event = activities.get(id(r))
@@ -1187,13 +1206,25 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         original = (r.get("display_name") if r.get("name_overridden") else None) \
             or r.get("display_name") or r.get("ai_title") or clean(r.get("first_message")) \
             or f"(untitled {sid[:8]})"
-        # the desktop app's title (yours or its own) beats CCC's guess and the titler's
         dt = (desktop or {}).get(sid) if engine == "claude" else None
         name = nick.get(item_key) or ""
         if dt:
             original = dt
             if name and name == (auto_titles or {}).get(item_key):
                 name = ""
+        tri = state.get("triage", {}).get(item_key) or {}
+        dismissed_ts = None
+        if tri.get("label") == "dismissed" and tri.get("by") == "you":
+            dismissed_ts = tri.get("ts")
+        act = activities.get(id(r))
+        try:
+            st_res, reason_res, stopped_reason_res = activity.state(r, act, now, running=is_running(r), dismissed_ts=dismissed_ts)
+        except Exception:
+            st_res = session_state(r, act, now, dismissed_ts=dismissed_ts)
+            reason_res = ""
+            stopped_reason_res = None
+        needs_reason = reason_res if st_res == "needs-you" else ""
+        stopped = bool(stopped_reason_res)
         return {
             "key": item_key, "sid": sid, "engine": engine,
             "original": clean(original, 140),
@@ -1204,11 +1235,14 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "pinned": bool(state.get("pinned", {}).get(item_key)),
             "notes": len(state.get("notes", {}).get(item_key) or []),
             "last_note": ((state.get("notes", {}).get(item_key) or [{}])[-1].get("text") or "")[:200],
-            "triage": (state.get("triage", {}).get(item_key) or {}).get("label") or "",
-            "triage_reason": (state.get("triage", {}).get(item_key) or {}).get("reason") or "",
-            "triage_by": (state.get("triage", {}).get(item_key) or {}).get("by") or "",
-            "needs_you": bool(r.get("needs_approval") or r.get("question_waiting")),
-            "state": session_state(r, activities.get(id(r)), now),
+            "triage": tri.get("label") or "",
+            "triage_reason": tri.get("reason") or "",
+            "triage_by": tri.get("by") or "",
+            "needs_you": bool(st_res == "needs-you" or r.get("needs_approval") or r.get("question_waiting")),
+            "state": st_res,
+            "needs_reason": needs_reason,
+            "stopped": stopped,
+            "stopped_reason": stopped_reason_res or "",
             "mtime": true_mtime(r),
             "cost": float(r.get("cost_usd") or 0),
             "cwd": short(cwd), "branch": r.get("git_branch") or r.get("branch") or "",
@@ -1235,18 +1269,28 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         key = "batch:" + hashlib.sha1((repo["key"] + "|" + pk).encode()).hexdigest()[:12]
         item = base_item(head, key, repo, cwd, wt, ws)
         run_states = [session_state(x, activities.get(id(x)), now) for x in runs]
+        # compute batch states with activity
+        run_states_new = []
+        for x in runs:
+            tri_x = state.get("triage", {}).get(f"{x.get('engine') or 'claude'}:{x.get('session_id')}") or {}
+            dismissed_ts_x = tri_x.get('ts') if (tri_x.get('label') == 'dismissed' and tri_x.get('by') == 'you') else None
+            try:
+                stx, _, _ = activity.state(x, activities.get(id(x)), now, running=is_running(x), dismissed_ts=dismissed_ts_x)
+            except Exception:
+                stx = session_state(x, activities.get(id(x)), now, dismissed_ts=dismissed_ts_x)
+            run_states_new.append(stx)
         item.update({
             "original": clean(head.get("first_message"), 140),
             "batch": len(runs),
             "live": any(is_running(x) for x in runs),
-            "state": ("needs-you" if "needs-you" in run_states else
-                      "working" if "working" in run_states else item["state"]),
+            "state": ("needs-you" if "needs-you" in run_states_new else
+                      "working" if "working" in run_states_new else item["state"]),
             "cost": sum(float(x.get("cost_usd") or 0) for x in runs),
             "runs": [{"sid": str(x.get("session_id")), "engine": x.get("engine") or "",
                       "mtime": true_mtime(x), "live": is_running(x),
-                      "state": session_state(x, activities.get(id(x)), now),
+                      "state": run_states_new[i] if i < len(run_states_new) else session_state(x, activities.get(id(x)), now),
                       "open_url": f"{ccc_base}/?ccc_popout=conversation&conv={urllib.parse.quote(str(x.get('session_id')))}"}
-                     for x in runs[:50]],
+                     for i,x in enumerate(runs[:50])],
         })
         repo["items"].append(item)
 
