@@ -123,6 +123,14 @@ class NavStarredFilters(unittest.TestCase):
         self.assertTrue(nav.has_selector(parser.parse_args(["hide", "--starred"])))
         self.assertFalse(nav.has_selector(parser.parse_args(["hide", "--limit", "3"])))
 
+    def test_rank_argument_parsing(self):
+        parser = nav.build_parser()
+        args = parser.parse_args(["rank", "id1", "id2", "--why", "id1=why1", "--why", "id2=why2"])
+        self.assertEqual(args.id, ["id1", "id2"])
+        self.assertEqual(args.why, ["id1=why1", "id2=why2"])
+        args_clear = parser.parse_args(["rank", "--clear"])
+        self.assertTrue(args_clear.clear)
+
 
 class NavKeyLogic(unittest.TestCase):
     def setUp(self):

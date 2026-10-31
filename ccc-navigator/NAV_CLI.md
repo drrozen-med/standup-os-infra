@@ -323,6 +323,8 @@ python3 nav.py decisions --table              # open questions
 python3 nav.py decisions --answered --table   # recent answers (agents read these)
 python3 nav.py decide crm-fix-1a2b3 hold --note "after the duplicate review"
 python3 nav.py decide crm-fix-1a2b3 --reopen
+python3 nav.py rank crm-fix-1a2b3 other-id --why crm-fix-1a2b3="blocks release"  # top picks
+python3 nav.py rank --clear
 ```
 
 Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edited; its brief drops

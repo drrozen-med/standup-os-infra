@@ -82,6 +82,60 @@ class InboxTests(unittest.TestCase):
         inbox = decisions.Inbox(Path(self.tmp.name) / "o.json", Path(self.tmp.name) / "a.json", Path(self.tmp.name) / "none.json")
         self.assertEqual(inbox.list(), {"open": [], "answered": []})
 
+    def test_set_ranks_behavior(self):
+        inbox = decisions.Inbox(Path(self.tmp.name) / "own.json", Path(self.tmp.name) / "answers.json", self.wt)
+        rec, before = inbox.set_ranks(["aba-price", "later-thing"], why={"aba-price": "x" * 200, "later-thing": "ok"})
+        self.assertEqual(rec["ids"], ["aba-price", "later-thing"])
+        self.assertEqual(len(rec["why"]["aba-price"]), 140)
+        self.assertEqual(rec["why"]["later-thing"], "ok")
+        self.assertIsInstance(before, dict)
+
+        rec2, _ = inbox.set_ranks(["unknown", "aba-price"], why={})
+        self.assertEqual(rec2["ids"], ["aba-price"])
+
+        rec3, _ = inbox.set_ranks(["aba-price", "later-thing", "aba-price"])
+        self.assertEqual(rec3["ids"], ["aba-price", "later-thing"])
+
+        # cap at 7
+        many = [f"d{i}" for i in range(10)]
+        for mid in many:
+            inbox.ask(f"Question {mid} now?", ["yes", "no"], decision_id=mid)
+        rec4, _ = inbox.set_ranks(many)
+        self.assertEqual(len(rec4["ids"]), 7)
+
+        # drops answered ids
+        inbox.answer("d0", "yes")
+        rec5, _ = inbox.set_ranks(["d0", "d1"])
+        self.assertEqual(rec5["ids"], ["d1"])
+
+    def test_clear_ranks_empties(self):
+        inbox = decisions.Inbox(Path(self.tmp.name) / "own.json", Path(self.tmp.name) / "answers.json", self.wt)
+        inbox.set_ranks(["aba-price"])
+        rec, before = inbox.clear_ranks()
+        self.assertEqual(rec["ids"], [])
+        self.assertEqual(rec["why"], {})
+        self.assertIsInstance(before, dict)
+
+    def test_list_ranked_order_and_fields(self):
+        inbox = decisions.Inbox(Path(self.tmp.name) / "own.json", Path(self.tmp.name) / "answers.json", self.wt)
+        inbox.set_ranks(["later-thing", "aba-price"], why={"later-thing": "do first", "aba-price": "also ok"})
+        lst = inbox.list()
+        open_ = lst["open"]
+        self.assertEqual([x["id"] for x in open_], ["later-thing", "aba-price"])
+        self.assertEqual(open_[0]["rank"], 1)
+        self.assertEqual(open_[0]["why"], "do first")
+        self.assertEqual(open_[1]["rank"], 2)
+        self.assertEqual(open_[1]["why"], "also ok")
+
+    def test_answered_ranked_drops_out_of_open(self):
+        inbox = decisions.Inbox(Path(self.tmp.name) / "own.json", Path(self.tmp.name) / "answers.json", self.wt)
+        inbox.set_ranks(["aba-price", "later-thing"])
+        inbox.answer("aba-price", "$79")
+        lst = inbox.list()
+        open_ = lst["open"]
+        self.assertEqual([x["id"] for x in open_], ["later-thing"])
+        self.assertEqual(open_[0].get("rank"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

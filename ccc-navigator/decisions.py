@@ -58,8 +58,15 @@ def _days_left(deadline, now):
 
 
 class Inbox:
-    def __init__(self, own_path, answers_path, watchtower_path=None):
+    def __init__(self, own_path, answers_path, watchtower_path=None, ranks_path=None):
         self.own_path, self.answers_path, self.watchtower_path = own_path, answers_path, watchtower_path
+        if ranks_path is not None:
+            self.ranks_path = ranks_path
+        else:
+            try:
+                self.ranks_path = Path(answers_path).expanduser().with_name("ranks.json")
+            except Exception:
+                self.ranks_path = ranks_path
 
     def _questions(self):
         out = {}
@@ -76,18 +83,74 @@ class Inbox:
         a = _read(self.answers_path, {})
         return a if isinstance(a, dict) else {}
 
+    def ranks(self):
+        r = _read(self.ranks_path, {}) if self.ranks_path else {}
+        return r if isinstance(r, dict) else {}
+
+    def set_ranks(self, ids, why=None, by="you", now=None):
+        ids = [str(x) for x in (ids or [])]
+        why = why or {}
+        if not isinstance(why, dict):
+            why = {}
+        qs = self._questions()
+        ans = self.answers()
+        cleaned = []
+        for i in ids:
+            if i in qs and i not in ans and i not in cleaned:
+                cleaned.append(i)
+            if len(cleaned) >= 7:
+                break
+        clean_why = {}
+        for k, v in why.items():
+            k = str(k)
+            if k in cleaned:
+                clean_why[k] = str(v or "")[:140]
+        rec = {"ids": cleaned, "why": clean_why, "by": by, "ts": now or time.time()}
+        with _lock:
+            before = self.ranks()
+            _write(self.ranks_path, rec)
+        return rec, before
+
+    def clear_ranks(self, by="you", now=None):
+        with _lock:
+            before = self.ranks()
+            rec = {"ids": [], "why": {}, "by": by, "ts": now or time.time()}
+            _write(self.ranks_path, rec)
+        return rec, before
+
     def list(self, now=None, answered_limit=15):
         """{"open": [...], "answered": [...]}: open sorted by priority, then deadline; answered newest first."""
         now = now or time.time()
         qs, ans = self._questions(), self.answers()
+        ranks = self.ranks() or {}
+        rank_ids = ranks.get("ids") or []
+        rank_why = ranks.get("why") or {}
+        if not isinstance(rank_ids, list):
+            rank_ids = []
+        if not isinstance(rank_why, dict):
+            rank_why = {}
         open_, done = [], []
         for d in qs.values():
+            d = dict(d)
             d["days_left"] = _days_left(d.get("deadline"), now) if d.get("deadline") else None
             if d["id"] in ans:
                 done.append(dict(d, answer=ans[d["id"]]))
             else:
+                if d["id"] in rank_ids and d["id"] not in ans:
+                    try:
+                        d["rank"] = rank_ids.index(d["id"]) + 1
+                    except ValueError:
+                        d["rank"] = None
+                    d["why"] = str(rank_why.get(d["id"]) or "")
+                else:
+                    d["rank"] = None
+                    d["why"] = ""
                 open_.append(d)
-        open_.sort(key=lambda d: (int(d.get("priority") or 3), d["days_left"] if d["days_left"] is not None else 9999, d["id"]))
+        ranked = [d for d in open_ if d.get("rank") is not None]
+        rest = [d for d in open_ if d.get("rank") is None]
+        ranked.sort(key=lambda d: int(d.get("rank") or 999))
+        rest.sort(key=lambda d: (int(d.get("priority") or 3), d["days_left"] if d["days_left"] is not None else 9999, d["id"]))
+        open_ = ranked + rest
         done.sort(key=lambda d: -float(d["answer"].get("ts") or 0))
         return {"open": open_, "answered": done[:answered_limit]}
 

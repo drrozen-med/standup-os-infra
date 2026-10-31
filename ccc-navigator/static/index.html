@@ -115,6 +115,10 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .chev{flex:none;transition:transform .12s}
 .open>.repo-h .chev,.open>.grp-h .chev{transform:rotate(90deg)}
 .livec{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;font-weight:600}
+.livec.compact{display:none;align-items:center;gap:6px}
+.livec.compact .pair{display:flex;align-items:center;gap:3px}
+.livec.compact .num{font-size:11px}
+@media (max-width:480px){.livec.full{display:none}.livec.compact{display:flex}}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--idle)}
 .dot.working{background:var(--live);box-shadow:0 0 0 3px color-mix(in oklab,var(--live) 20%,transparent);animation:dot-pulse 2.4s ease-in-out infinite}
 .dot.needs-you{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
@@ -181,6 +185,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-ago .s .ago{display:none}
 .v-off-cnt .cnt{display:none}
 .v-off-livec .livec{display:none}
+.v-off-livec .livec.compact{display:none}
 .v-off-status #status{display:none}
 .v-off-status #status:has(.bad){display:flex}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
@@ -462,17 +467,39 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     return `<span class="due ${d.days_left <= 3 ? 'soon' : ''}">${t}</span>`;
   }
   function inboxHtml() {
-    const card = d => `<div class="dcard" data-dec="${esc(d.id)}">
-        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${due(d)}</div>
+    const card = (d, showWhy) => `<div class="dcard" data-dec="${esc(d.id)}">
+        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${d.rank ? `<span class="pri">#${esc(d.rank)}</span>` : ''}${due(d)}</div>
         <div class="dq" dir="auto">${esc(d.question)}</div>
+        ${showWhy && d.why ? `<div class="dsrc">${esc(d.why)}</div>` : ''}
         <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
         <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt dsend" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
         ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}
       </div>`;
     const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
+    const open = decs.open || [];
+    const ranked = open.filter(d => d && d.rank);
+    let body = '';
+    if (ranked.length) {
+      body += `<h3 style="margin:10px 0 0;font:700 16px var(--display)">Top for you</h3>`;
+      body += ranked.map(d => card(d, true)).join('');
+      const rest = open.filter(d => !d.rank);
+      if (rest.length) {
+        body += `<details class="danswered"><summary>Can wait (${rest.length})</summary>${rest.map(d => card(d, false)).join('')}</details>`;
+      }
+    } else if (open.length) {
+      const top = open.slice(0, 5);
+      const rest = open.slice(5);
+      body += `<h3 style="margin:10px 0 0;font:700 16px var(--display)">Most urgent</h3>`;
+      body += top.map(d => card(d, false)).join('');
+      if (rest.length) {
+        body += `<details class="danswered"><summary>More (${rest.length})</summary>${rest.map(d => card(d, false)).join('')}</details>`;
+      }
+    } else {
+      body += '<p class="hint">Nothing waits on you. Agents add questions with <span class="kbd">nav ask</span>.</p>';
+    }
     return `<div class="detail inbox"><button type="button" class="mback" data-mback>‹ Sessions</button>
       <h2>Decisions <span class="n">${decs.open.length}</span></h2>
-      ${decs.open.length ? decs.open.map(card).join('') : '<p class="hint">Nothing waits on you. Agents add questions with <span class="kbd">nav ask</span>.</p>'}
+      ${body}
       ${done ? `<details class="danswered"><summary>Answered (${decs.answered.length})</summary>${done}</details>` : ''}
     </div>`;
   }
@@ -764,10 +791,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       if (!repoCount) continue;
       const rOpen = forceOpen() || !ui.collapsed[repo.key];
       const activity = [repoWorking ? `${repoWorking} working` : '', repoNeeds ? `${repoNeeds} needs you` : ''].filter(Boolean).join(' · ');
+      const activityCompact = `<span class="livec compact" aria-label="${esc(activity)}" title="${esc(activity)}">${repoWorking ? `<span class="pair"><span class="dot working"></span><span class="num">${repoWorking}</span></span>` : ''}${repoNeeds ? `<span class="pair"><span class="dot needs-you"></span><span class="num">${repoNeeds}</span></span>` : ''}</span>`;
       html += `<div class="${rOpen ? 'open' : ''}">
         <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" data-toggle="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
           ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
-          ${activity ? `<span class="livec">${activity}</span>` : ''}
+          ${(repoWorking || repoNeeds) ? `<span class="livec full">${activity}</span>${activityCompact}` : ''}
           <span class="cnt">${repoCount}</span>
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
           <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
