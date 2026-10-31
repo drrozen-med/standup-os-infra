@@ -101,8 +101,9 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .status .bad{color:var(--accent)}
 
 #pinned{display:flex;flex-direction:column;gap:2px;padding:2px 8px 6px;border-bottom:1px solid var(--line)}
-.pin-row{display:flex;align-items:center;gap:8px;width:100%;text-align:start;background:transparent;border:0;border-radius:8px;padding:9px 10px;color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer}
-.pin-row:hover{background:var(--line2)}.pin-row[aria-current="true"]{background:var(--primary-soft)}
+.pin-row{display:flex;align-items:center;gap:8px;width:100%;text-align:start;background:transparent;border:0;border-radius:8px;padding:9px 10px;color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;min-height:36px}
+.pin-row:hover{background:var(--line2)}.pin-row:focus-visible{outline:2px solid var(--primary-hi);outline-offset:-2px}
+.pin-row[aria-current="true"]{background:var(--primary-soft)}
 .pin-row .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pin-row .ps{margin-inline-start:auto;font-size:11.5px;font-weight:400;color:var(--dim);white-space:nowrap}
 .pin-row .n{background:var(--accent);color:var(--bg);border-radius:999px;font-size:11px;padding:0 7px;line-height:18px}
 .pin-row.dec:not(.has) .pn{color:var(--muted)}
@@ -247,6 +248,16 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .iconbtn{background:transparent;border:1px solid var(--line2);border-radius:8px;width:28px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
 .iconbtn:hover{border-color:var(--line3);color:var(--text);background:var(--hover)}
 .foot{flex-wrap:wrap;gap:6px 10px}
+.cp-list .it,#cpStop{width:100%;background:transparent;border:1px solid var(--line2);border-radius:8px;padding:8px 10px;color:var(--text);font:inherit;font-size:13px;text-align:start;cursor:pointer}
+.cp-list .it:hover,#cpStop:hover{background:var(--hover);border-color:var(--line3)}
+#cpStop{color:var(--muted);text-align:center}
+.foot .frow{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:36px}
+.foot .fleft{display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.foot .btn{min-height:36px}
+@media (max-width: 402px){
+  .foot{flex-direction:column;align-items:stretch;padding:8px 12px}
+  .foot .frow{width:100%}
+}
 .eng{padding:0 6px;border-radius:4px;line-height:16px;font-size:10.5px;font-weight:600;flex:none}
 .eng.claude{color:var(--e-claude);background:color-mix(in oklab,var(--e-claude) 16%,transparent)}
 .eng.codex{color:var(--e-codex);background:color-mix(in oklab,var(--e-codex) 16%,transparent)}
@@ -367,10 +378,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   <div id="pinned"></div>
   <div id="list" role="tree"></div>
   <div class="foot">
-    <span id="hiddenTxt"></span>
-    <button class="btn" id="hiddenBtn" type="button">Show</button>
-    <span id="mineTxt"></span>
-    <button class="btn" id="mineBtn" type="button">Show</button>
+    <div class="frow"><div class="fleft"><span id="hiddenTxt"></span></div><button class="btn" id="hiddenBtn" type="button">Show</button></div>
+    <div class="frow"><div class="fleft"><span id="mineTxt"></span></div><button class="btn" id="mineBtn" type="button">Show</button></div>
   </div>
 </nav>
 <main id="main"></main>
@@ -525,14 +534,26 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const box = $('#pinned'); if (!box || !tree) return;
     const cp = tree.copilot, hit = cp && flatSessions().find(x => x.s.key === cp.key);
     const n = decs.open.length;
-    box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-current="${!!hit && ui.selected === cp.key}">
-        <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc((hit && (hit.s.nick || hit.s.original)) || cp.name || 'Co-pilot')}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
-      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-current="${!!ui.inbox}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`;
+    const cpName = (hit && (hit.s.nick || hit.s.original)) || cp && cp.name || 'Co-pilot';
+    box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0">
+        <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc(cpName)}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
+      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`;
   }
   function flatSessions() { const out = []; for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) out.push({ s, repo, g }); return out; }
   $('#pinned').addEventListener('click', e => {
     if (e.target.closest('#decRow')) return openInbox();
     if (e.target.closest('#pilotRow')) {
+      const cp = tree && tree.copilot; if (!cp) return;
+      if (!flatSessions().some(x => x.s.key === cp.key)) return toast('Co-pilot session not found yet, try again in a moment');
+      ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
+    }
+  });
+  $('#pinned').addEventListener('keydown', e => {
+    const row = e.target.closest('.pin-row'); if (!row) return;
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    if (row.id === 'decRow') return openInbox();
+    if (row.id === 'pilotRow') {
       const cp = tree && tree.copilot; if (!cp) return;
       if (!flatSessions().some(x => x.s.key === cp.key)) return toast('Co-pilot session not found yet, try again in a moment');
       ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
@@ -635,6 +656,49 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (i < 0) return null;
     return { repo: key.slice(0, i), group: key.slice(i + 1), path: m[2] ? decodeURIComponent(m[2]) : '' };
   }
+  function getRecentClaudeSessions(limit = 15) {
+    const out = flatSessions()
+      .filter(x => x.s.engine === 'claude' && !x.s.batch)
+      .sort((a, b) => b.s.mtime - a.s.mtime)
+      .slice(0, limit)
+      .map(x => ({ key: x.s.key, name: x.s.nick || x.s.original || x.s.key, repo: x.repo.name, group: x.g.name }));
+    return out;
+  }
+  function openCopilotDialog() {
+    const cp = tree && tree.copilot;
+    const curName = cp ? ((cp && flatSessions().find(x => x.s.key === cp.key)) ? ((flatSessions().find(x => x.s.key === cp.key).s.nick || flatSessions().find(x => x.s.key === cp.key).s.original)) : (cp.name || cp.key)) : 'None';
+    dialog((box, close) => {
+      box.innerHTML = `<div class="dlg-t">Co-pilot session</div>
+        <div class="dlg-h">Current: ${esc(curName)}</div>
+        <input type="text" id="cpFilter" class="dlg-in" placeholder="Filter sessions">
+        <div id="cpList" class="cp-list" style="max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:4px;margin:8px 0"></div>
+        <button type="button" class="it" id="cpStop">Stop using a Co-pilot</button>
+        <div class="dlg-b"><button type="button" class="dlg-x">Cancel</button></div>`;
+      const listEl = box.querySelector('#cpList');
+      const filterEl = box.querySelector('#cpFilter');
+      const render = () => {
+        const q = (filterEl.value || '').toLowerCase();
+        const items = getRecentClaudeSessions(15).filter(it => !q || it.name.toLowerCase().includes(q) || it.repo.toLowerCase().includes(q));
+        listEl.innerHTML = items.length ? items.map(it => `<button type="button" class="it" data-cp="${esc(it.key)}" style="text-align:left"><div style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(it.name)}</span><span style="font-size:11px;color:var(--dim)">${esc(it.repo)} › ${esc(it.group || 'Ungrouped')}</span></div></button>`).join('') : '<div class="dlg-h">No sessions</div>';
+        listEl.querySelectorAll('[data-cp]').forEach(b => b.addEventListener('click', async () => {
+          await post('/api/copilot', { key: b.dataset.cp });
+          toast('Co-pilot updated');
+          close(null);
+          refresh(true);
+        }));
+      };
+      filterEl.addEventListener('input', render);
+      render();
+      box.querySelector('#cpStop').addEventListener('click', async () => {
+        await post('/api/copilot', { key: '' });
+        toast('Co-pilot cleared');
+        close(null);
+        refresh(true);
+      });
+      box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+      setTimeout(() => filterEl.focus(), 0);
+    });
+  }
   function renderFocusBar(info) {
     const bar = $('#focusBar');
     if (!ui.focus) { bar.hidden = true; return; }
@@ -717,11 +781,13 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const list = $('#list'), top = list.scrollTop;
     list.innerHTML = html;
     list.scrollTop = top;
-    $('#mineTxt').textContent = `${tree.user_hidden || 0} hidden by you`;
+    const hCount = tree.hidden_total || 0;
+    const mCount = tree.user_hidden || 0;
+    $('#mineTxt').textContent = `${mCount} hidden by you`;
     $('#mineBtn').textContent = ui.showMine ? 'Hide list' : 'Show';
-    $('#mineBtn').style.display = (tree.user_hidden || ui.showMine) ? '' : 'none';
-    $('#mineTxt').style.display = (tree.user_hidden || ui.showMine) ? '' : 'none';
-    $('#hiddenTxt').textContent = `${tree.hidden_total} background runs hidden`;
+    $('#mineBtn').style.display = (mCount || ui.showMine) ? '' : 'none';
+    $('#mineTxt').style.display = (mCount || ui.showMine) ? '' : 'none';
+    $('#hiddenTxt').textContent = `${hCount} background runs hidden`;
     $('#hiddenBtn').textContent = ui.showHidden ? 'Hide list' : 'Show';
     renderOv();
   }
@@ -1291,6 +1357,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
       <button type="button" class="it" data-dr="dgroups">Claude desktop groups…</button>
+      <button type="button" class="it" data-dr="copilot">Co-pilot session…</button>
       <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
   }
@@ -1310,6 +1377,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const b = e.target.closest('[data-dr]'); if (!b) return;
     const a = b.dataset.dr;
     if (a === 'dgroups') { openDrawer(false); return desktopGroups(); }
+    if (a === 'copilot') { openDrawer(false); return openCopilotDialog(); }
     if (a === 'check') return checkUpdate(true);
     if (a === 'reload') return location.reload();
     if (a === 'mine') { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); openDrawer(false); return refresh(true); }
