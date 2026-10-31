@@ -93,6 +93,8 @@ class State:
             "triage": dict(d.get("triage") or {}),
             "copilot": str(d.get("copilot") or ""),   # session key of Uri's main assistant
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
+            "repo_order": list(d.get("repo_order") or []),
+            "group_order": {k: list(v) for k, v in (d.get("group_order") or {}).items()},
         }
 
     def _save(self):
@@ -244,6 +246,38 @@ class State:
                 self.data["pinned"].pop(key, None)
             self._save()
 
+    def set_repo_order(self, keys):
+        with self.lock:
+            out = []
+            seen = set()
+            for k in keys or []:
+                k = str(k or "").strip()
+                if not k or k in seen:
+                    continue
+                out.append(k)
+                seen.add(k)
+                if len(out) >= 500:
+                    break
+            self.data["repo_order"] = out
+            self._save()
+
+    def set_group_order(self, repo, names):
+        with self.lock:
+            repo = str(repo or "").strip()
+            out = []
+            seen = set()
+            for n in names or []:
+                n = str(n or "").strip()
+                if not n or n in seen:
+                    continue
+                out.append(n)
+                seen.add(n)
+                if len(out) >= 500:
+                    break
+            if repo:
+                self.data["group_order"][repo] = out
+            self._save()
+
     def set_hidden(self, keys, hidden, label=""):
         """Hide or unhide keys. Every hide is logged so it can be undone later; returns the log id."""
         with self.lock:
@@ -293,6 +327,27 @@ class State:
             for a in self.data["assign"].values():
                 if a.get("repo") == repo and a.get("group") == old:
                     a["group"] = new
+            gorder = self.data.get("group_order") or {}
+            if repo in gorder:
+                lst = list(gorder.get(repo) or [])
+                try:
+                    i = lst.index(old)
+                    lst[i] = new
+                    out = []
+                    seen = set()
+                    for n in lst:
+                        n2 = str(n or "").strip()
+                        if not n2 or n2 in seen:
+                            continue
+                        out.append(n2)
+                        seen.add(n2)
+                    if out:
+                        gorder[repo] = out
+                    else:
+                        gorder.pop(repo, None)
+                except ValueError:
+                    pass
+            self.data["group_order"] = gorder
             self._save()
 
     def remove_group(self, repo, name):
@@ -303,6 +358,14 @@ class State:
             for k in [k for k, a in self.data["assign"].items()
                       if a.get("repo") == repo and a.get("group") == name]:
                 del self.data["assign"][k]
+            gorder = self.data.get("group_order") or {}
+            if repo in gorder:
+                lst = [n for n in (gorder.get(repo) or []) if str(n) != str(name)]
+                if lst:
+                    gorder[repo] = lst
+                else:
+                    gorder.pop(repo, None)
+            self.data["group_order"] = gorder
             self._save()
 
 
@@ -1228,6 +1291,9 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
 
     out_repos = []
     pmap = state.get("pinned", {})
+    repo_order = list((state.get("repo_order") or []))
+    repo_order_set = set(repo_order)
+    group_order_map = state.get("group_order") or {}
     for repo in repos.values():
         if not repo["items"]:
             continue
@@ -1235,8 +1301,12 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         by_group = collections.defaultdict(list)
         for it in repo["items"]:
             by_group[it["group"]].append(it)
-        names = sorted((g for g in by_group if g != UNGROUPED),
-                       key=lambda g: (not pmap.get("g:%s|%s" % (repo["key"], g)), g.lower()))
+        gorder = group_order_map.get(repo["key"]) or []
+        gorder_set = set(gorder)
+        names_manual_ordered = [g for g in gorder if g in by_group and g != UNGROUPED and g in gorder_set]
+        names_rest = sorted((g for g in by_group if g != UNGROUPED and g not in gorder_set),
+                            key=lambda g: (not pmap.get("g:%s|%s" % (repo["key"], g)), g.lower()))
+        names = names_manual_ordered + names_rest
         groups = []
         for g in names + ([UNGROUPED] if UNGROUPED in by_group else []):
             state_rank = {"needs-you": 0, "working": 1}
@@ -1266,7 +1336,17 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             "groups": groups,
             "group_names": sorted(set(manual) | set(names), key=str.lower),
         })
-    out_repos.sort(key=lambda r: (not r["pinned"], -r["latest"]))
+    ordered = []
+    seen_r = set()
+    for k in repo_order:
+        for r in out_repos:
+            if r["key"] == k and k not in seen_r:
+                ordered.append(r)
+                seen_r.add(k)
+                break
+    rest = [r for r in out_repos if r["key"] not in seen_r]
+    rest.sort(key=lambda r: (not r["pinned"], -r["latest"]))
+    out_repos = ordered + rest
 
     return {
         "window": window,
@@ -1580,7 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -1827,6 +1907,37 @@ class Handler(BaseHTTPRequestHandler):
                 st.remove_group(repo, body.get("name"))
             else:
                 return self._send(400, {"error": "unknown action"})
+            cid = self.app.changes.record(self._actor(), "group.%s" % action, {"repo": repo, "name": body.get("name"), "new_name": body.get("new_name")},
+                                          {}, {}, undoable=False)
+            return self._send(200, {"ok": True, "change": cid})
+        elif p == "/api/order":
+            kind = str(body.get("kind") or "")
+            actor = self._actor()
+            if kind == "repos":
+                keys = body.get("keys") if isinstance(body.get("keys"), list) else []
+                keys = [str(k) for k in keys if k]
+                before = list(st.snapshot().get("repo_order") or [])
+                st.set_repo_order(keys)
+                after = list(st.snapshot().get("repo_order") or [])
+                cid = self.app.changes.record(actor, "order.repos", {"keys": keys},
+                                              {"repo_order": {"_": before}}, {"repo_order": {"_": after}},
+                                              undoable=False)
+                return self._send(200, {"ok": True, "keys": after, "change": cid})
+            elif kind == "groups":
+                repo = str(body.get("repo") or "")
+                names = body.get("names") if isinstance(body.get("names"), list) else []
+                names = [str(n) for n in names if n]
+                if not repo:
+                    return self._send(400, {"ok": False, "error": "repo required"})
+                before = list((st.snapshot().get("group_order") or {}).get(repo) or [])
+                st.set_group_order(repo, names)
+                after = list((st.snapshot().get("group_order") or {}).get(repo) or [])
+                cid = self.app.changes.record(actor, "order.groups", {"repo": repo, "names": names},
+                                              {"group_order": {repo: before}}, {"group_order": {repo: after}},
+                                              undoable=False)
+                return self._send(200, {"ok": True, "repo": repo, "names": after, "change": cid})
+            else:
+                return self._send(400, {"ok": False, "error": "bad kind"})
         else:
             return self._send(404, {"error": "not found"})
         return self._send(200, {"ok": True})

@@ -139,6 +139,21 @@ python3 nav.py rename group --repo standup --group infra "Infrastructure"
 python3 nav.py rename repo --repo standup "Standup OS"
 ```
 
+## Order
+
+Drag-and-drop order can also be set from the CLI. Project order is stored in
+`repo_order`; group order per project in `group_order`.
+
+```bash
+# Reorder projects (keys or names; unlisted projects follow today's order).
+python3 nav.py order repos KEY_OR_NAME ...
+python3 nav.py order repos /Users/me/projects/foo other-repo
+
+# Reorder groups within a project (ungrouped always stays last).
+python3 nav.py order groups --repo REPO NAME ...
+python3 nav.py order groups --repo standup infra api scratch
+```
+
 The result reports which backend applied the name (`applied`), for example
 `["navigator", "ccc"]` for a session.
 
