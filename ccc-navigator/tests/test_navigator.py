@@ -753,18 +753,18 @@ class WP5Ordering(unittest.TestCase):
             row("2", "/r/B", "Fresh work"),
         ]
         t = self.build(rows, {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {},
-                               "repo_order": ["/r/A"], "group_order": {}})
-        self.assertEqual([r["key"] for r in t["repos"]], ["/r/A", "folder:B"])
+                               "repo_order": ["folder:A"], "group_order": {}})
+        self.assertEqual([r["key"] for r in t["repos"]], ["folder:A", "folder:B"])
 
     def test_build_tree_starred_inside_repo_order_keeps_position(self):
         rows = [
             row("1", "/r/A", "Old work", mins=60 * 24),
             row("2", "/r/B", "Fresh work"),
         ]
-        state = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {"r:/r/B": True},
-                 "repo_order": ["/r/A", "/r/B"], "group_order": {}}
+        state = {"nicknames": {}, "groups": {}, "assign": {}, "hidden": {}, "pinned": {"r:folder:B": True},
+                 "repo_order": ["folder:A", "folder:B"], "group_order": {}}
         t = self.build(rows, state)
-        self.assertEqual([r["key"] for r in t["repos"]], ["/r/A", "/r/B"])
+        self.assertEqual([r["key"] for r in t["repos"]], ["folder:A", "folder:B"])
 
     def test_group_order_puts_listed_first_and_no_name_last(self):
         rows = [
@@ -772,7 +772,7 @@ class WP5Ordering(unittest.TestCase):
             row("2", "/r/A", "g2", mins=30),
             row("3", "/r/A", "ungrouped", mins=10),
         ]
-        repo_key = "/r/A"
+        repo_key = "folder:A"
         st = {"nicknames": {}, "groups": {repo_key: ["zzz", "aaa"]},
               "assign": {"claude:1": {"repo": repo_key, "group": "zzz"},
                          "claude:2": {"repo": repo_key, "group": "aaa"}},

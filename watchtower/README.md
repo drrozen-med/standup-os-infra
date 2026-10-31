@@ -27,6 +27,9 @@ open PRs (CI state, idle days), open issues labelled `release-blocker` /
 
 `brief.md` lists open decisions first (priority, then deadline, with days left),
 then one section per lane with the live picture and GitHub flags together.
+The GitHub part keeps a dated 3-day history of per-repo flags in `github-prev.json`;
+flags new since the last snapshot older than 20 hours are listed first, prefixed `NEW:`,
+followed by one summary line per repo such as `boardsBridge: CI red on main (since 2026-10-29), 20 open PRs (5 CI red, 3 idle 7d+), 47 blocker issues (2 new)`.
 
 It never writes to GitHub or to any session, and never merges, deploys, spends
 or messages anyone.

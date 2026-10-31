@@ -63,10 +63,50 @@
         "standup-os-infra",
         "standup-os-core",
         "standup-os-api",
-        "standup-os-api-backend"
+        "standup-os-api-backend",
+        "superset-state-backups"
       ],
       "match": [
         "standup-os"
+      ]
+    },
+    "vera": {
+      "title": "Vera",
+      "repos": [
+        "vera"
+      ],
+      "match": [
+        "vera"
+      ]
+    },
+    "private-clinic": {
+      "title": "Private Clinic",
+      "repos": [
+        "private_clinic"
+      ],
+      "match": [
+        "private_clinic",
+        "private clinic",
+        "private_celinic"
+      ]
+    },
+    "nursebridge": {
+      "title": "NurseBridge Prep",
+      "repos": [
+        "NurseBridge-prep"
+      ],
+      "match": [
+        "nursebridge"
+      ]
+    },
+    "road-trip": {
+      "title": "Road Trip Companion",
+      "repos": [
+        "road-trip-companion"
+      ],
+      "match": [
+        "road-trip",
+        "road trip"
       ]
     }
   }
