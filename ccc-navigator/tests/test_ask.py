@@ -208,6 +208,68 @@ class HandlerTests(unittest.TestCase):
                                    content_type="text/plain")
         self.assertEqual(st, 415)
 
+    def test_answer_to_moved_session_is_handed_off(self):
+        cookie = self.pair()
+        navigator.Handler.app.deliver = lambda key, text: "moved"
+        navigator.Handler.app.moved_reply = lambda sid, text: {"ok": False, "error": "moved", "text": text, "sid": sid}
+        st, _, body = self.req("POST", "/api/ask/answer", cookie=cookie,
+                               body={"key": "claude:abc123", "source": "wrap", "text": "Yes"},
+                               origin="https://" + HOST)
+        self.assertEqual(st, 409)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "moved", "text": "Yes", "sid": "abc123"})
+
+    def test_reply_box_to_moved_session_never_reaches_ccc(self):
+        cookie = self.pair()
+        navigator.Handler.app.moved = lambda sid: sid == "abc123"
+        navigator.Handler.app.moved_reply = lambda sid, text: {"ok": False, "error": "moved", "text": text}
+        st, _, body = self.req("POST", "/api/inject-input", cookie=cookie,
+                               body={"session_id": "abc123", "text": "hold on", "mode": "send"},
+                               origin="https://" + HOST)
+        self.assertEqual(st, 409)
+        self.assertEqual(json.loads(body)["text"], "hold on")
+        # a session with one copy goes on to CCC (unreachable here, so the proxy answers 502)
+        st, _, _ = self.req("POST", "/api/inject-input", cookie=cookie,
+                            body={"session_id": "other", "text": "x", "mode": "send"},
+                            origin="https://" + HOST)
+        self.assertEqual(st, 502)
+
+
+class MovedSessionTests(unittest.TestCase):
+    """A session's log copied into a second project folder (the session moved): read the newest
+    copy, and never resume it through CCC, which picks the old copy and forks the session."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        (root / "old").mkdir(); (root / "new").mkdir(); (root / "solo").mkdir()
+        self.old, self.new = root / "old" / "s1.jsonl", root / "new" / "s1.jsonl"
+        self.old.write_text("{}\n"); self.new.write_text("{}\n")
+        os.utime(self.old, (time.time() - 3600,) * 2)
+        (root / "solo" / "s2.jsonl").write_text("{}\n")
+        self.copies = navigator.transcript_copies(str(root))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_only_sessions_with_two_copies_are_listed_newest_first(self):
+        self.assertEqual(self.copies, {"s1": [str(self.new), str(self.old)]})
+
+    def test_rows_point_at_newest_copy(self):
+        rows = [{"session_id": "s1", "engine": "claude", "jsonl_path": str(self.old)},
+                {"session_id": "s2", "engine": "claude", "jsonl_path": "/x/s2.jsonl"},
+                {"session_id": "s1", "engine": "codex", "jsonl_path": str(self.old)}]
+        out = navigator.use_newest_copy(rows, self.copies)
+        self.assertEqual(out[0]["jsonl_path"], str(self.new))
+        self.assertEqual(out[0]["ccc_jsonl_path"], str(self.old))
+        self.assertEqual(out[1], rows[1])
+        self.assertEqual(out[2], rows[2])
+
+    def test_deliver_refuses_moved_session(self):
+        fake = SimpleNamespace(args=SimpleNamespace(pi_dir=self.tmp.name), moved=lambda sid: sid == "s1",
+                               ccc=SimpleNamespace(base="http://127.0.0.1:9"))
+        self.assertEqual(navigator.App.deliver(fake, "claude:s1", "hi"), "moved")
+        self.assertTrue(navigator.App.deliver(fake, "claude:s2", "hi").startswith("failed"))
+
 
 if __name__ == '__main__':
     unittest.main()

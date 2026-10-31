@@ -412,7 +412,7 @@ class CCCSource:
             url = self.base + "/api/conversations?all=1&compact=1"
             with urllib.request.urlopen(url, timeout=6) as r:
                 d = json.load(r)
-            rows = d.get("conversations") or []
+            rows = use_newest_copy(d.get("conversations") or [])
             meta = {"ok": True, "ms": round((time.time() - t0) * 1000), "count": len(rows)}
             self._good = (rows, time.time())
             try:
@@ -431,6 +431,54 @@ class CCCSource:
             # a failed fetch costs the connect timeout, so back off: retry after 2x ttl
             self._val, self._at = (rows, meta), time.time() + (0 if meta["ok"] else self.ttl)
             self._busy = False
+
+
+CLAUDE_PROJECTS = os.environ.get("CCC_NAV_CLAUDE_PROJECTS", "~/.claude/projects")
+_copies = {"at": 0.0, "val": {}}
+
+
+def transcript_copies(root=CLAUDE_PROJECTS, ttl=30.0):
+    """Claude session id -> its .jsonl paths, newest first, for sessions whose log sits in more than
+    one project folder. Claude copies the log when a session moves folders; CCC keeps reading, and
+    resuming, whichever copy it finds first, often the old one. Rescanned at most every `ttl` s."""
+    if time.time() - _copies["at"] < ttl and root == CLAUDE_PROJECTS:
+        return _copies["val"]
+    seen: dict[str, list[str]] = {}
+    try:
+        dirs = [d for d in os.scandir(Path(root).expanduser()) if d.is_dir()]
+    except OSError:
+        dirs = []
+    for d in dirs:
+        try:
+            for f in os.scandir(d.path):
+                if f.name.endswith(".jsonl"):
+                    seen.setdefault(f.name[:-6], []).append(f.path)
+        except OSError:
+            continue
+    out = {}
+    for sid, paths in seen.items():
+        if len(paths) > 1:
+            def mt(p):
+                try:
+                    return os.stat(p).st_mtime
+                except OSError:
+                    return 0.0
+            out[sid] = sorted(paths, key=mt, reverse=True)
+    if root == CLAUDE_PROJECTS:
+        _copies.update(at=time.time(), val=out)
+    return out
+
+
+def use_newest_copy(rows, copies=None):
+    """Point each Claude row at the newest copy of its log (CCC's own pick kept as ccc_jsonl_path)."""
+    copies = transcript_copies() if copies is None else copies
+    out = []
+    for r in rows:
+        paths = copies.get(str(r.get("session_id") or "")) if (r.get("engine") or "claude") == "claude" else None
+        if paths and r.get("jsonl_path") and r["jsonl_path"] != paths[0]:
+            r = dict(r, jsonl_path=paths[0], ccc_jsonl_path=r["jsonl_path"])
+        out.append(r)
+    return out
 
 
 DESKTOP_DIR = os.environ.get("CCC_NAV_DESKTOP_DIR", "~/Library/Application Support/Claude/claude-code-sessions")
@@ -1424,6 +1472,17 @@ class App:
                            "~/projects/standup-os/watchtower/decisions.json"))
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
 
+    def moved(self, sid):
+        """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
+        fork it, unseen by the Claude app (2026-10-31). Only the Claude app can answer it safely."""
+        return bool(sid) and sid in transcript_copies()
+
+    def moved_reply(self, sid, text):
+        out = {"ok": False, "error": "moved", "text": text,
+               "message": "This session moved folders, so only the Claude app can answer it safely."}
+        out.update({k: v for k, v in desktop_links(sid).items() if k in ("url", "mac_url")})
+        return out
+
     def deliver(self, session_key, text):
         """Send text into an agent session: Pi by resuming it, everything else through CCC. -> short status."""
         engine, _, sid = str(session_key or "").partition(":")
@@ -1432,6 +1491,8 @@ class App:
         if engine == "pi":
             r = pi_run.send(self.args.pi_dir, sid, text)
             return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
+        if self.moved(sid):
+            return "moved"
         try:
             body = json.dumps({"session_id": sid, "text": text, "mode": "send"}).encode()
             base = urllib.parse.urlparse(self.ccc.base)
@@ -1792,12 +1853,14 @@ class Handler(BaseHTTPRequestHandler):
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
-    def _proxy(self):
+    def _proxy(self, body=None):
         """Same-origin passthrough to CCC so its conversation view can be themed.
-        Streams (SSE) chunk by chunk; the popout page gets our skin injected."""
+        Streams (SSE) chunk by chunk; the popout page gets our skin injected.
+        `body`: the request body when the caller already read it."""
         base = urllib.parse.urlparse(self.app.ccc.base)
-        n = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(n) if n else None
+        if body is None:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else None
         hdrs = {k: v for k, v in self.headers.items()
                 if k.lower() not in ("host", "connection", "accept-encoding", "origin", "referer", "content-length")}
         hdrs["Host"] = base.netloc
@@ -1996,6 +2059,16 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(409, {"ok": False, "error": {"code": code, "message": e.message}})
                     return self._send(400, {"ok": False, "error": {"code": code, "message": e.message, "field": e.field}})
             return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
+        if path == "/api/inject-input":   # the chat's reply box: same moved-session guard as deliver()
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                b = json.loads(raw or b"{}")
+            except ValueError:
+                b = {}
+            sid = str(b.get("session_id") or "") if isinstance(b, dict) else ""
+            if self.app.moved(sid):
+                return self._send(409, self.app.moved_reply(sid, str(b.get("text") or "")))
+            return self._proxy(raw)
         if path not in self.NAV_POST:
             return self._proxy()
         ctype = self.headers.get("Content-Type") or ""
@@ -2138,6 +2211,8 @@ class Handler(BaseHTTPRequestHandler):
                 if text is None:
                     text = ''
                 resd = self.app.deliver(key, str(text))
+                if resd == "moved":
+                    return self._send(409, self.app.moved_reply(key.partition(":")[2], str(text)))
                 if resd != "sent":
                     return self._send(500, {"error": resd or "deliver failed"})
                 self.app.changes.record(self._actor(), "session.answer", {"key": key, "source": source}, {}, {"answer": {"source": source, "text": str(text)}}, undoable=False)
