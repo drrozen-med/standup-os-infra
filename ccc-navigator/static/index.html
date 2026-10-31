@@ -876,7 +876,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           live: !!s.live,
           key: s.key,
           onEngine: () => {},
-          onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); toast('Not sent: ' + m); }
+          onError: (m) => { const e = $('#cmp'); if (e) e.setAttribute('title', m); toast('Not sent: ' + m); },
+          onHandoff: (m, link) => toast(m, link ? { label: 'Open in Claude', sticky: true,
+            fn: () => { if (link.startsWith('claude:')) location.href = link; else window.open(link, '_blank', 'noopener'); } } : null)
         });
       };
       wire();

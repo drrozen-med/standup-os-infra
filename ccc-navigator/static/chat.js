@@ -537,6 +537,7 @@
         body: JSON.stringify({ key: key, source: source, text: text, answers: answers })
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (d) {
+          if (d && d.error === 'moved') { handOff(d); throw null; }
           if (!r.ok || d.error) { throw new Error((d && d.error) || ('HTTP ' + r.status)); }
           return d;
         });
@@ -550,8 +551,23 @@
         load();
         schedule();
       }).catch(function (e) {
-        if (typeof toast === 'function') toast('Not sent: ' + (e.message || e));
+        if (e && opts.onError) opts.onError(e.message || String(e));
       });
+    }
+
+    // The session moved folders, so the Navigator can't reach it (it would answer an old copy).
+    // Copy the answer and let Uri open the session in the Claude app to paste it.
+    function handOff(d) {
+      var t = d.text || '';
+      try { navigator.clipboard.writeText(t); } catch (e) {
+        var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e2) {} ta.remove();
+      }
+      var phone = /iPhone|iPad|Android|Mobi/i.test(navigator.userAgent);
+      var link = phone ? (d.url || d.mac_url) : (d.mac_url || d.url);
+      var msg = (d.message || 'Only the Claude app can answer this session.') + (t ? ' Your answer is copied: paste it there.' : '');
+      if (opts.onHandoff) opts.onHandoff(msg, link);
+      else if (opts.onError) opts.onError(msg);
     }
 
     function pollAsk() {
@@ -591,6 +607,10 @@
         .then(function (r) {
           // a 502 from the CCC proxy is {"error": ...} with no "ok": treat any HTTP error as a failed send
           return r.json().catch(function () { return {}; }).then(function (d) {
+            if (d && d.error === 'moved') {
+              pending = pending.filter(function (x) { return x !== p; });
+              decorate(); handOff(d); throw null;
+            }
             if (!r.ok || (d && d.ok === false)) throw new Error((d && d.error) || 'send failed (HTTP ' + r.status + ')');
             return d;
           });
@@ -603,6 +623,7 @@
           decorate(); schedule();
         })
         .catch(function (e) {
+          if (e === null) return;            // handed off to the Claude app (handOff)
           p.state = 'failed'; p.err = e.message || 'Could not send';
           decorate();
           if (opts.onError) opts.onError(p.err);
