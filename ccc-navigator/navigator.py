@@ -1581,7 +1581,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, got[0], got[1])
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot",
-                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask"}
+                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1754,6 +1754,20 @@ class Handler(BaseHTTPRequestHandler):
                     cid = self.app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}},
                                                   {"answers": {did: None}})
                     return self._send(200, {"ok": True, "id": did, "change": cid})
+                if p == "/api/decisions/rank":
+                    ids = body.get("ids") or []
+                    why = body.get("why") or {}
+                    if not isinstance(ids, list):
+                        ids = []
+                    if not isinstance(why, dict):
+                        why = {}
+                    if not ids:
+                        rec, before = self.app.inbox.clear_ranks(by=actor)
+                        cid = self.app.changes.record(actor, "decision.rank_clear", {}, {"ranks": before}, {"ranks": rec}, undoable=False)
+                        return self._send(200, {"ok": True, "ranks": rec, "change": cid})
+                    rec, before = self.app.inbox.set_ranks(ids, why=why, by=actor)
+                    cid = self.app.changes.record(actor, "decision.rank", {"ids": rec.get("ids")}, {"ranks": before}, {"ranks": rec}, undoable=False)
+                    return self._send(200, {"ok": True, "ranks": rec, "change": cid})
                 d = self.app.inbox.ask(body.get("question"), body.get("options"), body.get("lane"), body.get("priority", 2),
                                        body.get("deadline"), body.get("session"), body.get("source"), body.get("id") or "",
                                        by=actor)
@@ -1761,7 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
                                         undoable=False)
                 return self._send(200, {"ok": True, "decision": d})
             except (decisions.DecisionError, changes.ChangeError) as e:
-                return self._send(400, {"ok": False, "error": {"code": e.code, "message": str(e)}})
+                return self._send(400, {"ok": False, "error": {"code": getattr(e, 'code', 'error'), "message": str(e)}})
         elif p == "/api/move-project":
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             keys = [str(k) for k in keys if k and not str(k).startswith("batch:")]

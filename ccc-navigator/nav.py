@@ -474,6 +474,12 @@ def build_parser():
     ak.add_argument("--source", default="", help="where the question comes from (PR, report)")
     ak.add_argument("--id", default="", help="stable id (default: derived from the question)")
 
+    rk = subparsers.add_parser("rank", help="rank top decisions for Uri in the inbox")
+    _add_global_options(rk, subcommand=True)
+    rk.add_argument("id", nargs="*")
+    rk.add_argument("--why", action="append", default=[], help="ID=TEXT")
+    rk.add_argument("--clear", action="store_true")
+
     mp = subparsers.add_parser("move-project", help="file sessions under another project than their folder's (--back undoes)")
     _add_global_options(mp, subcommand=True)
     _add_filter_options(mp, with_dry_run=True, with_starred=True, with_include_starred=True)
@@ -1028,6 +1034,22 @@ def cmd_ask(args, client):
     res = client.post("/api/decisions/ask", {"question": args.question, "options": args.option, "lane": args.lane,
                                             "priority": args.priority, "deadline": args.deadline, "session": args.session,
                                             "source": args.source, "id": args.id})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    print_json(res)
+    return 0
+
+
+def cmd_rank(args, client):
+    if args.clear:
+        res = client.post("/api/decisions/rank", {"ids": []})
+    else:
+        why = {}
+        for w in getattr(args, "why", []) or []:
+            if "=" in str(w):
+                k, v = str(w).split("=", 1)
+                why[k] = v
+        res = client.post("/api/decisions/rank", {"ids": args.id or [], "why": why})
     if not res.get("ok"):
         raise NavError((res.get("error") or {}).get("message") or "failed")
     print_json(res)
@@ -1937,6 +1959,8 @@ def main(argv=None):
             return cmd_decide(args, client)
         if args.command == "ask":
             return cmd_ask(args, client)
+        if args.command == "rank":
+            return cmd_rank(args, client)
         if args.command == "move-project":
             return cmd_move_project(args, client)
         if args.command == "unhide-all":

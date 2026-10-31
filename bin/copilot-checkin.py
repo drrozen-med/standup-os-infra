@@ -50,7 +50,8 @@ NAV=~/projects/standup-os/ccc-navigator/nav.py
 1. Run `python3 $NAV decisions --table` and `python3 $NAV brief --table`.
 2. Close decisions that are verifiably no longer needed (the work is done, the PR merged, the deadline passed, or a newer decision replaces it): `NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`. Check before closing. Never pick an answer for Uri on a real choice.
 3. If something new needs Uri and is not already in the inbox, add it: `NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`. One question each, tap-able options, only what truly needs him.
-4. Reply in at most 3 short lines: what you closed, added, or noticed. If nothing changed, reply exactly: Check-in: nothing new."""
+4. Rank what matters most for Uri: `NAV_ACTOR=copilot python3 $NAV rank <id1> <id2> ... --why <id>=<one short reason>` (at most 5, most important first).
+5. Reply in at most 3 short lines: what you closed, added, or noticed. If nothing changed, reply exactly: Check-in: nothing new."""
 
 
 def log(msg):
