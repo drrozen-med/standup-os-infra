@@ -469,6 +469,26 @@ def transcript_copies(root=CLAUDE_PROJECTS, ttl=30.0):
     return out
 
 
+CCC_SERVER_GLOB = os.environ.get("CCC_NAV_CCC_SERVER", "/opt/homebrew/Cellar/ccc/*/libexec/server.py")
+_patched = {"at": 0.0, "val": False}
+
+
+def ccc_patched(pattern=CCC_SERVER_GLOB, ttl=300.0):
+    """True when the installed CCC reads and resumes a moved session's newest copy
+    (ccc-patches/newest_copy.py applied to its newest version). Rechecked every `ttl` s."""
+    if time.time() - _patched["at"] < ttl and pattern == CCC_SERVER_GLOB:
+        return _patched["val"]
+    import glob
+    files = sorted(glob.glob(pattern), key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", p)])
+    try:
+        val = bool(files) and "# standup-os patch: newest copy" in Path(files[-1]).read_text(errors="replace")
+    except OSError:
+        val = False
+    if pattern == CCC_SERVER_GLOB:
+        _patched.update(at=time.time(), val=val)
+    return val
+
+
 def use_newest_copy(rows, copies=None):
     """Point each Claude row at the newest copy of its log (CCC's own pick kept as ccc_jsonl_path)."""
     copies = transcript_copies() if copies is None else copies
@@ -1474,8 +1494,9 @@ class App:
 
     def moved(self, sid):
         """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
-        fork it, unseen by the Claude app (2026-10-31). Only the Claude app can answer it safely."""
-        return bool(sid) and sid in transcript_copies()
+        fork it, unseen by the Claude app (2026-10-31). Safe only while CCC carries
+        ccc-patches/newest_copy.py (a `brew upgrade ccc` drops it); otherwise the Claude app answers."""
+        return bool(sid) and sid in transcript_copies() and not ccc_patched()
 
     def moved_reply(self, sid, text):
         out = {"ok": False, "error": "moved", "text": text,
