@@ -42,6 +42,7 @@ import pi_run
 import remote
 import actions
 import refs
+import sources
 
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
@@ -767,6 +768,8 @@ def resolve_repo(path):
     (folder gone: known worktree path patterns) or "none"."""
     if not path:
         return None, "none", None
+    if isinstance(path, str) and path.startswith("/vm251/"):
+        return "/vm251", "vm251", None
     hit = _repo_cache.get(path)
     if hit and time.time() - hit[0] < _REPO_TTL:
         return hit[1]
@@ -1161,6 +1164,8 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         method_ct[method] += 1
         if main == CLAUDE_SCRATCH_KEY:
             key, name, path = CLAUDE_SCRATCH_KEY, CLAUDE_SCRATCH_NAME, short(scratch)
+        elif main == "/vm251":
+            key, name, path = "/vm251", "Server .251", "/vm251"
         elif main:
             key, name, path = main, (main[6:] if main.startswith("devin:") else Path(main).name), short(main)
         else:
@@ -1477,15 +1482,18 @@ class App:
     def tree(self, window, show_hidden=False):
         rows, ccc_meta = self.ccc.rows()
         prows, pi_meta = pi_sessions(self.args.pi_dir)
+        orows, o_meta = sources.outsourcerer_jobs()
+        vrows, v_meta = sources.vm251_agents()
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
-        t = build_tree(rows + prows, self.state.snapshot(), window, ws, self.ccc.base,
+        t = build_tree(rows + prows + orows + vrows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
                        desktop_group=desktop_groups(), always=self.state.snapshot()["copilot"] or None,
                        archived_sids=desktop_archived())
         t["copilot"] = self.copilot()
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
-        t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta}
+        t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta,
+                        "outsourcerer": o_meta, "vm251": v_meta}
         t["generated_at"] = time.time()
         return t
 
