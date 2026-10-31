@@ -1242,8 +1242,13 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
             state_rank = {"needs-you": 0, "working": 1}
             items = sorted(by_group[g], key=lambda x: (not x["pinned"], state_rank.get(x["state"], 2), -x["mtime"]))
             srcs = {x["group_source"] for x in items}
-            groups.append({"name": g, "source": "manual" if "manual" in srcs or g in manual
-                           else ("orca" if "orca" in srcs else "none"), "items": items,
+            if "manual" in srcs or (not items and g in manual):
+                source = "manual"
+            elif "orca" in srcs:
+                source = "orca"
+            else:
+                source = "none"
+            groups.append({"name": g, "source": source, "items": items,
                            "hidden": bool(hmap.get("g:%s|%s" % (repo["key"], g))),
                            "pinned": bool(pmap.get("g:%s|%s" % (repo["key"], g))),
                            "orca_path": next((x["orca_path"] for x in items if x.get("orca_path")), "")})
@@ -1367,7 +1372,13 @@ class App:
                 try:
                     out = subprocess.run(["/usr/local/bin/orca", "worktree", "set", "--worktree", "path:" + path,
                                           "--display-name", name], capture_output=True, text=True, timeout=25)
-                    res["applied"].append("orca" if out.returncode == 0 else "orca-failed:" + (out.stderr or out.stdout)[:120])
+                    if out.returncode == 0:
+                        res["applied"].append("orca")
+                        if old in (self.state.snapshot().get("groups") or {}).get(repo, []):
+                            self.state.rename_group(repo, old, name)     # same name in the manual list: rename it too, no phantom left
+                            res["applied"].append("navigator")
+                    else:
+                        res["applied"].append("orca-failed:" + (out.stderr or out.stdout)[:120])
                 except Exception as e:
                     res["applied"].append("orca-failed:%s" % e)
             else:

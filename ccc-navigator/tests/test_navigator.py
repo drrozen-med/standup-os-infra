@@ -257,6 +257,15 @@ class Tree(unittest.TestCase):
         self.assertEqual(groups["infra"]["source"], "manual")
         self.assertEqual(groups["infra"]["items"][0]["sid"], "2")
 
+    def test_group_source_orca_when_name_matches_manual_list_but_all_items_orca(self):
+        ws = [{"path": "/w/BB/main", "name": "main", "branch": "", "repo_path": "/code/BB"}]
+        rows = [row("1", "/w/BB/main", "Work in main workspace")]
+        self.state["groups"]["/code/BB"] = ["main"]
+        t = self.build(rows, ws)
+        repo = t["repos"][0]
+        groups = {g["name"]: g for g in repo["groups"]}
+        self.assertEqual(groups["main"]["source"], "orca")
+
     def test_open_url_and_pi_has_none(self):
         t = self.build([row("abc", "/r/A", "Some real task to work on"),
                         row("p1", "/r/A", "Pi task here to work on", engine="pi")])
