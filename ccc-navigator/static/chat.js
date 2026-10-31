@@ -288,9 +288,13 @@
     var sid = opts.sid;
     var engine = opts.engine || '';
     var isPi = engine === 'pi';
+    var key = opts.key || (engine ? engine + ':' + sid : sid);
     var thread = root.querySelector('.thread');
     var box = root.querySelector('.composer textarea');
     var send = root.querySelector('.composer .send');
+    var askCard = root.querySelector('#askCard');
+    var askPoll = null;
+    var askState = null;
     var timer = null;
 
     var piWatch = null;
@@ -376,10 +380,192 @@
     }
     function busy() { return pending.length > 0 || !!activity(); }
 
+    function hideAskCard() {
+      if (askCard) { askCard.style.display = 'none'; askCard.innerHTML = ''; }
+      askState = null;
+    }
+
+    function renderAskCard(data) {
+      if (!askCard) return;
+      if (!data || !data.source) { hideAskCard(); return; }
+      if (engine === 'codex') { hideAskCard(); return; }
+      askCard.innerHTML = '';
+      askCard.className = 'ask-card dcard';
+      if (data.source === 'wrap') {
+        var ask = data.ask || '';
+        var actions = data.actions || [];
+        var q = document.createElement('div');
+        q.className = 'dq';
+        q.dir = 'auto';
+        q.textContent = ask;
+        askCard.appendChild(q);
+        var opts = document.createElement('div');
+        opts.className = 'dopts';
+        actions.forEach(function (a, idx) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'dopt' + (idx === 0 ? '' : '');
+          if (idx === 0) b.style.fontWeight = '700';
+          b.textContent = a.label || '';
+          b.addEventListener('click', function () { answerAsk(data.source, a.label, a.message); });
+          opts.appendChild(b);
+        });
+        var other = document.createElement('button');
+        other.type = 'button';
+        other.className = 'dopt other';
+        other.textContent = 'Other…';
+        other.addEventListener('click', function () {
+          if (box) { box.focus(); }
+        });
+        opts.appendChild(other);
+        askCard.appendChild(opts);
+        askCard.style.display = 'flex';
+        askState = { source: data.source };
+        return;
+      }
+      if (data.source === 'menu' || data.source === 'relay') {
+        var questions = data.questions || [];
+        var qwrap = document.createElement('div');
+        qwrap.style.display = 'flex';
+        qwrap.style.flexDirection = 'column';
+        qwrap.style.gap = '12px';
+        var selections = [];
+        questions.forEach(function (qq, qi) {
+          var qqel = document.createElement('div');
+          qqel.style.display = 'flex';
+          qqel.style.flexDirection = 'column';
+          qqel.style.gap = '8px';
+          var qt = document.createElement('div');
+          qt.className = 'dq';
+          qt.dir = 'auto';
+          qt.textContent = qq.question || qq.header || '';
+          qqel.appendChild(qt);
+          var opts = document.createElement('div');
+          opts.className = 'dopts';
+          var optsArr = qq.options || [];
+          var multi = !!qq.multiSelect;
+          selections[qi] = multi ? [] : null;
+          optsArr.forEach(function (o) {
+            var ob = document.createElement('button');
+            ob.type = 'button';
+            ob.className = 'dopt';
+            var ot = document.createElement('div');
+            ot.dir = 'auto';
+            ot.textContent = o.label || '';
+            ob.appendChild(ot);
+            if (o.description) {
+              var od = document.createElement('div');
+              od.style.fontSize = '11px';
+              od.style.color = 'var(--muted)';
+              od.dir = 'auto';
+              od.textContent = o.description;
+              ob.appendChild(od);
+            }
+            ob.addEventListener('click', function () {
+              if (multi) {
+                var idx = selections[qi].indexOf(o.label);
+                if (idx >= 0) { selections[qi].splice(idx, 1); ob.style.outline = 'none'; }
+                else { selections[qi].push(o.label); ob.style.outline = '2px solid var(--primary)'; }
+              } else {
+                selections[qi] = o.label;
+                // reset others
+                var btns = opts.querySelectorAll('.dopt');
+                btns.forEach(function (x) { x.style.outline = 'none'; });
+                ob.style.outline = '2px solid var(--primary)';
+              }
+            });
+            opts.appendChild(ob);
+          });
+          qqel.appendChild(opts);
+          qwrap.appendChild(qqel);
+        });
+        askCard.appendChild(qwrap);
+        var bottom = document.createElement('div');
+        bottom.className = 'dopts';
+        if (questions.some(function (q){ return q.multiSelect; })) {
+          var sendm = document.createElement('button');
+          sendm.type = 'button';
+          sendm.className = 'dopt';
+          sendm.textContent = 'Send';
+          sendm.addEventListener('click', function () {
+            var ans = [];
+            questions.forEach(function (qq, qi) {
+              if (qq.multiSelect) {
+                ans.push({ index: qi, text: (selections[qi] || []).join(', ') });
+              } else if (selections[qi]) {
+                ans.push({ index: qi, text: selections[qi] });
+              }
+            });
+            answerAsk(data.source, null, null, ans);
+          });
+          bottom.appendChild(sendm);
+        }
+        var other = document.createElement('button');
+        other.type = 'button';
+        other.className = 'dopt other';
+        other.textContent = 'Other…';
+        other.addEventListener('click', function () {
+          var ob = document.createElement('div');
+          ob.className = 'dother';
+          ob.innerHTML = '<textarea dir="auto" rows="2" placeholder="Your answer…"></textarea><div class="drow"><button type="button" class="dopt dsend">Send</button><button type="button" class="linkbtn">Cancel</button></div>';
+          askCard.appendChild(ob);
+          var ta = ob.querySelector('textarea');
+          ta.focus();
+          ob.querySelector('.dsend').addEventListener('click', function () {
+            answerAsk(data.source, null, ta.value);
+          });
+          ob.querySelector('.linkbtn').addEventListener('click', function () { ob.remove(); });
+          ta.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); answerAsk(data.source, null, ta.value); }
+          });
+        });
+        bottom.appendChild(other);
+        askCard.appendChild(bottom);
+        askCard.style.display = 'flex';
+        askState = { source: data.source, questions: questions };
+        return;
+      }
+      hideAskCard();
+    }
+
+    function answerAsk(source, label, message, answers) {
+      var text = message || label || null;
+      if (answers) text = null;
+      fetch('/api/ask/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key, source: source, text: text, answers: answers })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok || d.error) { throw new Error((d && d.error) || ('HTTP ' + r.status)); }
+          return d;
+        });
+      }).then(function () {
+        hideAskCard();
+        var sent = text || (answers ? (function(){ var parts=[]; (answers||[]).forEach(function(a){ if(a.text) parts.push(a.text); }); return parts.join(', '); })() : (label||''));
+        var p = { id: ++seq, text: sent, state: 'sent', sentAt: Date.now() };
+        p.at = Date.now(); pending.push(p);
+        decorate(); thread.scrollTop = thread.scrollHeight;
+        cache.delete(sid); lastSig = null;
+        load();
+        schedule();
+      }).catch(function (e) {
+        if (typeof toast === 'function') toast('Not sent: ' + (e.message || e));
+      });
+    }
+
+    function pollAsk() {
+      if (engine === 'codex') { hideAskCard(); return; }
+      fetch('/api/ask?key=' + encodeURIComponent(key))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { renderAskCard(d); })
+        .catch(function () {});
+    }
+
     function schedule() {
       if (pollT) clearTimeout(pollT);
       pollT = setTimeout(function () {
-        if (!document.hidden) { load(false); }
+        if (!document.hidden) { load(false); pollAsk(); }
         schedule();
       }, busy() ? 2000 : 8000);
     }
@@ -456,8 +642,12 @@
       if (piWatch) clearInterval(piWatch);
       if (pollT) clearTimeout(pollT);
       if (tick) clearInterval(tick);
+      if (askPoll) clearInterval(askPoll);
       document.removeEventListener('visibilitychange', onVisible);
     };
+    pollAsk();
+    if (askPoll) clearInterval(askPoll);
+    askPoll = setInterval(pollAsk, busy() ? 2000 : 8000);
     schedule();
     load();
   }

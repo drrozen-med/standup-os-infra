@@ -1563,6 +1563,87 @@ class App:
     def pi_transcript(self, sid):
         return pi_transcript(self.args.pi_dir, sid)
 
+    def _find_row_and_transcript(self, key):
+        engine, _, sid = str(key or "").partition(":")
+        if not sid:
+            return None, None, engine, sid
+        rows, _ = self.ccc.rows()
+        prows, _ = pi_sessions(self.args.pi_dir)
+        allr = rows + prows
+        row = None
+        for r in allr:
+            rsid = str(r.get("session_id") or "")
+            reng = str(r.get("engine") or "claude")
+            if rsid == sid and (reng == engine or engine == ""):
+                row = r
+                break
+        if row is None and engine == "":
+            for r in allr:
+                if str(r.get("session_id") or "") == sid:
+                    row = r
+                    break
+        path = None
+        if row is not None:
+            path = row.get("jsonl_path") or row.get("rollout_path")
+        if not path and engine == "pi":
+            pj = _pi_file_for_sid(self.args.pi_dir, sid)
+            if pj:
+                path = str(pj)
+        return row, path, engine or (row.get("engine") if row else ""), sid
+
+    def api_ask(self, key):
+        # relay: try CCC first
+        try:
+            if self.ccc and self.ccc.base:
+                base = urllib.parse.urlparse(self.ccc.base)
+                c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=3)
+                c.request("GET", "/api/question?session_id=%s" % urllib.parse.quote(str(key.split(':')[-1]) if ':' in str(key) else str(key)))
+                r = c.getresponse()
+                data = r.read()
+                c.close()
+                if r.status < 400 and data:
+                    try:
+                        j = json.loads(data)
+                        if isinstance(j, dict) and j.get("pending") is True:
+                            qs = j.get("questions") or []
+                            return {"source": "relay", "questions": qs}
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        row, path, engine, sid = self._find_row_and_transcript(key)
+        if path and engine != "pi" and engine != "codex":  # Codex sessions show no card per brief
+            pass  # continue
+        if engine == "codex":
+            return {"source": None}
+        act = None
+        if path:
+            try:
+                act = activity.read_activity(path)
+            except Exception:
+                act = None
+        # menu from pending_input
+        if act and act.get('pending_input'):
+            pinp = act.get('pending_input')
+            questions = []
+            if isinstance(pinp, dict):
+                qs = pinp.get('questions') or []
+                if isinstance(qs, list):
+                    questions = qs
+            if questions:
+                return {"source": "menu", "questions": questions}
+        # wrap
+        if act and act.get('turn_wrapped') and act.get('turn_ask'):
+            ask = str(act.get('turn_ask') or '')
+            actions = []
+            tactions = act.get('turn_actions') or []
+            if isinstance(tactions, list):
+                for a in tactions:
+                    if isinstance(a, dict) and a.get('label'):
+                        actions.append({'label': a['label'], 'message': a.get('message')})
+            return {"source": "wrap", "ask": ask, "actions": actions}
+        return {"source": None}
+
 
 class Handler(BaseHTTPRequestHandler):
     app: App = None  # set in main()
@@ -1706,7 +1787,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, got[0], got[1])
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/order",
-                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank"}
+                "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
+                "/api/ask/answer"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -1796,6 +1878,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/desktop-groups":
             return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
                                     "folders": self.app.project_folders()})
+        if u.path == "/api/ask":
+            q = urllib.parse.parse_qs(u.query)
+            key = (q.get("key") or [""])[0]
+            return self._send(200, self.app.api_ask(key))
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -1912,7 +1998,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
         if path not in self.NAV_POST:
             return self._proxy()
-        if "application/json" not in (self.headers.get("Content-Type") or ""):
+        ctype = self.headers.get("Content-Type") or ""
+        if "application/json" not in ctype.lower():
             return self._send(415, {"error": "json only"})
         try:
             n = int(self.headers.get("Content-Length") or 0)
@@ -2011,6 +2098,50 @@ class Handler(BaseHTTPRequestHandler):
             cid = self.app.changes.record(self._actor(), "desktop-group.map", {"group": group, "repo": repo},
                                           {"desktop_map": {group: before}}, {"desktop_map": {group: repo or None}})
             return self._send(200, {"ok": True, "group": group, "repo": repo, "change": cid})
+        elif p == "/api/ask/answer":
+            try:
+                body
+            except Exception:
+                body = {}
+            key = str(body.get("key") or "")
+            source = str(body.get("source") or "")
+            text = body.get("text")
+            answers = body.get("answers")
+            if source == "relay":
+                try:
+                    base = urllib.parse.urlparse(self.app.ccc.base)
+                    sid = key.split(':')[-1] if ':' in key else key
+                    payload = json.dumps({"session_id": sid, "answers": answers}).encode()
+                    c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=10)
+                    c.request("POST", "/api/answer-question", body=payload, headers={"Content-Type": "application/json", "Host": base.netloc})
+                    r = c.getresponse()
+                    out = r.read()
+                    c.close()
+                    try:
+                        res = json.loads(out or b"{}")
+                    except Exception:
+                        res = {"raw": out.decode('utf-8','replace')}
+                    self.app.changes.record(self._actor(), "session.answer", {"key": key, "source": source}, {}, {"answer": {"source": source}}, undoable=False)
+                    return self._send(200, res)
+                except Exception as e:
+                    return self._send(500, {"error": str(e)})
+            else:
+                if text is None and isinstance(answers, list):
+                    # join labels/texts
+                    parts = []
+                    for a in answers:
+                        if isinstance(a, dict):
+                            t = a.get('text') or a.get('label')
+                            if t:
+                                parts.append(str(t))
+                    text = ', '.join(parts)
+                if text is None:
+                    text = ''
+                resd = self.app.deliver(key, str(text))
+                if resd != "sent":
+                    return self._send(500, {"error": resd or "deliver failed"})
+                self.app.changes.record(self._actor(), "session.answer", {"key": key, "source": source}, {}, {"answer": {"source": source, "text": str(text)}}, undoable=False)
+                return self._send(200, {"ok": True})
         elif p == "/api/unhide-scope":
             repo = str(body.get("repo") or "")
             group = str(body.get("group")) if body.get("group") is not None else None
