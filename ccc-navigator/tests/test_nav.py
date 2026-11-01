@@ -817,3 +817,76 @@ class NavApiV1(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NavViewSeeParsing(unittest.TestCase):
+    def setUp(self):
+        self.parser = nav.build_parser()
+
+    def test_view_command_exists(self):
+        self.assertEqual(self.parser.parse_args(["view"]).command, "view")
+
+    def test_see_command_exists(self):
+        self.assertEqual(self.parser.parse_args(["see"]).command, "see")
+
+    def test_view_flags_parse(self):
+        args = self.parser.parse_args(["view", "--window", "now", "--starred", "--live", "--needs", "--query", "cdl", "--show-mine", "--reset"])
+        self.assertEqual(args.window, "now")
+        self.assertTrue(args.starred)
+        self.assertTrue(args.live)
+        self.assertTrue(args.needs)
+        self.assertEqual(args.query, "cdl")
+        self.assertTrue(args.show_mine)
+        self.assertTrue(args.reset)
+
+    def test_ls_window_flag(self):
+        args = self.parser.parse_args(["ls", "--window", "now"])
+        self.assertEqual(args.window, "now")
+
+    def test_ls_view_flag(self):
+        args = self.parser.parse_args(["ls", "--view"])
+        self.assertTrue(args.use_view)
+
+
+class NavLsWindow(unittest.TestCase):
+    def setUp(self):
+        self.tree = {
+            "icons": {},
+            "repos": [
+                {
+                    "key": "/code/app", "name": "app", "orig_name": "app", "path": "/code/app",
+                    "hidden": False, "group_names": ["infra"],
+                    "groups": [
+                        {"name": "infra", "hidden": False, "orca_path": "/code/app",
+                         "items": [
+                             {"key": "claude:1", "sid": "s1", "engine": "claude", "mtime": 200.0,
+                              "pinned": True, "hidden": False, "original": "Billing", "state": "working"},
+                         ]},
+                    ],
+                },
+            ],
+        }
+
+    class WindowClient:
+        def __init__(self, tree):
+            self.tree_data = tree
+            self.posts = []
+            self.last_window = None
+
+        def tree(self, window="all", hidden=True):
+            self.last_window = window
+            return self.tree_data
+
+        def get(self, path):
+            return {}
+
+        def post(self, path, payload):
+            self.posts.append((path, payload))
+            return {"ok": True}
+
+    def test_ls_window_passes_window_to_client(self):
+        client = self.WindowClient(self.tree)
+        args = nav.build_parser().parse_args(["ls", "--window", "now", "--table"])
+        code = nav.cmd_ls(args, client)
+        self.assertEqual(client.last_window, "now")
+        self.assertEqual(code, 0)
