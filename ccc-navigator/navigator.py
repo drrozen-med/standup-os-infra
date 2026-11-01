@@ -83,6 +83,36 @@ class State:
             d = json.loads(self.path.read_text())
         except (OSError, ValueError):
             d = {}
+        default_view = {
+            "win": "1d",
+            "star": False,
+            "live": False,
+            "needs": False,
+            "query": "",
+            "show_mine": False,
+            "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+            "ov": True,
+        }
+        view = dict(d.get("view") or {})
+        # merge defaults for missing keys
+        for k, v in default_view.items():
+            if k not in view:
+                view[k] = v
+            elif k == "display" and isinstance(view.get("display"), dict):
+                disp = dict(default_view["display"])
+                disp.update(view.get("display") or {})
+                view["display"] = disp
+            elif k == "display":
+                view["display"] = dict(default_view["display"])
+        if view.get("win") not in ("now", "1d", "7d", "all"):
+            view["win"] = "1d"
+        if not isinstance(view.get("query"), str):
+            view["query"] = ""
+        if len(view.get("query") or "") > 200:
+            view["query"] = view["query"][:200]
+        for b in ("star", "live", "needs", "show_mine", "ov"):
+            if not isinstance(view.get(b), bool):
+                view[b] = bool(view.get(b))
         return {
             "nicknames": dict(d.get("nicknames") or {}),
             "groups": {k: list(v) for k, v in (d.get("groups") or {}).items()},
@@ -99,6 +129,7 @@ class State:
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
             "repo_order": list(d.get("repo_order") or []),
             "group_order": {k: list(v) for k, v in (d.get("group_order") or {}).items()},
+            "view": view,
         }
 
     def _save(self):
@@ -310,6 +341,80 @@ class State:
             entry["undone"] = time.time()
             self._save()
             return entry
+
+    def get_view(self):
+        with self.lock:
+            v = self.data.get("view") or {}
+            # return copy
+            import copy
+
+            return copy.deepcopy(v)
+
+    def set_view(self, partial):
+        if not isinstance(partial, dict):
+            raise ValueError("view update must be a JSON object")
+        with self.lock:
+            default_view = {
+                "win": "1d",
+                "star": False,
+                "live": False,
+                "needs": False,
+                "query": "",
+                "show_mine": False,
+                "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+                "ov": True,
+            }
+            cur = dict(self.data.get("view") or {})
+            for k, v in default_view.items():
+                if k not in cur:
+                    cur[k] = v
+                elif k == "display" and isinstance(cur.get("display"), dict):
+                    disp = dict(default_view["display"])
+                    disp.update(cur.get("display") or {})
+                    cur["display"] = disp
+                elif k == "display":
+                    cur["display"] = dict(default_view["display"])
+            if isinstance(partial, dict):
+                for k, v in partial.items():
+                    if k == "win":
+                        if v not in ("now", "1d", "7d", "all"):
+                            raise ValueError("win must be one of now, 1d, 7d, all")
+                        cur["win"] = v
+                    elif k == "query":
+                        if not isinstance(v, str):
+                            raise ValueError("query must be a string")
+                        if len(v) > 200:
+                            raise ValueError("query must be at most 200 characters")
+                        cur["query"] = v
+                    elif k in ("star", "live", "needs", "show_mine", "ov"):
+                        cur[k] = bool(v)
+                    elif k == "display" and isinstance(v, dict):
+                        disp = dict(cur.get("display") or default_view["display"])
+                        for dk, dv in v.items():
+                            if dk in default_view["display"]:
+                                disp[dk] = bool(dv)
+                        cur["display"] = disp
+                    # unknown keys ignored
+            # normalize
+            if cur.get("win") not in ("now", "1d", "7d", "all"):
+                cur["win"] = "1d"
+            if not isinstance(cur.get("query"), str):
+                cur["query"] = ""
+            if len(cur.get("query") or "") > 200:
+                cur["query"] = cur["query"][:200]
+            for b in ("star", "live", "needs", "show_mine", "ov"):
+                cur[b] = bool(cur.get(b))
+            if not isinstance(cur.get("display"), dict):
+                cur["display"] = dict(default_view["display"])
+            else:
+                disp = dict(default_view["display"])
+                disp.update(cur.get("display") or {})
+                cur["display"] = disp
+            self.data["view"] = cur
+            self._save()
+            import copy
+
+            return copy.deepcopy(cur)
 
     def add_group(self, repo, name):
         with self.lock:
@@ -1673,6 +1778,78 @@ class App:
                 path = str(pj)
         return row, path, engine or (row.get("engine") if row else ""), sid
 
+    def _is_starred_ui(self, s, repo, group):
+        try:
+            if s.get("pinned"):
+                return True
+            if group and group.get("pinned"):
+                return True
+            if repo and repo.get("pinned"):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _matches_ui(self, s, repo, group, view):
+        try:
+            if view.get("star") and not self._is_starred_ui(s, repo, group):
+                return False
+            if view.get("live") and s.get("state") != "working":
+                return False
+            if view.get("needs") and s.get("state") != "needs-you":
+                return False
+            q = str(view.get("query") or "").strip().lower()
+            if not q:
+                return True
+            hay = " ".join([
+                str(s.get("nick") or ""),
+                str(s.get("original") or ""),
+                str(repo.get("name") or ""),
+                str(group.get("name") or ""),
+                str(s.get("engine") or ""),
+                str(s.get("wt") or ""),
+                str(s.get("orca_workspace") or ""),
+            ]).lower()
+            return q in hay
+        except Exception:
+            return True
+
+    def see(self, view=None):
+        if view is None:
+            view = self.state.get_view()
+        win = view.get("win") if isinstance(view, dict) else "1d"
+        if win not in WINDOWS:
+            win = "1d"
+        show_mine = bool(view.get("show_mine")) if isinstance(view, dict) else False
+        tree = self.tree(win, show_hidden=show_mine)
+        copilot_key = (tree.get("copilot") or {}).get("key") if isinstance(tree, dict) else None
+        projects_out = []
+        total_sessions = 0
+        for repo in tree.get("repos") or []:
+            if not isinstance(repo, dict):
+                continue
+            proj = {"name": repo.get("name") or repo.get("orig_name") or repo.get("key"), "repo": repo.get("key"), "counts": repo.get("counts") or {}, "groups": []}
+            for group in repo.get("groups") or []:
+                if not isinstance(group, dict):
+                    continue
+                items_out = []
+                for s in group.get("items") or []:
+                    if not isinstance(s, dict):
+                        continue
+                    if copilot_key and s.get("key") == copilot_key:
+                        continue
+                    if self._matches_ui(s, repo, group, view):
+                        items_out.append(s)
+                if not items_out:
+                    continue
+                gout = {"name": group.get("name") or "", "sessions": items_out}
+                proj["groups"].append(gout)
+                total_sessions += len(items_out)
+            if not proj["groups"]:
+                continue
+            projects_out.append(proj)
+        return {"view": view, "projects": projects_out, "total_sessions": total_sessions}
+
     def api_ask(self, key):
         # relay: try CCC first
         try:
@@ -2012,7 +2189,13 @@ class Handler(BaseHTTPRequestHandler):
                             "mutates": act.mutates,
                             "undoable": act.undoable,
                         })
-                    return self._send(200, {"version": "1", "app_version": app_version(), "actions": caps, "ref_formats": ["nav://session/<engine>:<id>", "nav://group/<project>|<name>", "nav://project/<key>"], "errors": ["unknown_route", "unknown_param", "missing_param", "bad_param", "ambiguous_ref", "unknown_ref", "wrong_target", "bad_actor", "conflict", "not_undoable", "already_undone"]})
+                    caps_out = {"version": "1", "app_version": app_version(), "actions": caps, "endpoints": ["/nav/v1/view", "/nav/v1/see"], "ref_formats": ["nav://session/<engine>:<id>", "nav://group/<project>|<name>", "nav://project/<key>"], "errors": ["unknown_route", "unknown_param", "missing_param", "bad_param", "ambiguous_ref", "unknown_ref", "wrong_target", "bad_actor", "conflict", "not_undoable", "already_undone"]}
+                    return self._send(200, caps_out)
+                if u.path == "/nav/v1/view":
+                    return self._send(200, self.app.state.get_view())
+                if u.path == "/nav/v1/see":
+                    view = self.app.state.get_view()
+                    return self._send(200, self.app.see(view))
             except Exception as e:
                 return self._send(500, {"ok": False, "error": {"code": "error", "message": str(e)}})
             return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
@@ -2079,6 +2262,25 @@ class Handler(BaseHTTPRequestHandler):
                     if code == "already_undone":
                         return self._send(409, {"ok": False, "error": {"code": code, "message": e.message}})
                     return self._send(400, {"ok": False, "error": {"code": code, "message": e.message, "field": e.field}})
+            if path == "/nav/v1/view":
+                if "application/json" not in (self.headers.get("Content-Type") or ""):
+                    return self._send(415, {"error": "json only"})
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+                except ValueError:
+                    return self._send(400, {"error": "bad json"})
+                actor = self._actor()
+                before = self.app.state.get_view()
+                try:
+                    after = self.app.state.set_view(body)
+                except Exception as e:
+                    return self._send(400, {"ok": False, "error": str(e)})
+                try:
+                    self.app.changes.record(actor, "view.set", {"partial": body}, {"view": before}, {"view": after}, undoable=True)
+                except Exception:
+                    pass
+                return self._send(200, after)
             return self._send(404, {"ok": False, "error": {"code": "unknown_route"}})
         if path == "/api/inject-input":   # the chat's reply box: same moved-session guard as deliver()
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -2282,6 +2484,19 @@ class Handler(BaseHTTPRequestHandler):
                                               {"repo_order": {"_": before}}, {"repo_order": {"_": after}},
                                               undoable=False)
                 return self._send(200, {"ok": True, "keys": after, "change": cid})
+            elif kind == "groups":
+                repo = str(body.get("repo") or "")
+                names = body.get("names") if isinstance(body.get("names"), list) else []
+                names = [str(n) for n in names if n]
+                if not repo:
+                    return self._send(400, {"ok": False, "error": "repo required"})
+                before = list((st.snapshot().get("group_order") or {}).get(repo) or [])
+                st.set_group_order(repo, names)
+                after = list((st.snapshot().get("group_order") or {}).get(repo) or [])
+                cid = self.app.changes.record(actor, "order.groups", {"repo": repo, "names": names},
+                                              {"group_order": {repo: before}}, {"group_order": {repo: after}},
+                                              undoable=False)
+                return self._send(200, {"ok": True, "repo": repo, "names": after, "change": cid})
             elif kind == "groups":
                 repo = str(body.get("repo") or "")
                 names = body.get("names") if isinstance(body.get("names"), list) else []

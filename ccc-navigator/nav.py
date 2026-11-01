@@ -94,8 +94,8 @@ class NavigatorClient:
             raise NavError("navigator returned an unexpected JSON response")
         return result
 
-    def tree(self):
-        query = urllib.parse.urlencode({"window": "all", "hidden": "1"})
+    def tree(self, window="all", hidden=True):
+        query = urllib.parse.urlencode({"window": window if window in ("now", "1d", "7d", "all") else "all", "hidden": "1" if hidden else "0"})
         return self._request(f"/api/tree?{query}")
 
     def post(self, path, payload):
@@ -449,6 +449,10 @@ def build_parser():
     ls = subparsers.add_parser("ls", help="list flattened sessions, groups or repos")
     _add_global_options(ls, subcommand=True)
     _add_filter_options(ls, with_starred=True)
+    ls.add_argument("--window", choices=["now", "1d", "7d", "all"], help="time window (use with stored view)")
+    ls.add_argument("--needs", dest="needs", action="store_true", help="only sessions needing you")
+    ls.add_argument("--query", dest="query", default=None, help="search query")
+    ls.add_argument("--view", dest="use_view", action="store_true", help="apply the stored view instead of flags")
     listing = ls.add_mutually_exclusive_group()
     listing.add_argument("--groups", action="store_true", help="list groups instead of sessions")
     listing.add_argument("--repos", action="store_true", help="list repos instead of sessions")
@@ -673,6 +677,31 @@ def build_parser():
     caps = subparsers.add_parser("capabilities", help="list API v1 capabilities")
     _add_global_options(caps, subcommand=True)
 
+    view = subparsers.add_parser("view", help="get or set the navigator view")
+    _add_global_options(view, subcommand=True)
+    view.add_argument("--window", choices=["now", "1d", "7d", "all"], help="time window")
+    star = view.add_mutually_exclusive_group()
+    star.add_argument("--starred", dest="starred", action="store_true")
+    star.add_argument("--no-starred", dest="starred", action="store_false")
+    view.set_defaults(starred=None)
+    live = view.add_mutually_exclusive_group()
+    live.add_argument("--live", dest="live", action="store_true")
+    live.add_argument("--no-live", dest="live", action="store_false")
+    view.set_defaults(live=None)
+    needs = view.add_mutually_exclusive_group()
+    needs.add_argument("--needs", dest="needs", action="store_true")
+    needs.add_argument("--no-needs", dest="needs", action="store_false")
+    view.set_defaults(needs=None)
+    view.add_argument("--query", dest="query", default=None)
+    sm = view.add_mutually_exclusive_group()
+    sm.add_argument("--show-mine", dest="show_mine", action="store_true")
+    sm.add_argument("--no-show-mine", dest="show_mine", action="store_false")
+    view.set_defaults(show_mine=None)
+    view.add_argument("--reset", action="store_true")
+
+    see = subparsers.add_parser("see", help="print what the UI shows under current view")
+    _add_global_options(see, subcommand=True)
+
     chg = subparsers.add_parser("changes", help="list recent changes")
     _add_global_options(chg, subcommand=True)
     chg.add_argument("--limit", type=int)
@@ -771,12 +800,38 @@ def print_mutation_table(result):
 
 
 def cmd_ls(args, client):
-    tree = client.tree()
+    # apply stored view if requested
+    if getattr(args, "use_view", False):
+        try:
+            v = client.get("/nav/v1/view")
+        except Exception:
+            v = {}
+        # override flags from view
+        if getattr(args, "window", None) is None and v.get("win") in ("now", "1d", "7d", "all"):
+            args.window = v.get("win")
+        if getattr(args, "starred", None) is None and isinstance(v.get("star"), bool):
+            args.starred = v.get("star")
+        if getattr(args, "live", None) is False and isinstance(v.get("live"), bool):
+            args.live = bool(v.get("live"))
+        if getattr(args, "needs", None) is None and isinstance(v.get("needs"), bool):
+            args.needs = bool(v.get("needs"))
+        if getattr(args, "match_text", None) is None and isinstance(v.get("query"), str) and v.get("query"):
+            args.match_text = v.get("query")
+    # --query maps to match_text
+    if getattr(args, "query", None):
+        args.match_text = args.query
+    window = getattr(args, "window", None) or "all"
+    try:
+        tree = client.tree(window=window, hidden=True)
+    except TypeError:
+        tree = client.tree()
     if args.groups:
         return _ls_groups(args, tree)
     if args.repos:
         return _ls_repos(args, tree)
     items = filter_from_args(flatten_tree(tree), args)
+    if getattr(args, "needs", False):
+        items = [i for i in items if i.get("state") == "needs-you"]
     if args.table:
         print_items_table(items)
     else:
@@ -2245,6 +2300,94 @@ def cmd_do(args, client):
     return 0
 
 
+DEFAULT_VIEW = {
+    "win": "1d",
+    "star": False,
+    "live": False,
+    "needs": False,
+    "query": "",
+    "show_mine": False,
+    "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+    "ov": True,
+}
+
+
+def _view_summary(view):
+    parts = []
+    win = str((view or {}).get("win") or "1d")
+    win_label = {"now": "Now", "1d": "1d", "7d": "7d", "all": "All"}.get(win, win)
+    parts.append("window: " + win_label)
+    if (view or {}).get("star"):
+        parts.append("starred only")
+    if (view or {}).get("live"):
+        parts.append("live only")
+    if (view or {}).get("needs"):
+        parts.append("needs only")
+    q = str((view or {}).get("query") or "")
+    if q:
+        parts.append("search: %r" % q)
+    return " \u00b7 ".join(parts)
+
+
+def cmd_view(args, client):
+    partial = {}
+    if getattr(args, "reset", False):
+        partial.update(DEFAULT_VIEW)
+    if getattr(args, "window", None) is not None:
+        partial["win"] = args.window
+    if getattr(args, "starred", None) is not None:
+        partial["star"] = bool(args.starred)
+    if getattr(args, "live", None) is not None:
+        partial["live"] = bool(args.live)
+    if getattr(args, "needs", None) is not None:
+        partial["needs"] = bool(args.needs)
+    if getattr(args, "query", None) is not None:
+        partial["query"] = args.query
+    if getattr(args, "show_mine", None) is not None:
+        partial["show_mine"] = bool(args.show_mine)
+    if partial:
+        client.post("/nav/v1/view", partial)
+    view = client.get("/nav/v1/view")
+    if getattr(args, "table", False):
+        for k in ("win", "star", "live", "needs", "query", "show_mine", "ov"):
+            print(f"{k}: {view.get(k)}")
+        print("display:", json.dumps(view.get("display"), sort_keys=True))
+    else:
+        print_json(view)
+    return 0
+
+
+def cmd_see(args, client):
+    data = client.get("/nav/v1/see")
+    view = data.get("view") if isinstance(data, dict) else {}
+    if not isinstance(view, dict):
+        view = {}
+    projects = data.get("projects") if isinstance(data, dict) else []
+    if not isinstance(projects, list):
+        projects = []
+    sessions = []
+    for proj in projects:
+        if not isinstance(proj, dict):
+            continue
+        for grp in proj.get("groups") or []:
+            if not isinstance(grp, dict):
+                continue
+            for s in grp.get("sessions") or []:
+                if not isinstance(s, dict):
+                    continue
+                item = dict(s)
+                item.setdefault("repo", proj.get("repo"))
+                item.setdefault("repo_name", proj.get("name"))
+                item.setdefault("group", grp.get("name"))
+                sessions.append(item)
+    if getattr(args, "table", False):
+        print(_view_summary(view))
+        print_items_table(sessions)
+    else:
+        print_json(data)
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2320,6 +2463,10 @@ def main(argv=None):
             return cmd_remote(args, client)
         if args.command == "capabilities":
             return cmd_capabilities(args, client)
+        if args.command == "view":
+            return cmd_view(args, client)
+        if args.command == "see":
+            return cmd_see(args, client)
         if args.command == "changes":
             return cmd_changes(args, client)
         if args.command == "undo":

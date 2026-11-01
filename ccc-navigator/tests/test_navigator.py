@@ -828,3 +828,100 @@ class WP5Ordering(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NavigatorViewState(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state_p = Path(self.tmp.name) / "state.json"
+        self.state = navigator.State(self.state_p)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_view_default(self):
+        v = self.state.get_view()
+        self.assertEqual(v["win"], "1d")
+        self.assertFalse(v["star"])
+        self.assertFalse(v["live"])
+        self.assertFalse(v["needs"])
+        self.assertEqual(v["query"], "")
+        self.assertFalse(v["show_mine"])
+        self.assertTrue(v["ov"])
+
+    def test_view_set(self):
+        self.state.set_view({"win": "now", "star": True, "query": "cdl"})
+        v = self.state.get_view()
+        self.assertEqual(v["win"], "now")
+        self.assertTrue(v["star"])
+        self.assertEqual(v["query"], "cdl")
+
+    def test_view_validation(self):
+        with self.assertRaises(ValueError):
+            self.state.set_view({"win": "bogus"})
+
+    def test_view_reset(self):
+        self.state.set_view({"win": "now", "star": True, "query": "cdl"})
+        default = {
+            "win": "1d", "star": False, "live": False, "needs": False, "query": "",
+            "show_mine": False,
+            "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+            "ov": True,
+        }
+        self.state.set_view(default)
+        v = self.state.get_view()
+        self.assertEqual(v["win"], "1d")
+        self.assertFalse(v["star"])
+        self.assertEqual(v["query"], "")
+
+
+class NavigatorSeeMatch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        args = type("A", (), {})()
+        args.ccc = "http://127.0.0.1:9"
+        args.state = str(d / "state.json")
+        args.pi_dir = str(d / "pi")
+        Path(args.pi_dir).mkdir()
+        args.orca_dir = None
+        args.verbose = False
+        self.app = navigator.App(args)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_matches_star_live_needs_query(self):
+        repo = {"name": "app", "pinned": False}
+        group = {"name": "infra", "pinned": False}
+        s = {"nick": "", "original": "Billing fix", "engine": "claude", "state": "working",
+             "pinned": False, "wt": "wt1", "orca_workspace": "ws1"}
+        # star filter
+        self.assertFalse(self.app._matches_ui(s, repo, group, {"star": True, "live": False, "needs": False, "query": ""}))
+        repo2 = {"name": "app", "pinned": True}
+        self.assertTrue(self.app._matches_ui(s, repo2, group, {"star": True, "live": False, "needs": False, "query": ""}))
+        # live filter
+        self.assertTrue(self.app._matches_ui(s, repo, group, {"star": False, "live": True, "needs": False, "query": ""}))
+        s2 = dict(s, state="resting")
+        self.assertFalse(self.app._matches_ui(s2, repo, group, {"star": False, "live": True, "needs": False, "query": ""}))
+        # needs filter
+        s3 = dict(s, state="needs-you")
+        self.assertTrue(self.app._matches_ui(s3, repo, group, {"star": False, "live": False, "needs": True, "query": ""}))
+        self.assertFalse(self.app._matches_ui(s, repo, group, {"star": False, "live": False, "needs": True, "query": ""}))
+        # query
+        self.assertTrue(self.app._matches_ui(s, repo, group, {"star": False, "live": False, "needs": False, "query": "billing"}))
+        self.assertTrue(self.app._matches_ui(s, repo, group, {"star": False, "live": False, "needs": False, "query": "wt1"}))
+        self.assertFalse(self.app._matches_ui(s, repo, group, {"star": False, "live": False, "needs": False, "query": "zzz"}))
+
+    def test_see_applies_view(self):
+        repo = {"key": "/code/app", "name": "app", "orig_name": "app", "counts": {}, "groups": [
+            {"name": "infra", "items": [
+                {"key": "claude:1", "nick": "", "original": "Billing", "engine": "claude", "state": "working", "pinned": True, "mtime": 1.0},
+                {"key": "claude:2", "nick": "", "original": "Docs", "engine": "claude", "state": "resting", "pinned": False, "mtime": 2.0},
+            ]}
+        ]}
+        self.app.tree = lambda win, show_hidden=False: {"repos": [repo], "copilot": None}
+        self.app.state.set_view({"win": "1d", "star": True, "live": False, "needs": False, "query": "", "show_mine": False})
+        out = self.app.see()
+        self.assertEqual(out["total_sessions"], 1)
+        self.assertEqual(out["projects"][0]["groups"][0]["sessions"][0]["key"], "claude:1")

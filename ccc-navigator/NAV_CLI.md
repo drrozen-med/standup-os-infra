@@ -428,3 +428,11 @@ launchd plist. Remote requests are logged (no codes or cookies) in
 
 The Mac must be awake and online. A closed MacBook sleeps unless it is on power
 with an external display.
+
+## view
+- `nav view` (JSON) / `--table` -- print current view
+- `nav view --window now|1d|7d|all --starred/--no-starred --live/--no-live --needs/--no-needs --query TEXT --show-mine/--no-show-mine --reset` -- set fields
+- `nav see` (JSON) / `--table` -- print exactly what the UI shows under current view; in `--table` one line per session with a header stating the view
+
+## ls
+- `nav ls` -- flattened sessions. Supports `--window now|1d|7d|all`, `--needs`, `--query`, and `--view` (apply the stored view instead of flags). All existing flags unchanged.

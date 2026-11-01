@@ -427,6 +427,43 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     ov: store.get('ov', true),
     focus: null,  // {repo, group, path}: show everything in one workspace, all time, hidden included
   };
+  let _serverViewTimer = null;
+  let _lastViewSnapshot = '';
+  let _localEditAt = 0;  // a view change I just made must not be overwritten by a read that raced my own POST
+  async function fetchServerView() {
+    if (Date.now() - _localEditAt < 3000) return;
+    try {
+      const r = await fetch('/nav/v1/view');
+      if (!r.ok) return;
+      const v = await r.json();
+      if (!v || typeof v !== 'object') return;
+      let changed = false;
+      if (typeof v.win === 'string' && v.win !== ui.win) { ui.win = v.win; store.set('win', ui.win); renderWin(); changed = true; }
+      if (typeof v.star === 'boolean' && v.star !== ui.f.star) { ui.f.star = v.star; changed = true; }
+      if (typeof v.live === 'boolean' && v.live !== ui.f.live) { ui.f.live = v.live; changed = true; }
+      if (typeof v.needs === 'boolean' && v.needs !== ui.f.needs) { ui.f.needs = v.needs; changed = true; }
+      if (typeof v.query === 'string' && v.query !== ui.query) { ui.query = v.query; const qel = $('#q'); if (qel) qel.value = ui.query; changed = true; }
+      if (typeof v.show_mine === 'boolean' && v.show_mine !== ui.showMine) { ui.showMine = v.show_mine; changed = true; }
+      if (typeof v.ov === 'boolean' && v.ov !== ui.ov) { ui.ov = v.ov; changed = true; }
+      if (v.display && typeof v.display === 'object') {
+        for (const k of ['orca','wt','eng','ago','cnt','livec','status']) {
+          if (typeof v.display[k] === 'boolean' && v.display[k] !== ui.view[k]) { ui.view[k] = v.display[k]; changed = true; }
+        }
+        if (changed) { store.set('view', ui.view); applyView(); }
+      }
+      if (changed) { store.set('filters', ui.f); store.set('showMine', ui.showMine); store.set('ov', ui.ov); renderChips(); renderList(); refresh(true); }
+      _lastViewSnapshot = JSON.stringify({win:ui.win,star:ui.f.star,live:ui.f.live,needs:ui.f.needs,query:ui.query,show_mine:ui.showMine,display:ui.view,ov:ui.ov});
+    } catch (e) {}
+  }
+  async function pushServerView(partial) {
+    try {
+      await fetch('/nav/v1/view', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(partial||{}) });
+    } catch (e) {}
+  }
+  function schedulePushView(partial) {
+    _localEditAt = Date.now();
+    pushServerView(partial);
+  }
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
   let decs = { open: [], answered: [] }, decSig = '';
 
@@ -448,6 +485,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.focus ? 'all' : ui.win) + (ui.showMine || ui.focus ? '&hidden=1' : ''));
       tree = await r.json();
       await loadDecisions();
+      fetchServerView();
       render();
     } catch (e) {
       $('#status').innerHTML = '<span class="bad">Navigator server unreachable</span>';
@@ -548,12 +586,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const b = document.createElement('button'); b.type = 'button'; b.className = 'vrow' + (ui.view[k] ? ' on' : '');
       const paint = () => { b.className = 'vrow' + (ui.view[k] ? ' on' : ''); b.innerHTML = '<span class="box">' + (ui.view[k] ? '✓' : '') + '</span><span>' + label + '</span>'; };
       paint();
-      b.addEventListener('click', ev => { ev.stopPropagation(); ui.view[k] = !ui.view[k]; store.set('view', ui.view); applyView(); paint(); });
+      b.addEventListener('click', ev => { ev.stopPropagation(); ui.view[k] = !ui.view[k]; store.set('view', ui.view); applyView(); paint(); schedulePushView({ display: { [k]: ui.view[k] } }); });
       menuEl.appendChild(b);
     }
     const sep = document.createElement('div'); sep.className = 'sep'; menuEl.appendChild(sep);
     const r = document.createElement('button'); r.type = 'button'; r.textContent = 'Reset to cleanest defaults';
-    r.addEventListener('click', ev => { ev.stopPropagation(); ui.view = { orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false }; store.set('view', ui.view); applyView(); closeMenu(); });
+    r.addEventListener('click', ev => { ev.stopPropagation(); ui.view = { orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false }; store.set('view', ui.view); applyView(); schedulePushView({ display: ui.view }); closeMenu(); });
     menuEl.appendChild(r);
     menuEl.hidden = false;
     const rc = anchor.getBoundingClientRect(), mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
@@ -1076,9 +1114,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   document.addEventListener('click', e => { if (e.target.closest('[data-mback]')) { document.body.classList.remove('m-detail'); renderList(); } });
   $('#win').addEventListener('click', e => {
     const b = e.target.closest('[data-win]'); if (!b) return;
-    ui.win = b.dataset.win; store.set('win', ui.win); renderWin(); refresh(true);
+    ui.win = b.dataset.win; store.set('win', ui.win); renderWin(); schedulePushView({ win: ui.win }); refresh(true);
   });
-  $('#q').addEventListener('input', e => { ui.query = e.target.value; renderList(); });
+  let _qTimer = null;
+  $('#q').addEventListener('input', e => { ui.query = e.target.value; _localEditAt = Date.now(); renderList(); if (_qTimer) clearTimeout(_qTimer); _qTimer = setTimeout(() => { schedulePushView({ query: ui.query }); }, 400); });
   $('#hiddenBtn').addEventListener('click', () => { ui.showHidden = !ui.showHidden; renderList(); });
   // ---- three-dots menus
   const menuEl = document.createElement('div'); menuEl.id = 'menu'; menuEl.hidden = true; document.body.appendChild(menuEl);
@@ -1394,7 +1433,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     $('#theme').innerHTML = ICON_T[m]; $('#theme').title = 'Theme: ' + m;
   }
   let themeMode = store.get('theme', 'auto'); applyTheme(themeMode);
-  $('#ovBtn').addEventListener('click', () => { ui.ov = !ui.ov; store.set('ov', ui.ov); renderOv(); });
+  $('#ovBtn').addEventListener('click', () => { ui.ov = !ui.ov; store.set('ov', ui.ov); schedulePushView({ ov: ui.ov }); renderOv(); });
   $('#theme').addEventListener('click', () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % 3]; store.set('theme', themeMode); applyTheme(themeMode); });
   $('#foldAll').innerHTML = FOLD;
   $('#foldAll').addEventListener('click', () => {
@@ -1407,9 +1446,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   $('#chips').addEventListener('click', e => {
     const vb = e.target.closest('#viewBtn'); if (vb) { e.stopPropagation(); return menuAnchor === vb ? closeMenu() : openViewMenu(vb); }
     const b = e.target.closest('[data-f]'); if (!b) return;
-    ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList();
+    ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList(); schedulePushView({ [b.dataset.f]: ui.f[b.dataset.f] });
   });
-  $('#mineBtn').addEventListener('click', () => { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); refresh(true); });
+  $('#mineBtn').addEventListener('click', () => { ui.showMine = !ui.showMine; store.set('showMine', ui.showMine); schedulePushView({ show_mine: ui.showMine }); refresh(true); });
   $('#list').addEventListener('click', e => {
     const dots = e.target.closest('[data-menu]');
     if (dots) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === dots) return closeMenu(); return openMenu(dots, menuFor(dots)); }
@@ -1705,6 +1744,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   ui.focus = parseHash();
   window.addEventListener('hashchange', () => { ui.focus = parseHash(); refresh(true); });
+  // adopt server view on load
+  fetchServerView();
   refresh(true);
   setInterval(() => { if (!document.hidden) refresh(false); }, 10000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(false); });
