@@ -190,6 +190,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .v-off-status #status:has(.bad){display:flex}
 .tag.orca{background:transparent;font-size:13px;padding:0;line-height:1}
 .chip.view{margin-left:auto}
+.chip.srch{display:none}
 .inbox h2{font:700 18px var(--display);margin:0;display:flex;gap:8px;align-items:center}.inbox h2 .n{color:var(--dim);font-size:14px}
 .dcard{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:var(--panel)}
 .dmeta{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--dim)}
@@ -363,6 +364,29 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .row1{flex-wrap:wrap;gap:6px}
   .row1 .tools{gap:4px}
   .seg button{padding:4px 6px}
+  /* header = two rows: title + tools, then chips + search + View. The pinned pills and chips fold away while scrolling down. */
+  .top{padding:6px 12px 6px;gap:6px}
+  .row1{flex-wrap:nowrap}
+  .brand::before{display:none}
+  .brand .ovbtn,.ovline{display:none}
+  .status{display:none}.status:has(.bad){display:flex}
+  .search{display:none}
+  .top.searching .search{display:flex}
+  .top.searching .chips{display:none}
+  .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:5px}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none;padding:2px 8px;gap:4px;min-height:30px;font-size:11px;text-transform:none;letter-spacing:0}
+  .chips{padding-bottom:1px}
+  .chip[data-f=star] .lbl{display:none}
+  .chip.srch{display:inline-flex;margin-left:auto;padding:2px 9px}
+  .chip.view{margin-left:0}
+  #pinned{flex-direction:row;gap:6px;padding:4px 12px 6px}
+  .pin-row{flex:1;min-width:0;min-height:34px;padding:4px 10px;font-size:13px;border:1px solid var(--line2);border-radius:999px}
+  .pin-row .ps{display:none}
+  .pin-row .pn{flex:1}
+  #side.folded .chips,#side.folded #pinned,#side.folded .status,#side.folded .search{display:none}
+  .foot{padding:4px 12px;gap:0}
+  .foot .frow,.foot .btn{min-height:30px}
 }
 </style>
 </head>
@@ -636,10 +660,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       if (s.state === 'working') working++;
       if (needsYou(s)) nd++;
     }
-    const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}${label}<span class="n">${n}</span></button>`;
+    const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}<span class="lbl">${label}</span><span class="n">${n}</span></button>`;
     applyView();
     renderPinned();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>') + '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>') + '<button type="button" class="chip srch" id="srchBtn" aria-label="Search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -1143,6 +1167,23 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   document.addEventListener('click', e => { if (!menuEl.contains(e.target)) closeMenu(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
   $('#list').addEventListener('scroll', closeMenu);
+  /* phones: search opens in place of the chips; header folds while scrolling down, returns on scroll up */
+  {
+    const sideEl = $('#side'), topEl = sideEl.querySelector('.top'), listEl = $('#list'), q = $('#q');
+    const closeSearch = () => { if (!q.value) topEl.classList.remove('searching'); };
+    $('#chips').addEventListener('click', e => { if (e.target.closest('#srchBtn')) { topEl.classList.add('searching'); q.focus(); } });
+    q.addEventListener('blur', closeSearch);
+    let last = 0, quietUntil = 0;
+    listEl.addEventListener('scroll', () => {
+      if (!matchMedia('(max-width: 760px)').matches) { sideEl.classList.remove('folded'); return; }
+      const y = listEl.scrollTop, d = y - last;
+      if (Date.now() < quietUntil) { last = y; return; }
+      const folded = sideEl.classList.contains('folded');
+      if (!folded && d > 10 && y > 80) { sideEl.classList.add('folded'); quietUntil = Date.now() + 250; }
+      else if (folded && (d < -10 || y < 8)) { sideEl.classList.remove('folded'); quietUntil = Date.now() + 250; }
+      last = y;
+    }, { passive: true });
+  }
   // ---- prefetch: warm conversations before they are clicked
   const itemByKey = (key) => { for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) if (s.key === key) return s; return null; };
   const warm = (s) => { if (s && s.sid && !s.batch && window.NavChat && NavChat.prefetch) NavChat.prefetch(s.sid, s.engine); };
