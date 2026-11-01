@@ -358,7 +358,7 @@ class OfflineTests(CheckinCase):
         self.assertEqual(len(self.runs.argvs("ask")), 0)
         self.run_main()
         self.assertEqual(len(self.runs.argvs("ask")), 1)
-        self.assertIn("check-ins have been skipped for 2 hours (thinks it is offline)", self.runs.argvs("ask")[0][6])
+        self.assertIn("check-ins have been skipped for an hour (thinks it is offline)", self.runs.argvs("ask")[0][6])
 
     def test_consec_offline_resets_after_send(self):
         self.online = False

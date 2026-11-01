@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Nudge Uri's Co-pilot session to do its periodic check-in.
 
-Run by launchd (com.standup-os.copilot-checkin, every 30 min). Sends one
+Run by launchd (com.standup-os.copilot-checkin, every 15 min). Sends one
 message into the Co-pilot session through the Navigator; the Co-pilot does the
-work (closes stale decisions, files new ones). Skips when:
+work as repo owner (rules in ~/.ccc-navigator/briefs/COPILOT-OWNER.md). Skips when:
   - no Co-pilot is set,
   - it is quiet hours (00:00-07:00 local),
   - Uri paused check-ins (he answered the copilot-down decision with
@@ -41,18 +41,20 @@ BACKOFF_MIN = 240       # after an API/credit error reply, wait this long before
 ALERT_ID = "copilot-down"            # decision that tells Uri check-ins are failing
 ALERT_MIN = 720         # minutes between copilot-down alerts
 PAUSE_CHOICE = "Pause check-ins"     # his answer that stops check-ins
-MAX_PER_DAY = 16        # sent check-ins per local calendar day
+MAX_PER_DAY = 70        # sent check-ins per local calendar day
 NET_URL = "https://api.anthropic.com"
 NET_TIMEOUT = 5         # seconds to wait for the network check
 WAKE_MIN = 45           # previous log line older than this means the Mac slept through slots
 
-PROMPT = """[Automatic check-in, every 30 min. Uri is not typing this.]
+PROMPT = """[Automatic check-in, every 15 min. Uri is not typing this.]
+You own Uri's repos. Rules: ~/.ccc-navigator/briefs/COPILOT-OWNER.md (what you may do alone, what stays Uri's) and ~/.ccc-navigator/briefs/RULES.md (workers). Read both if they are not in your context.
 NAV=~/projects/standup-os/ccc-navigator/nav.py
-1. Run `python3 $NAV decisions --table` and `python3 $NAV brief --table`.
-2. Close decisions that are verifiably no longer needed (the work is done, the PR merged, the deadline passed, or a newer decision replaces it): `NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`. Check before closing. Never pick an answer for Uri on a real choice.
-3. If something new needs Uri and is not already in the inbox, add it: `NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`. One question each, tap-able options, only what truly needs him.
-4. Rank what matters most for Uri: `NAV_ACTOR=copilot python3 $NAV rank <id1> <id2> ... --why <id>=<one short reason>` (at most 5, most important first).
-5. Reply in at most 3 short lines: what you closed, added, or noticed. If nothing changed, reply exactly: Check-in: nothing new."""
+1. Read `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
+2. Workers waiting on a question: if the answer is inside the rules, read the session's last messages first. Type into it only if it is idle, ends on that question and went quiet under 24 h ago; otherwise start a new session in that repo with a short brief. Questions outside the rules become one decision for Uri.
+3. Blocked, failed or stuck workers: unblock, restart, or hand the job to a new worker (free models first).
+4. Red CI on a default branch, or a stuck PR with no owner: start a free-model worker to fix it. Merge only green PRs reviewed by a second model.
+5. Inbox: close decisions that are verifiably done (`NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`), add new ones only for what is Uri's (`NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`), rank the top 5 (`NAV_ACTOR=copilot python3 $NAV rank <id1> ... --why <id>=<reason>`). Never pick an answer for Uri on a real choice.
+6. Reply in at most 3 short lines: what you did and what needs Uri. If nothing changed, reply exactly: Check-in: nothing new."""
 
 
 def log(msg):
@@ -127,7 +129,7 @@ def online():
 
 
 def woke():
-    """True when the previous run's log line is stale: with a run every 30 min, a gap means the Mac slept."""
+    """True when the previous run's log line is stale: with a run every 15 min, a gap means the Mac slept."""
     try:
         with open(LOG) as f:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
@@ -218,14 +220,14 @@ def main():
         st["consec_skip_offline_wake"] = consec
         save_state(st)
         if consec >= 4:
-            alert(st, open_ids, answered, True, "check-ins have been skipped for 2 hours (thinks it is offline)")
+            alert(st, open_ids, answered, True, "check-ins have been skipped for an hour (thinks it is offline)")
         return log("skip: offline")
     if woke():
         consec = int(st.get("consec_skip_offline_wake") or 0) + 1
         st["consec_skip_offline_wake"] = consec
         save_state(st)
         if consec >= 4:
-            alert(st, open_ids, answered, True, "check-ins have been skipped for 2 hours (thinks it is offline)")
+            alert(st, open_ids, answered, True, "check-ins have been skipped for an hour (thinks it is offline)")
         return log("skip: just woke")
     today = now.strftime("%Y-%m-%d")
     sent = st.get("sent_count", 0) if st.get("sent_day") == today else 0
