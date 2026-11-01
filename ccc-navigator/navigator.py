@@ -44,6 +44,7 @@ import remote
 import actions
 import refs
 import sources
+import voice
 
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
@@ -1596,6 +1597,8 @@ class App:
             os.environ.get("CCC_NAV_WATCHTOWER_DECISIONS",
                            "~/projects/standup-os/watchtower/decisions.json"))
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
+        self.voice = voice.Voice(home / "voice")
+        self._last_text = {}
 
     def moved(self, sid):
         """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
@@ -1850,6 +1853,60 @@ class App:
             projects_out.append(proj)
         return {"view": view, "projects": projects_out, "total_sessions": total_sessions}
 
+    # ---- ride mode (voice.py)
+    def last_agent_text(self, key, fresh=20):
+        """Newest prose an agent wrote in a session, with a signature that changes when a new reply lands."""
+        engine, _, sid = str(key or "").partition(":")
+        if not sid or engine == "pi":
+            return {"text": "", "sig": ""}
+        hit = self._last_text.get(key)
+        if hit and time.time() - hit[0] < fresh:
+            return hit[1]
+        out = {"text": "", "sig": ""}
+        try:
+            base = urllib.parse.urlparse(self.ccc.base)
+            c = http.client.HTTPConnection(base.hostname, base.port or 80, timeout=6)
+            c.request("GET", "/api/conversations/" + urllib.parse.quote(sid))
+            r = c.getresponse()
+            data = json.loads(r.read() or b"{}") if r.status < 400 else {}
+            c.close()
+            n = 0
+            for ev in (data.get("events") or []) if isinstance(data, dict) else []:
+                if ev.get("type") != "assistant":
+                    continue
+                txt = "\n\n".join(b.get("text") or "" for b in ev.get("blocks") or [] if b.get("kind") == "text").strip()
+                if txt:
+                    n += 1
+                    out = {"text": txt, "sig": "%d:%s" % (n, ev.get("ts") or "")}
+        except Exception:
+            pass
+        self._last_text[key] = (time.time(), out)
+        if len(self._last_text) > 200:
+            self._last_text.pop(next(iter(self._last_text)))
+        return out
+
+    def voice_brief(self):
+        tree = self.tree("1d")
+        sessions, _ = voice.waiting_sessions(tree)
+        keys = [it.get("key") for _, it in sessions]
+        texts = {}
+
+        def grab(k):
+            texts[k] = self.last_agent_text(k).get("text", "")
+        ts = [threading.Thread(target=grab, args=(k,), daemon=True) for k in keys]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(8)
+        return voice.briefing(tree, self.inbox.list(), lambda k: texts.get(k, ""))
+
+    def voice_find(self, target):
+        hit = voice.find_session(target, self.tree("3d"))
+        if not hit:
+            return {"ok": False}
+        key, title, repo = hit
+        return {"ok": True, "key": key, "title": title, "repo": repo}
+
     def api_ask(self, key):
         # relay: try CCC first
         try:
@@ -2097,6 +2154,90 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    # ---- ride mode
+    def _voice_get(self, u):
+        v = self.app.voice
+        if u.path == "/api/voice/status":
+            return self._send(200, dict(v.status(), ok=True))
+        if u.path == "/api/voice/brief":
+            return self._send(200, dict(self.app.voice_brief(), ok=True))
+        if u.path == "/api/voice/last":
+            key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
+            got = self.app.last_agent_text(key, fresh=3)
+            return self._send(200, {"ok": True, "sig": got["sig"], "say": voice.spoken(got["text"], limit=1400),
+                                    "head": voice.first_sentence(got["text"]) if got["text"] else ""})
+        if u.path.startswith("/api/voice/audio/"):
+            f = v.path(u.path.rsplit("/", 1)[-1].removesuffix(".mp3"))
+            if not f or not f.exists():
+                return self._send(404, {"error": "not found"})
+            return self._send_audio(f.read_bytes())
+        return self._send(404, {"error": "not found"})
+
+    def _send_audio(self, data):
+        """mp3 with byte ranges: iPhone Safari will not play an <audio> source that ignores Range."""
+        total, rng = len(data), self.headers.get("Range") or ""
+        m = re.match(r"bytes=(\d*)-(\d*)$", rng.strip())
+        if m and (m.group(1) or m.group(2)):
+            a = int(m.group(1)) if m.group(1) else max(0, total - int(m.group(2)))
+            b = min(int(m.group(2)), total - 1) if m.group(1) and m.group(2) else total - 1
+            if a >= total or a > b:
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */%d" % total)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            part = data[a:b + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (a, b, total))
+        else:
+            part = data
+            self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(part)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(part)
+
+    def _voice_post(self, path):
+        v = self.app.voice
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            if path == "/api/voice/hear":     # raw recorded audio from the phone
+                if not (self.headers.get("Content-Type") or "").startswith(("audio/", "video/", "application/octet-stream")):
+                    return self._send(415, {"error": "audio only"})
+                if n > 8_000_000:
+                    return self._send(413, {"error": "too long"})
+                hint = (self.headers.get("X-Voice-Hint") or "") + ". " + voice.names_hint(self.app.tree("1d"))
+                got = v.hear(self.rfile.read(n), hint=hint, lang=(self.headers.get("X-Voice-Lang") or "").strip().lower())
+                return self._send(200, dict(got, ok=True, parsed=voice.parse(got["text"])))
+            if "application/json" not in (self.headers.get("Content-Type") or ""):
+                return self._send(415, {"error": "json only"})
+            body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+            if path == "/api/voice/say":
+                text = str(body.get("text") or "")
+                if not body.get("raw"):
+                    text = voice.spoken(text, limit=int(body.get("limit") or 1400))
+                aid = v.say(text)
+                return self._send(200, {"ok": True, "id": aid, "url": "/api/voice/audio/%s.mp3" % aid, "text": text})
+            if path == "/api/voice/find":
+                return self._send(200, self.app.voice_find(body.get("target")))
+            if path == "/api/voice/send":
+                key, text = str(body.get("key") or ""), str(body.get("text") or "").strip()
+                if not key or not text:
+                    return self._send(400, {"error": "key and text required"})
+                before = self.app.last_agent_text(key, fresh=0)["sig"]
+                status = self.app.deliver(key, text)
+                return self._send(200 if status == "sent" else 409, {"ok": status == "sent", "status": status, "sig": before})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except voice.VoiceUnavailable as e:
+            return self._send(503, {"error": str(e)})
+        except subprocess.SubprocessError as e:
+            return self._send(500, {"error": "audio conversion failed: %s" % e})
+        return self._send(404, {"error": "not found"})
+
     def _proxy_gated(self):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
@@ -2117,10 +2258,17 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/remote/sessions":
             return self._remote_api(u.path, None)
         if u.path.startswith("/__nav/"):
-            return self._static(u.path.rsplit("/", 1)[-1])
+            name = u.path.rsplit("/", 1)[-1]
+            if name.endswith(".mp3") and static_asset(name):
+                return self._send_audio(static_asset(name)[0])
+            return self._static(name)
         if u.path in ("/", "/index.html") and "ccc_popout" not in u.query:
             html = (HERE / "static" / "index.html").read_bytes().replace(b"__NAV_VERSION__", app_version().encode())
             return self._send(200, html, "text/html; charset=utf-8")
+        if u.path in ("/ride", "/ride.html"):
+            return self._send(200, (HERE / "static" / "ride.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path.startswith("/api/voice/"):
+            return self._voice_get(u)
         if u.path == "/api/hidelog":
             log = self.app.state.snapshot()["hide_log"]
             return self._send(200, {"entries": [e for e in reversed(log) if not e.get("undone")][:15]})
@@ -2292,6 +2440,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.app.moved(sid):
                 return self._send(409, self.app.moved_reply(sid, str(b.get("text") or "")))
             return self._proxy(raw)
+        if path.startswith("/api/voice/"):
+            return self._voice_post(path)
         if path not in self.NAV_POST:
             return self._proxy()
         ctype = self.headers.get("Content-Type") or ""

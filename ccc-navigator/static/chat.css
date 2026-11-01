@@ -303,3 +303,9 @@
 @media (prefers-reduced-motion: reduce) {
   .typing .dots i { animation: none; opacity: 0.7; }
 }
+
+/* speaker under agent replies (voice.py reads it aloud) */
+.row.them > .speak { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 26px;
+  margin: 2px 0 0 2px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--dim);
+  cursor: pointer; opacity: .75; }
+.row.them > .speak:hover, .row.them > .speak.on { opacity: 1; color: var(--primary); }
