@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ride">
+<link rel="apple-touch-icon" href="/__nav/apple-touch-icon.png">
+<title>Ride</title>
+<style>
+:root{--bg:#0b0d10;--card:#151a20;--line:#252c35;--ink:#f2f4f7;--dim:#8b95a3;--go:#3ddc84;--hold:#ffb020;--talk:#4da3ff;--bad:#ff5d5d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{min-height:100dvh;display:flex;flex-direction:column;padding:max(14px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+header a{color:var(--dim);text-decoration:none;font-size:15px}
+.state{font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:8px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--dim)}
+.state[data-s=speaking] .dot{background:var(--go)}
+.state[data-s=listening] .dot{background:var(--bad);animation:pulse 1s infinite}
+.state[data-s=waiting] .dot{background:var(--talk);animation:pulse 1.6s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.where{margin:14px 0 6px;font-size:14px;color:var(--dim);min-height:20px}
+.now{flex:1;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;font-size:22px;line-height:1.35;overflow:auto;min-height:170px}
+.now small{display:block;font-size:15px;color:var(--dim);margin-top:12px}
+.heard{min-height:22px;margin:10px 2px;color:var(--talk);font-size:16px}
+.pad{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:6px}
+button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 8px;min-height:64px;touch-action:manipulation}
+button:active{transform:scale(.97)}
+.big{grid-column:1/-1;min-height:96px;font-size:22px;font-weight:600}
+#start{background:var(--go);color:#04140a;border:0}
+#talk{background:var(--talk);color:#03121f;border:0}
+#talk.on{background:var(--bad);color:#fff}
+.row{display:flex;gap:10px;align-items:center;margin-top:12px}
+.switch{display:flex;align-items:center;gap:10px;font-size:16px;flex:1;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.switch input{width:22px;height:22px}
+.held{margin-top:14px}
+.held h3{font-size:14px;color:var(--hold);text-transform:uppercase;letter-spacing:.04em;margin:0 0 8px}
+.h{background:var(--card);border:1px solid var(--hold);border-radius:14px;padding:12px;margin-bottom:8px;font-size:16px}
+.h .b{display:flex;gap:8px;margin-top:10px}
+.h button{flex:1;min-height:48px;padding:10px}
+.h .ok{background:var(--hold);color:#1e1400;border:0}
+.hint{color:var(--dim);font-size:14px;margin-top:12px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="state" id="state" data-s="idle"><span class="dot"></span><span id="stateTxt">Ready</span></div>
+  <a href="/">Sessions</a>
+</header>
+<div class="where" id="where"></div>
+<div class="now" id="now">Tap <b>Start ride</b>. You'll hear what needs you, one item at a time. Headphone buttons: play/pause, next, and back to repeat.</div>
+<div class="heard" id="heard"></div>
+
+<div class="pad">
+  <button class="big" id="start">Start ride</button>
+  <button class="big" id="talk" hidden>Talk</button>
+  <button id="back" aria-label="Repeat">Repeat</button>
+  <button id="play" aria-label="Pause">Pause</button>
+  <button id="next" aria-label="Next">Next</button>
+</div>
+
+<div class="row">
+  <label class="switch"><input type="checkbox" id="hands"> Hands-free talk</label>
+  <select id="lang" aria-label="I speak" style="font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:14px;min-height:52px;padding:0 10px">
+    <option value="en">English</option><option value="he">עברית</option><option value="">Mixed</option>
+  </select>
+  <button id="brief" style="min-height:52px;padding:10px 14px">Brief again</button>
+</div>
+<div class="hint" id="hint">Hands-free listens after each item and keeps the screen on, so mount the phone. Without it, audio keeps playing with the screen locked.</div>
+
+<div class="held" id="heldBox" hidden>
+  <h3>Confirm when you stop</h3>
+  <div id="held"></div>
+</div>
+
+<audio id="player" preload="auto" playsinline></audio>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var player = $('player');
+  var S = {
+    items: [], idx: -1, paused: true, started: false,
+    talkKey: null, talkTitle: '',      // conversation mode: who we're talking to
+    token: 0,                          // bumps on every user jump, so stale async steps stop
+    busy: false, recording: null
+  };
+  var HELD_KEY = 'ride-held-v1';
+
+  // ---------------------------------------------------------------- ui
+  function setState(s, txt) { $('state').dataset.s = s; $('stateTxt').textContent = txt; }
+  function show(text, sub) { $('now').innerHTML = esc(text) + (sub ? '<small>' + esc(sub) + '</small>' : ''); }
+  function where(t) { $('where').textContent = t || ''; }
+  function heard(t) { $('heard').textContent = t ? '“' + t + '”' : ''; }
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function api(path, body) {
+    return fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { if (!r.ok && !d.error) d.error = 'HTTP ' + r.status; d._status = r.status; return d; }); });
+  }
+
+  // ---------------------------------------------------------------- speech out
+  var audioCache = {};
+  function prepare(text) {               // -> Promise(url); Kokoro on the Mac, cached by text
+    if (!text) return Promise.resolve(null);
+    if (!audioCache[text]) audioCache[text] = api('/api/voice/say', { text: text, raw: true }).then(function (d) {
+      if (!d.url) { delete audioCache[text]; throw new Error(d.error || 'no audio'); }
+      return d.url;
+    });
+    return audioCache[text];
+  }
+  function say(text, title) {             // -> Promise resolved when finished (or skipped)
+    var my = S.token;
+    if (!text) return Promise.resolve();
+    setState('speaking', 'Speaking');
+    meta(title || text);
+    return prepare(text).then(function (url) {
+      if (my !== S.token) return;
+      return new Promise(function (done) {
+        var finish = function () { player.onended = player.onerror = null; done(); };
+        player.onended = finish; player.onerror = finish;
+        player.src = url;
+        S.paused = false; $('play').textContent = 'Pause';
+        player.play().catch(function () { finish(); });
+        S.finishNow = finish;
+      });
+    }).catch(function (e) { show('Speech failed: ' + e.message); });
+  }
+  function chime(freq) {
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      S.ac = S.ac || new C();
+      var o = S.ac.createOscillator(), g = S.ac.createGain();
+      o.frequency.value = freq || 880; g.gain.value = 0.0001;
+      o.connect(g); g.connect(S.ac.destination); o.start();
+      g.gain.exponentialRampToValueAtTime(0.25, S.ac.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, S.ac.currentTime + 0.25);
+      o.stop(S.ac.currentTime + 0.3);
+    } catch (e) {}
+  }
+  function meta(title) {
+    if (!('mediaSession' in navigator)) return;
+    try { navigator.mediaSession.metadata = new MediaMetadata({ title: String(title).slice(0, 90), artist: 'Ride briefing', artwork: [{ src: '/__nav/icon-512.png', sizes: '512x512', type: 'image/png' }] }); } catch (e) {}
+  }
+  function bindHeadphones() {
+    if (!('mediaSession' in navigator)) return;
+    var ms = navigator.mediaSession;
+    var set = function (a, f) { try { ms.setActionHandler(a, f); } catch (e) {} };
+    set('play', function () { resume(); });
+    set('pause', function () { pause(); });
+    set('nexttrack', function () { jump(S.idx + 1); });
+    set('previoustrack', function () { jump(S.idx); });
+    set('seekforward', function () { jump(S.idx + 1); });
+    set('seekbackward', function () { jump(S.idx); });
+  }
+
+  // ---------------------------------------------------------------- listening
+  // Records one utterance: waits for speech to start, stops after a pause. The mic is released
+  // after every turn so playback stays in high-quality headphone mode.
+  function listen(opts) {
+    opts = opts || {};
+    var my = S.token, wait = opts.wait || 7000, maxLen = opts.max || 20000, quiet = opts.quiet || 1300;
+    if (!$('hands').checked && !opts.force) return Promise.resolve(null);
+    setState('listening', opts.label || 'Listening');
+    chime(660);
+    return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
+      return new Promise(function (done) {
+        var C = window.AudioContext || window.webkitAudioContext;
+        S.ac = S.ac || new C();
+        if (S.ac.state === 'suspended') S.ac.resume();
+        var src = S.ac.createMediaStreamSource(stream), an = S.ac.createAnalyser();
+        an.fftSize = 1024; src.connect(an);
+        var buf = new Float32Array(an.fftSize), chunks = [];
+        var type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(function (t) { return window.MediaRecorder && MediaRecorder.isTypeSupported(t); }) || '';
+        var rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+        S.recording = rec;
+        rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+        var t0 = Date.now(), spoke = 0, lastLoud = 0, floor = 0.01, ended = false;
+        function end(keep) {
+          if (ended) return; ended = true;
+          clearInterval(tick);
+          rec.onstop = function () {
+            stream.getTracks().forEach(function (t) { t.stop(); });
+            try { src.disconnect(); } catch (e) {}
+            S.recording = null;
+            done(keep && chunks.length && my === S.token ? new Blob(chunks, { type: rec.mimeType || 'audio/mp4' }) : null);
+          };
+          try { rec.stop(); } catch (e) { rec.onstop(); }
+        }
+        S.stopListening = function (keep) { end(keep); };
+        rec.start(250);
+        var tick = setInterval(function () {
+          if (my !== S.token) return end(false);
+          an.getFloatTimeDomainData(buf);
+          var sum = 0; for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          var rms = Math.sqrt(sum / buf.length), now = Date.now();
+          if (now - t0 < 400) { floor = Math.max(floor, rms * 1.5); return; }   // learn the wind/road floor
+          var loud = rms > Math.max(0.02, floor * 2.2);
+          if (loud) { lastLoud = now; if (!spoke) spoke = now; }
+          if (!spoke && now - t0 > wait) return end(false);                   // nothing said
+          if (spoke && now - lastLoud > quiet && now - spoke > 350) return end(true);
+          if (spoke && now - spoke > maxLen) return end(true);
+        }, 60);
+      });
+    }).then(function (blob) {
+      if (!blob) { setState('idle', 'Ready'); return null; }
+      setState('waiting', 'Understanding');
+      return fetch('/api/voice/hear', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/mp4', 'X-Voice-Hint': opts.hint || '', 'X-Voice-Lang': $('lang').value }, body: blob })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (my !== S.token) return null;
+          if (d.error) { show('Could not understand: ' + d.error); return null; }
+          heard(d.text);
+          return d.text ? d : null;
+        });
+    }).catch(function (e) {
+      show('Microphone problem: ' + e.message + '. Turn hands-free off, or allow the microphone.');
+      $('hands').checked = false; return null;
+    });
+  }
+
+  // ---------------------------------------------------------------- held (needs a tap at a stop)
+  function held() { try { return JSON.parse(localStorage.getItem(HELD_KEY) || '[]'); } catch (e) { return []; } }
+  function saveHeld(list) { try { localStorage.setItem(HELD_KEY, JSON.stringify(list)); } catch (e) {} renderHeld(); }
+  function hold(entry) { var l = held(); entry.at = Date.now(); l.push(entry); saveHeld(l); }
+  function renderHeld() {
+    var l = held(); $('heldBox').hidden = !l.length;
+    $('held').innerHTML = l.map(function (h, i) {
+      return '<div class="h"><div>' + esc(h.label) + '</div><div class="b"><button class="ok" data-i="' + i + '">Confirm</button><button data-drop="' + i + '">Drop</button></div></div>';
+    }).join('');
+  }
+  $('held').addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    var l = held(), i = +(b.dataset.i != null ? b.dataset.i : b.dataset.drop), h = l[i];
+    if (!h) return;
+    if (b.dataset.drop != null) { l.splice(i, 1); return saveHeld(l); }
+    b.disabled = true; b.textContent = 'Sending...';
+    commit(h).then(function (ok) {
+      if (ok) { l.splice(i, 1); saveHeld(l); } else { b.disabled = false; b.textContent = 'Retry'; }
+    });
+  });
+  function commit(h) {
+    var p = h.kind === 'decision'
+      ? api('/api/decisions/answer', { id: h.id, choice: h.choice, note: 'answered by voice on a ride' })
+      : api('/api/voice/send', { key: h.key, text: h.text });
+    return p.then(function (d) { return d.ok !== false && !d.error; });
+  }
+
+  // ---------------------------------------------------------------- the briefing
+  function load() {
+    setState('waiting', 'Loading');
+    show('Getting your briefing...');
+    return api('/api/voice/brief').then(function (b) {
+      if (b.error) { show('Could not load the briefing: ' + b.error); setState('idle', 'Error'); return; }
+      var list = [{ kind: 'intro', say: b.intro }].concat(b.items || []);
+      if (b.outro) list.push({ kind: 'outro', say: b.outro });
+      S.items = list;
+      // one clip at a time, in order: the Mac makes them one by one anyway, and parallel requests
+      // would fill the browser's few connections and stall the clip that is playing now
+      list.reduce(function (chain, it) {
+        return chain.then(function () { return prepare(it.say).catch(function () {}); });
+      }, Promise.resolve());
+    });
+  }
+  function itemLabel(it, i) {
+    var n = S.items.length - (S.items[S.items.length - 1].kind === 'outro' ? 2 : 1);
+    if (it.kind === 'decision') return 'Decision · ' + i + ' of ' + n + (it.lane ? ' · ' + it.lane : '');
+    if (it.kind === 'session') return 'Waiting · ' + i + ' of ' + n + ' · ' + it.repo;
+    return '';
+  }
+  function jump(i) {
+    S.token++;
+    if (S.stopListening) S.stopListening(false);
+    if (S.finishNow) { player.pause(); S.finishNow(); }
+    S.talkKey = null; $('talk').textContent = 'Talk';
+    play(i);
+  }
+  function play(i) {
+    var my = ++S.token;
+    if (i < 0) i = 0;
+    S.idx = i; heard('');
+    var it = S.items[i];
+    if (!it) { setState('idle', 'Done'); where(''); show('That\'s everything. Tap Brief again for a fresh one, or Talk to reach any session.'); return; }
+    where(itemLabel(it, i));
+    show(it.say.replace(/^(?:[A-Z][a-z]+|\d+)\. /, ''), it.kind === 'decision' && it.confirm ? 'A yes here is held until you stop.' : '');
+    if (it.kind !== 'intro' && it.kind !== 'outro') chime(990);
+    say(it.say, it.title || it.say).then(function () {
+      if (my !== S.token) return;
+      if (it.kind === 'decision' || it.kind === 'session') return respond(it, my);
+      setTimeout(function () { if (my === S.token && !S.paused) play(i + 1); }, 500);
+    });
+  }
+
+  // after an item: listen for an answer (hands-free) or move on
+  function respond(it, my) {
+    if (!$('hands').checked) {
+      setTimeout(function () { if (my === S.token && !S.paused) play(S.idx + 1); }, 1200);
+      return;
+    }
+    var hint = it.kind === 'decision' ? (it.options || []).join(', ') : it.title;
+    listen({ hint: hint }).then(function (d) {
+      if (my !== S.token) return;
+      if (!d) return play(S.idx + 1);                 // silence: move on, it stays open
+      handle(d.parsed || { intent: 'message', text: d.text }, d.text, it, my);
+    });
+  }
+
+  function handle(p, text, it, my) {
+    var i = p.intent;
+    if (i === 'stop') { pause(); return; }
+    if (i === 'repeat') return play(S.idx);
+    if (i === 'next' || i === 'later') return say(i === 'later' ? 'Later.' : '').then(function () { play(S.idx + 1); });
+    if (i === 'back') return play(Math.max(1, S.idx - 1));
+    if (i === 'brief') return restart();
+    if (i === 'talk' || i === 'tell') return switchTo(p.target, i === 'tell' ? p.text : '');
+    if (i === 'more' && it && it.kind === 'session') {
+      return say(it.more || 'There is nothing more.').then(function () { if (my === S.token) respond(it, my); });
+    }
+    if (it && it.kind === 'decision') {
+      var opts = it.options || [], k = optionIndex(p, text, opts);
+      if (k == null) return say('I did not catch an option. Say ' + (opts.join(', ') || 'yes or no') + ', or later.').then(function () { if (my === S.token) respond(it, my); });
+      return answerDecision(it, opts[k]).then(function () { if (my === S.token) play(S.idx + 1); });
+    }
+    if (it && it.kind === 'session') {
+      var msg = i === 'yes' ? 'yes' : i === 'no' ? 'no' : text;
+      return sendTo(it.key, it.title, msg, it.say, my).then(function (sent) {
+        if (sent && my === S.token) converse(it.key, it.title, sent);
+      });
+    }
+    return play(S.idx + 1);
+  }
+
+  function optionIndex(p, text, opts) {
+    var lo = opts.map(function (o) { return String(o).toLowerCase(); });
+    if (p.intent === 'option' && p.n >= 1 && p.n <= opts.length) return p.n - 1;
+    if ((p.intent === 'yes' || p.intent === 'no') && lo.indexOf(p.intent) >= 0) return lo.indexOf(p.intent);
+    if (p.intent === 'yes' && opts.length === 1) return 0;
+    var t = String(text || '').toLowerCase(), hit = lo.filter(function (o) { return o && t.indexOf(o) >= 0; });
+    return hit.length === 1 ? lo.indexOf(hit[0]) : null;
+  }
+
+  function answerDecision(it, choice) {
+    var risky = it.confirm && !/^(no|later|skip|not now)$/i.test(choice);
+    if (risky) {
+      hold({ kind: 'decision', id: it.id, choice: choice, label: choice + ': ' + it.question });
+      return say('Held for when you stop: ' + choice + '.');
+    }
+    return api('/api/decisions/answer', { id: it.id, choice: choice, note: 'answered by voice on a ride' }).then(function (d) {
+      return say(d.ok ? 'Got it: ' + choice + '.' : 'That did not go through. I kept it for when you stop.').then(function () {
+        if (!d.ok) hold({ kind: 'decision', id: it.id, choice: choice, label: choice + ': ' + it.question });
+      });
+    });
+  }
+
+  // read back, allow "cancel", then send. Risky-looking sends are held.
+  var RISKY = /\b(buy|pay|purchase|subscribe|merge|deploy|live|production|publish|post|send|email|delete|remove|wipe|revoke|release|launch|push)\b/i;
+  function sendTo(key, title, text, context, my) {
+    if (!text) return Promise.resolve(null);
+    var yesToRisky = /^(yes|yeah|yep|ok(ay)?|go ahead|do it|sure)\b/i.test(text) && RISKY.test(context || '');
+    if (yesToRisky || RISKY.test(text)) {
+      hold({ kind: 'session', key: key, text: text, label: 'To ' + title + ': ' + text });
+      return say('That could be hard to undo, so I held it for when you stop.').then(function () { return null; });
+    }
+    return say('To ' + title + ': ' + text + '. Sending, say cancel to stop.').then(function () {
+      if (my !== S.token) return null;
+      return listen({ wait: 2200, max: 3000, label: 'Say cancel to stop', force: $('hands').checked });
+    }).then(function (d) {
+      if (my !== S.token) return null;
+      if (d && d.parsed && d.parsed.intent === 'cancel') return say('Cancelled.').then(function () { return null; });
+      return api('/api/voice/send', { key: key, text: text }).then(function (r) {
+        if (!r.ok) {
+          var why = r.status === 'moved' ? 'that session moved, answer it from the Claude app' : (r.error || r.status || 'it failed');
+          return say('Not sent: ' + why + '.').then(function () { return null; });
+        }
+        chime(1200);
+        return r.sig || '-';
+      });
+    });
+  }
+
+  // back-and-forth with one session until "next" / "stop" / "brief"
+  function converse(key, title, beforeSig) {
+    var my = ++S.token;
+    S.talkKey = key; S.talkTitle = title;
+    $('talk').hidden = false; $('talk').textContent = 'Leave ' + title.slice(0, 18);
+    where('Talking to ' + title);
+    waitReply(key, title, beforeSig, my).then(function (reply) {
+      if (my !== S.token) return;
+      if (reply) return say(title + ' says: ' + reply.say, title).then(function () { return turn(key, title, reply.sig, my); });
+      return turn(key, title, beforeSig, my);
+    });
+  }
+  function turn(key, title, sig, my) {
+    if (my !== S.token) return;
+    show('Talking to ' + title + '. Speak your reply, or say next to go back to the briefing.');
+    listen({ wait: 9000, max: 60000, quiet: 1700, hint: title, force: true }).then(function (d) {
+      if (my !== S.token) return;
+      if (!d) { return say('I\'ll wait. Tap Talk or say something after the tone.').then(function () { pause(); }); }
+      var p = d.parsed || {};
+      if (['next', 'later', 'brief', 'stop', 'talk', 'tell', 'repeat'].indexOf(p.intent) >= 0) {
+        S.talkKey = null; $('talk').textContent = 'Talk';
+        if (p.intent === 'repeat') return api('/api/voice/last?key=' + encodeURIComponent(key)).then(function (r) { return say(r.say || 'Nothing yet.'); }).then(function () { turn(key, title, sig, my); });
+        return handle(p, d.text, null, my);
+      }
+      var text = p.intent === 'yes' ? 'yes' : p.intent === 'no' ? 'no' : d.text;
+      return sendTo(key, title, text, '', my).then(function (s) {
+        if (my !== S.token) return;
+        if (s) converse(key, title, s); else turn(key, title, sig, my);
+      });
+    });
+  }
+  function waitReply(key, title, before, my) {
+    setState('waiting', title + ' is working');
+    show(title + ' is working on it. I\'ll read the answer when it lands.');
+    var t0 = Date.now(), lastNudge = Date.now();
+    return new Promise(function (done) {
+      (function poll() {
+        if (my !== S.token) return done(null);
+        api('/api/voice/last?key=' + encodeURIComponent(key)).then(function (r) {
+          if (my !== S.token) return done(null);
+          if (r.sig && r.sig !== before && r.say) return done(r);
+          if (Date.now() - t0 > 15 * 60000) return say('Still no reply from ' + title + '. Moving on.').then(function () { done(null); });
+          var next = function () { setTimeout(poll, 3500); };
+          if (Date.now() - lastNudge > 45000) { lastNudge = Date.now(); chime(520); }
+          next();
+        }).catch(function () { setTimeout(poll, 5000); });
+      })();
+    });
+  }
+
+  function switchTo(target, text) {
+    var my = ++S.token;
+    return api('/api/voice/find', { target: target }).then(function (f) {
+      if (my !== S.token) return;
+      if (!f.ok) return say('I could not find ' + target + '.').then(function () { pause(); });
+      if (text) return sendTo(f.key, f.title, text, '', my).then(function (s) { if (s && my === S.token) converse(f.key, f.title, s); });
+      return say('Talking to ' + f.title + '. Go ahead.').then(function () { if (my === S.token) { S.talkKey = f.key; turn(f.key, f.title, '', my); } });
+    });
+  }
+
+  // ---------------------------------------------------------------- controls
+  function pause() {
+    S.paused = true; player.pause(); $('play').textContent = 'Play';
+    if (S.stopListening) S.stopListening(false);
+    setState('idle', 'Paused');
+  }
+  function resume() {
+    if (!S.started) return start();
+    S.paused = false; $('play').textContent = 'Pause';
+    if (player.src && !player.ended && player.currentTime > 0) { player.play(); setState('speaking', 'Speaking'); }
+    else play(S.idx);
+  }
+  function restart() { S.token++; return load().then(function () { play(0); }); }
+  function start() {
+    S.started = true; S.paused = false;
+    player.src = '/__nav/silence.mp3';
+    player.play().catch(function () {});         // unlock audio on this tap (iPhone)
+    chime(1);                                      // and the tone generator
+    bindHeadphones();
+    $('start').hidden = true; $('talk').hidden = false;
+    if ($('hands').checked) wake();
+    return restart();
+  }
+  function wake() {
+    if (!('wakeLock' in navigator)) return;
+    navigator.wakeLock.request('screen').then(function (l) { S.lock = l; }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && $('hands').checked && S.started) wake(); });
+
+  $('start').onclick = start;
+  $('play').onclick = function () { S.paused ? resume() : pause(); };
+  $('next').onclick = function () { jump(S.idx + 1); };
+  $('back').onclick = function () { jump(Math.max(0, S.idx)); };
+  $('brief').onclick = function () { if (!S.started) return start(); jump(0); restart(); };
+  $('hands').onchange = function () {
+    try { localStorage.setItem('ride-hands', this.checked ? '1' : '0'); } catch (e) {}
+    if (this.checked && S.started) wake();
+    if (!this.checked && S.lock) { S.lock.release(); S.lock = null; }
+  };
+  $('talk').onclick = function () {
+    if (!S.started) return start();
+    if (S.recording && S.stopListening) return S.stopListening(true);    // tap again = done talking
+    if (S.talkKey) { S.talkKey = null; this.textContent = 'Talk'; return jump(S.idx + 1); }
+    S.token++; player.pause();
+    var my = S.token;
+    say('Who do you want to talk to? Or just say your message.').then(function () {
+      return listen({ wait: 8000, max: 30000, force: true, label: 'Tap again when done' });
+    }).then(function (d) {
+      if (!d || my !== S.token) return;
+      var p = d.parsed || {};
+      if (p.intent === 'message' && d.text.split(/\s+/).length <= 4) p = { intent: 'talk', target: d.text };
+      handle(p, d.text, S.items[S.idx], my);
+    });
+  };
+  try { $('hands').checked = localStorage.getItem('ride-hands') === '1'; var lg = localStorage.getItem('ride-lang'); if (lg != null) $('lang').value = lg; } catch (e) {}
+  $('lang').onchange = function () { try { localStorage.setItem('ride-lang', this.value); } catch (e) {} };
+  renderHeld();
+  api('/api/voice/status').then(function (s) {
+    if (s.error || !s.speech) { show('Speech is not set up on the Mac yet (' + (s.error || 'Kokoro missing') + ').'); $('start').disabled = true; }
+    if (!s.listening) { $('hands').checked = false; $('hands').disabled = true; $('hint').textContent = 'Listening is not set up on the Mac yet, so this is listen-only for now.'; }
+  });
+})();
+</script>
+</body>
+</html>

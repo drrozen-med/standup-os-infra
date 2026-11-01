@@ -104,6 +104,40 @@
     return row;
   }
 
+  /* a speaker under each agent reply: Kokoro on the Mac reads it, the phone or laptop plays it */
+  var SPEAK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  var STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+  var speaker = { audio: null, btn: null };
+  function stopSpeaking() {
+    if (speaker.audio) { speaker.audio.pause(); speaker.audio = null; }
+    if (speaker.btn) { speaker.btn.innerHTML = SPEAK; speaker.btn.classList.remove('on'); speaker.btn = null; }
+  }
+  function speakable(row, text) {
+    var btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'speak'; btn.title = 'Listen'; btn.setAttribute('aria-label', 'Listen');
+    btn.innerHTML = SPEAK;
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var mine = speaker.btn === btn;
+      stopSpeaking();
+      if (mine) return;
+      var a = new Audio(); a.play().catch(function () {});   // claim the tap so the phone lets it play later
+      speaker.audio = a; speaker.btn = btn;
+      btn.classList.add('on'); btn.innerHTML = '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+      fetch('/api/voice/say', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text }) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (speaker.audio !== a) return;
+          if (!d.url) throw new Error(d.error || 'no audio');
+          btn.innerHTML = STOP; a.src = d.url; a.onended = stopSpeaking;
+          return a.play();
+        })
+        .catch(function (err) { if (speaker.audio === a) { stopSpeaking(); btn.title = 'Could not read this aloud: ' + (err && err.message || err); } });
+    });
+    row.appendChild(btn);
+    return row;
+  }
+
   function note(text) {
     var row = document.createElement('div');
     row.className = 'row them';
@@ -121,7 +155,7 @@
     }
     if (t === 'assistant') {
       (ev.blocks || []).forEach(function (b) {
-        if (b.kind === 'text' && b.text) acc.push(bubble('them', md(b.text)));
+        if (b.kind === 'text' && b.text) acc.push(speakable(bubble('them', md(b.text)), b.text));
         else if (b.kind === 'thinking') acc.push(step(fold(ICONS.think, '<b>Thought</b> ' + esc((b.text || '').slice(0, 120)), b.text || '')));
         else if (b.kind === 'tool_use') acc.push(step(fold(ICONS.run, '<b>' + esc(b.name || 'Tool') + '</b> ' + esc(b.detail || ''), b.detail || ''), b.name));
       });

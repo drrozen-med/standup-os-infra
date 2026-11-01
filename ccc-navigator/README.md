@@ -68,6 +68,31 @@ python3 ccc-navigator/navigator.py --ccc http://localhost:9001 --port 8096
 - With nothing selected, the right pane shows how each session's repo was detected and any folders it
   couldn't place. Check this first if something lands in the wrong place.
 
+## Ride mode (voice)
+
+`/ride` (also **Ride mode** at the top of the sidebar) reads the open decisions and the sessions waiting on
+you aloud, one at a time, rewritten for the ear (no code, paths or links). Headphone buttons and the lock
+screen control it: play/pause, next, and previous to repeat. **Hands-free talk** listens after each item:
+answer a decision ("yes", "option two", "later"), say "more" to hear the full reply, reply to a session in
+your own words, or say "talk to BoardsBridge" for a back-and-forth with any session. Every message is read
+back with a moment to say "cancel"; anything that looks hard to undo (buy, deploy, merge, send, delete…) is
+held under **Confirm when you stop** instead of being sent. Every agent reply in the chat also gets a
+speaker button.
+
+Everything runs on the Mac (`voice.py`): Kokoro-82M speaks (the macOS Hebrew voice reads Hebrew sentences),
+local Whisper listens. Both are optional; without them `/api/voice/*` answers 503.
+
+```bash
+# speech: ~/.local/share/kokoro-venv (kokoro-onnx, soundfile) + ~/.local/share/kokoro/{kokoro-v1.0.onnx,voices-v1.0.bin}
+# listening:
+python3 -m venv ~/.local/share/whisper-venv && ~/.local/share/whisper-venv/bin/pip install mlx-whisper
+```
+
+`CCC_NAV_VOICE` (default `af_heart`), `CCC_NAV_VOICE_SPEED` (`1.1`), `CCC_NAV_WHISPER_MODEL`
+(`mlx-community/whisper-large-v3-turbo`), `CCC_NAV_HEBREW_VOICE` (`Carmit`). Audio is cached in
+`~/.ccc-navigator/voice/`. Talking hands-free needs the screen on (mount the phone); listening alone works
+with it locked.
+
 ## How Orca workspaces are read
 
 Orca keeps per-profile state in SQLite at `<userData>/profiles/<profileId>/profile-state.db`

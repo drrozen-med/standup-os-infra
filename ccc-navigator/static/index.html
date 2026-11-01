@@ -606,7 +606,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const cpName = (hit && (hit.s.nick || hit.s.original)) || cp && cp.name || 'Co-pilot';
     box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0">
         <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc(cpName)}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
-      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`;
+      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
+      + `<a class="pin-row" href="/ride" style="text-decoration:none;color:inherit"><span class="pn">Ride mode</span><span class="ps">hear it all, answer by voice</span></a>`;
   }
   function flatSessions() { const out = []; for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) out.push({ s, repo, g }); return out; }
   $('#pinned').addEventListener('click', e => {
