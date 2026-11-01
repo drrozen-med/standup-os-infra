@@ -1683,6 +1683,26 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (a === 'bg') { ui.showHidden = !ui.showHidden; openDrawer(false); return renderList(); }
   });
 
+  // Android's left-edge swipe is the system "back": keep a trap entry above a base entry and absorb it
+  // (close the menu, leave a session, or open the menu from the list) so back never leaves the app.
+  // Chrome skips entries added without a tap, so the entry is pushed again on the next tap as well.
+  if (narrow()) {
+    let arm = true;
+    const push = () => history.pushState({ nav: 'top' }, '', location.href);
+    history.replaceState({ nav: 'base' }, '', location.href);
+    push();
+    window.addEventListener('popstate', e => {
+      const at = e.state && e.state.nav;
+      if (!narrow() || (at !== 'base' && at !== 'top')) return;
+      const cl = document.body.classList;
+      if (cl.contains('drawer-open')) openDrawer(false);
+      else if (cl.contains('m-detail')) { cl.remove('m-detail'); renderList(); }
+      else openDrawer(true);
+      if (at === 'base') { push(); arm = true; }
+    });
+    document.addEventListener('pointerdown', () => { if (arm) { push(); arm = false; } }, true);
+  }
+
   ui.focus = parseHash();
   window.addEventListener('hashchange', () => { ui.focus = parseHash(); refresh(true); });
   refresh(true);
