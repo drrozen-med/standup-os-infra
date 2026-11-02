@@ -671,6 +671,10 @@ def build_parser():
     blog.add_argument("--since", type=parse_age, default=parse_age("1d"), help="how far back, e.g. 2h, 1d (default 1d)")
     blog.add_argument("--limit", type=int, default=50)
 
+    bdig = subparsers.add_parser("digest", help="today's account per project: done, in progress, waiting on Uri")
+    _add_global_options(bdig, subcommand=True)
+    bdig.add_argument("--day", default="", help="YYYY-MM-DD (default today)")
+
     ws = subparsers.add_parser("ws", help="resolve a workspace link (from the ⋯ menu, Copy link) and list all its sessions, hidden included")
     _add_global_options(ws, subcommand=True)
     ws.add_argument("link", help="the copied link, or just its #g=... part")
@@ -1940,6 +1944,20 @@ def cmd_log(args, client):
     return 0
 
 
+def cmd_digest(args, client):
+    out = client._request("/api/digest" + ("?day=" + urllib.parse.quote(args.day) if args.day else ""))
+    if not args.table:
+        print_json(out)
+        return 0
+    print("Day %s" % out.get("day"))
+    for p in out.get("projects") or []:
+        print("\n%s (%s sessions)" % (p.get("project"), p.get("sessions")))
+        for k, label in (("done", "done"), ("doing", "doing"), ("waiting", "waiting")):
+            for x in p.get(k) or []:
+                print("  %-8s %s" % (label, x))
+    return 0
+
+
 def cmd_brief(args, client):
     """The live picture, from labels the triage worker already saved: no transcript reads."""
     if getattr(args, "project", None) or getattr(args, "session", None):
@@ -2529,6 +2547,8 @@ def main(argv=None):
             return cmd_find(args, client)
         if args.command == "log":
             return cmd_log(args, client)
+        if args.command == "digest":
+            return cmd_digest(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2
