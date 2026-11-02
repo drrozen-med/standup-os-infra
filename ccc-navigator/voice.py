@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -29,6 +30,9 @@ WHISPER_MODEL = os.environ.get("CCC_NAV_WHISPER_MODEL", "mlx-community/whisper-l
 VOICE = os.environ.get("CCC_NAV_VOICE", "af_heart")
 SPEED = float(os.environ.get("CCC_NAV_VOICE_SPEED", "1.1"))
 HEBREW_VOICE = os.environ.get("CCC_NAV_HEBREW_VOICE", "Carmit")
+# launchd starts the navigator with a bare PATH, so look in Homebrew's folders too.
+FFMPEG = os.environ.get("CCC_NAV_FFMPEG") or shutil.which("ffmpeg") or next(
+    (p for p in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg") if os.access(p, os.X_OK)), "ffmpeg")
 CACHE_MAX = 400
 MAX_TEXT = 4000
 ID_RE = re.compile(r"^[0-9a-f]{20}$")
@@ -123,7 +127,8 @@ class Voice:
         self.stt = Worker(WHISPER_PY, WHISPER_WORKER, WHISPER_MODEL, "Whisper")
 
     def status(self):
-        return {"speech": self.tts.available(), "listening": self.stt.available(), "voice": VOICE, "speed": SPEED}
+        ffmpeg = bool(shutil.which(FFMPEG))
+        return {"speech": ffmpeg and self.tts.available(), "listening": ffmpeg and self.stt.available(), "voice": VOICE, "speed": SPEED}
 
     # ---- speech
     def audio_id(self, text, voice=None, speed=None):
@@ -150,7 +155,7 @@ class Voice:
                 if lang == "he":      # Kokoro has no Hebrew; the Mac's own Hebrew voice reads those sentences
                     aiff = wav.with_suffix(".aiff")
                     subprocess.run(["say", "-v", HEBREW_VOICE, "-r", "195", "-o", str(aiff), chunk], check=True, timeout=60)
-                    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(aiff), "-ar", "24000", "-ac", "1", str(wav)],
+                    subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", str(aiff), "-ar", "24000", "-ac", "1", str(wav)],
                                    check=True, timeout=60)
                 else:
                     r = self.tts.run({"text": chunk, "voice": voice or VOICE, "speed": speed or SPEED, "out": str(wav)})
@@ -160,7 +165,7 @@ class Voice:
             lst = Path(tmp) / "list.txt"
             lst.write_text("".join("file '%s'\n" % w for w in parts))
             part = out.with_suffix(".part.mp3")
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
+            subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst),
                             "-ar", "24000", "-ac", "1", "-b:a", "64k", str(part)], check=True, timeout=120)
             os.replace(part, out)
         self._trim()
@@ -182,7 +187,7 @@ class Voice:
         with tempfile.TemporaryDirectory() as tmp:
             src, wav = Path(tmp) / "in.bin", Path(tmp) / "in.wav"
             src.write_bytes(data)
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-ar", "16000", "-ac", "1", str(wav)],
+            subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", str(src), "-ar", "16000", "-ac", "1", str(wav)],
                            check=True, timeout=60)
             # a fixed language skips Whisper's language detection, which roughly halves the wait
             r = self.stt.run({"in": str(wav), "prompt": hint[:600], "lang": lang if lang in ("en", "he") else ""})
