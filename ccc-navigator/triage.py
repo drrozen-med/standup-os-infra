@@ -65,7 +65,7 @@ def classify(item, messages, now=None):
         return "needs-you", reason
     tail = last_assistant_text(messages)[-TAIL:]
     first_line = next((ln.strip() for ln in tail.splitlines()[::-1] if ln.strip()), "")[:160]
-    if tail and ASK_RE.search(tail):
+    if tail and navigator.activity.asks_owner(tail):
         lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
         hit = next((i for i in range(len(lines) - 1, -1, -1) if ASK_RE.search(lines[i])), None)
         asked = lines[hit] if hit is not None else ""

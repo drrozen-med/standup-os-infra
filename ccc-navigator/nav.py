@@ -661,6 +661,15 @@ def build_parser():
     brief = subparsers.add_parser("brief", help="live snapshot: per project, what is running, waiting on you, blocked or done")
     _add_global_options(brief, subcommand=True)
     brief.add_argument("--window", default="7d", choices=["now", "1d", "7d", "all"])
+    brief.add_argument("--project", help="plain-language brief of one project (from the small model's log)")
+    brief.add_argument("--session", help="plain-language brief of one session: key, ref or title")
+
+    blog = subparsers.add_parser("log", help="what happened lately: status changes and summaries, per project or session")
+    _add_global_options(blog, subcommand=True)
+    blog.add_argument("--project", default="")
+    blog.add_argument("--session", default="")
+    blog.add_argument("--since", type=parse_age, default=parse_age("1d"), help="how far back, e.g. 2h, 1d (default 1d)")
+    blog.add_argument("--limit", type=int, default=50)
 
     ws = subparsers.add_parser("ws", help="resolve a workspace link (from the ⋯ menu, Copy link) and list all its sessions, hidden included")
     _add_global_options(ws, subcommand=True)
@@ -1892,8 +1901,49 @@ def cmd_triage(args, client):
 BRIEF_ORDER = ["needs-you", "blocked", "working", "done", "idle", "stale"]
 
 
+def _when(at):
+    return time.strftime("%m-%d %H:%M", time.localtime(at or 0))
+
+
+def cmd_brief_one(args, client):
+    """One project's or one session's plain-language brief, from the briefs log."""
+    if args.session:
+        sid, engine, item = resolve_session(client, args.session)
+        key = (item or {}).get("key") or ("%s:%s" % (engine, sid) if engine else sid)
+        out = client._request("/api/brief?session=" + urllib.parse.quote(key))
+        row = out.get("session") or {}
+        head = "%s\n  about: %s\n  now:   %s" % (row.get("title") or key, row.get("about") or "-", row.get("now") or "-")
+    else:
+        out = client._request("/api/brief?project=" + urllib.parse.quote(args.project))
+        row = out.get("brief") or {}
+        head = "%s\n  about: %s\n  now:   %s" % (args.project, row.get("about") or "-", row.get("now") or "-")
+        for r in out.get("sessions") or []:
+            head += "\n  - %-9s %s: %s" % (r.get("state") or "", (r.get("title") or r.get("key"))[:40], r.get("now") or "")
+    if not args.table:
+        print_json(out)
+        return 0
+    print(head)
+    for e in (out.get("events") or [])[:15]:
+        print("  %s  %-7s %s" % (_when(e.get("at")), e.get("kind"), (e.get("text") or "")[:110]))
+    return 0
+
+
+def cmd_log(args, client):
+    q = urllib.parse.urlencode({"project": args.project, "session": args.session,
+                                "since": time.time() - args.since, "limit": args.limit})
+    out = client._request("/api/log?" + q)
+    if not args.table:
+        print_json(out)
+        return 0
+    for e in out.get("events") or []:
+        print("%s  %-14s %-7s %s" % (_when(e.get("at")), (e.get("project") or "")[:14], e.get("kind"), (e.get("text") or "")[:100]))
+    return 0
+
+
 def cmd_brief(args, client):
     """The live picture, from labels the triage worker already saved: no transcript reads."""
+    if getattr(args, "project", None) or getattr(args, "session", None):
+        return cmd_brief_one(args, client)
     tree = client._request("/api/tree?window=%s" % args.window)
     projects = {}
     for it in flatten_tree(tree):
@@ -2477,6 +2527,8 @@ def main(argv=None):
             return cmd_resolve(args, client)
         if args.command == "find":
             return cmd_find(args, client)
+        if args.command == "log":
+            return cmd_log(args, client)
     except UsageError as exc:
         print_error(exc)
         return 2

@@ -26,7 +26,7 @@ def test_wrap_up_with_ask():
         lines = [
             {"type": "user", "message": {"role": "user", "content": "hello"}, "timestamp": now - 3600},
             {"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "toolu_1", "name": "mcp__ccd_turn__wrap_up", "input": {"ask": "What should I do next?"}}
+                {"type": "tool_use", "id": "toolu_1", "name": "mcp__ccd_turn__wrap_up", "input": {"ask": "What should I do next?", "blocked": True}}
             ]}, "timestamp": now - 100},
         ]
         write_jsonl(p, lines)
@@ -37,6 +37,9 @@ def test_wrap_up_with_ask():
         st, reason, stopped = activity.state({}, act, now, running=False)
         assert st == 'needs-you'
         assert reason == "What should I do next?"
+        # the same ask without blocked is only an offer
+        act['turn_blocked'] = False
+        assert activity.state({}, act, now, running=False)[0] == 'resting'
 
 
 def test_wrap_up_without_ask_but_final_text_ending_question_resting():
@@ -269,3 +272,57 @@ if __name__ == '__main__':
     test_dismissed_after_last_event_resting_then_newer_event_needs_you_again()
     test_needs_approval_needs_you_with_tool_name()
     print("all passed")
+
+
+def test_asks_owner_offer_vs_real_ask():
+    assert not activity.asks_owner("Done. Want me to also draft the Google Ads copy next?")
+    assert not activity.asks_owner("Shipped. Should I also do B?")
+    assert activity.asks_owner("Two options: keep the old page or replace it. Your call.")
+    assert activity.asks_owner("The fix is ready. Should I deploy it?")
+    assert activity.asks_owner("Which logo do you prefer, the blue or the green one?")
+
+
+def test_wrap_up_ask_older_than_ttl_resting():
+    now = time.time()
+    act = {'mtime': now - 4 * 86400, 'last': {'role': 'assistant', 'kind': 'tool_use', 'tool': 'mcp__ccd_turn__wrap_up'},
+           'final_text': '', 'turn_wrapped': True, 'turn_ask': 'Merge it?', 'turn_blocked': True,
+           'pending': None, 'codex_done': False}
+    assert activity.state({}, act, now)[0] == 'dormant'
+
+
+def test_codex_imported_claude_transcript_not_needs_you():
+    now = time.time()
+    act = {'mtime': now - 600, 'last': {'role': 'assistant', 'kind': 'text', 'tool': None},
+           'final_text': '[external_agent_tool_call] Your call: keep it or drop it?', 'imported': True,
+           'turn_wrapped': False, 'turn_ask': '', 'pending': None, 'codex_done': True}
+    assert activity.state({}, act, now)[0] == 'resting'
+
+
+def test_pending_start_session_user_asked_not_needs_you():
+    now = time.time()
+    act = {'mtime': now - 600, 'last': {'role': 'assistant', 'kind': 'tool_use', 'tool': 'mcp__ccd_session__start_session'},
+           'final_text': '', 'turn_wrapped': False, 'turn_ask': '', 'codex_done': False,
+           'pending': {'name': 'mcp__ccd_session__start_session', 'mtime': now - 600},
+           'pending_input': {'initiation': 'user_asked'}}
+    assert activity.state({}, act, now)[0] != 'needs-you'
+
+
+def test_pending_ask_tool_not_running_old_is_not_needs_you():
+    now = time.time()
+    act = {'mtime': now - 20 * 3600, 'last': {'role': 'assistant', 'kind': 'tool_use', 'tool': 'AskUserQuestion'},
+           'final_text': '', 'turn_wrapped': False, 'turn_ask': '', 'codex_done': False,
+           'pending': {'name': 'AskUserQuestion', 'mtime': now - 20 * 3600}}
+    assert activity.state({}, act, now, running=False)[0] != 'needs-you'
+    assert activity.state({}, act, now, running=True)[0] == 'needs-you'
+
+
+def test_parent_with_active_subagent_working():
+    now = time.time()
+    act = {'mtime': now - 900, 'last': {'role': 'assistant', 'kind': 'text', 'tool': None}, 'final_text': 'Started two.',
+           'turn_wrapped': True, 'turn_ask': '', 'pending': None, 'codex_done': False, 'subagent_mtime': now - 20}
+    assert activity.state({}, act, now)[0] == 'working'
+
+
+def test_interrupted_turn_is_not_a_prompt():
+    assert not activity._is_claude_prompt({"type": "user", "message": {"content": "[Request interrupted by user]"}})
+    assert activity._is_claude_prompt({"type": "user", "message": {"content": "go on"}})

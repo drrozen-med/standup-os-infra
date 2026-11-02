@@ -116,3 +116,29 @@ The script writes `~/agent-status.json` atomically (write tmp then mv) with cont
 ```bash
 cd ccc-navigator && python3 -m unittest discover -s tests
 ```
+
+## Small model, briefs and the running log
+
+`llm.py` is one cheap model call: Groq (`openai/gpt-oss-20b`) first, Gemini (`gemini-flash-lite-latest`) second,
+local rules when neither answers. Keys come from `~/.ccc-navigator/llm.env` (mode 0600):
+
+```bash
+umask 077; { echo "GROQ_API_KEY=$(doppler secrets get GROQ_API_KEY --plain -p vera -c prd)";
+  echo "GEMINI_API_KEY=$(doppler secrets get GEMINI_API_KEY --plain -p boardsbridge -c prd)"; } > ~/.ccc-navigator/llm.env
+```
+
+`NAV_LLM=off` switches it off. Daily caps: `NAV_GROQ_DAILY` (800), `NAV_GEMINI_DAILY` (400).
+
+`briefs.py --loop 120` (launchd job `com.standup-os.briefer`) keeps `~/.ccc-navigator/briefs.db`: per session a
+title, what it is for (`about`) and what is happening (`now`); per project the same; and a timeline of state
+changes and summaries. Agents read it instead of terminals:
+
+```bash
+python3 nav.py brief --project "Standup OS" --table
+python3 nav.py brief --session <key|title> --table
+python3 nav.py log --since 2h --table
+curl -s 'http://127.0.0.1:8095/api/brief?session=<key>'      # also ?project=<name>, /api/log?project=&since=
+```
+
+The session view shows that line on top, with a ✨ Rename button (fresh summary plus a better name).
+`titler.py` uses the same model for new sessions when a key is set.

@@ -13,6 +13,8 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+
+os.environ["NAV_LLM"] = "off"   # tests never call the real model providers
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

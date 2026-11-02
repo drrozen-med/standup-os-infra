@@ -257,6 +257,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .row1 .tools{display:flex;align-items:center;gap:8px}
 .iconbtn{background:transparent;border:1px solid var(--line2);border-radius:8px;width:28px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
 .iconbtn:hover{border-color:var(--line3);color:var(--text);background:var(--hover)}
+.iconbtn.muted{color:var(--warn,#c8901a);border-color:var(--warn,#c8901a)}
 .foot{flex-wrap:wrap;gap:6px 10px}
 .cp-list .it,#cpStop{width:100%;background:transparent;border:1px solid var(--line2);border-radius:8px;padding:8px 10px;color:var(--text);font:inherit;font-size:13px;text-align:start;cursor:pointer}
 .cp-list .it:hover,#cpStop:hover{background:var(--hover);border-color:var(--line3)}
@@ -395,7 +396,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   <div class="top">
     <div class="row1">
       <div style="display:flex;align-items:center"><button type="button" class="menubtn" id="menuBtn" aria-label="Menu" title="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="upd" id="updDot" hidden></span></button><div class="brand">Sessions<span class="ovbtn" id="ovBtn" role="button" tabindex="0" title="Show or hide the summary line" aria-label="Show or hide the summary line"></span></div></div>
-      <div class="tools"><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
+      <div class="tools"><button type="button" class="iconbtn" id="muteNeeds" aria-pressed="false"></button><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
     </div>
     <div class="ovline" id="ovLine"></div>
     <label class="search">
@@ -449,6 +450,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     showMine: store.get('showMine', false),
     query: '',
     ov: store.get('ov', true),
+    muteNeeds: store.get('muteNeeds', false),   // the owner switched the "needs you" indicator off
     focus: null,  // {repo, group, path}: show everything in one workspace, all time, hidden included
   };
   let _serverViewTimer = null;
@@ -469,6 +471,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       if (typeof v.query === 'string' && v.query !== ui.query) { ui.query = v.query; const qel = $('#q'); if (qel) qel.value = ui.query; changed = true; }
       if (typeof v.show_mine === 'boolean' && v.show_mine !== ui.showMine) { ui.showMine = v.show_mine; changed = true; }
       if (typeof v.ov === 'boolean' && v.ov !== ui.ov) { ui.ov = v.ov; changed = true; }
+      if (typeof v.mute_needs === 'boolean' && v.mute_needs !== ui.muteNeeds) { ui.muteNeeds = v.mute_needs; store.set('muteNeeds', ui.muteNeeds); renderMute(); changed = true; }
       if (v.display && typeof v.display === 'object') {
         for (const k of ['orca','wt','eng','ago','cnt','livec','status']) {
           if (typeof v.display[k] === 'boolean' && v.display[k] !== ui.view[k]) { ui.view[k] = v.display[k]; changed = true; }
@@ -476,7 +479,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         if (changed) { store.set('view', ui.view); applyView(); }
       }
       if (changed) { store.set('filters', ui.f); store.set('showMine', ui.showMine); store.set('ov', ui.ov); renderChips(); renderList(); refresh(true); }
-      _lastViewSnapshot = JSON.stringify({win:ui.win,star:ui.f.star,live:ui.f.live,needs:ui.f.needs,query:ui.query,show_mine:ui.showMine,display:ui.view,ov:ui.ov});
+      _lastViewSnapshot = JSON.stringify({win:ui.win,star:ui.f.star,live:ui.f.live,needs:ui.f.needs,query:ui.query,show_mine:ui.showMine,display:ui.view,ov:ui.ov,mute_needs:ui.muteNeeds});
     } catch (e) {}
   }
   async function pushServerView(partial) {
@@ -587,8 +590,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   // a session counts as starred when it, its group or its project is starred
-  const needsYou = s => s.state === 'needs-you';
-  const dotState = s => s && ['working', 'needs-you', 'resting', 'dormant'].includes(s.state) ? s.state : '';
+  const needsYou = s => !ui.muteNeeds && s.state === 'needs-you';
+  const dotState = s => s && ['working', 'needs-you', 'resting', 'dormant'].includes(s.state) ? (s.state === 'needs-you' && ui.muteNeeds ? 'resting' : s.state) : '';
   const isStarred = (s, repo, group) => !!(s.pinned || group.pinned || repo.pinned);
 
   function matches(s, repo, group) {
@@ -653,6 +656,28 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
     }
   });
+  // one plain-language line on top of a session: what it is for, what is happening now (small model, briefs.py)
+  let briefAt = {};
+  async function loadBrief(key, force) {
+    const el = $('#briefLine'); if (!el) return;
+    if (!force && Date.now() - (briefAt[key] || 0) < 60000) return;
+    briefAt[key] = Date.now();
+    let b = null;
+    try { const r = await fetch('/api/brief?session=' + encodeURIComponent(key)); if (r.ok) b = (await r.json()).session; } catch (e) {}
+    const cur = $('#briefLine'); if (!cur || ui.selected !== key) return;
+    const txt = b && (b.about || b.now)
+      ? `<span class="about" dir="auto">${esc(b.about || '')}</span>${b.now ? `<span class="now" dir="auto">${esc(b.now)}</span>` : ''}`
+      : '<span class="now">No summary yet.</span>';
+    cur.innerHTML = `<div class="btxt">${txt}</div><button type="button" class="bbtn" data-brief-name title="Ask the small model for a fresh summary and a better name">✨ Rename</button>`;
+    cur.querySelector('[data-brief-name]').onclick = async (ev) => {
+      const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Thinking…';
+      let res = null;
+      try { res = await (await fetch('/api/brief/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, rename: true }) })).json(); } catch (e) {}
+      if (!res || !res.ok) { btn.disabled = false; btn.textContent = '✨ Rename'; btn.title = (res && res.error) || 'Could not reach the model'; toast((res && res.error) || 'Could not reach the model'); return; }
+      briefAt[key] = 0; refresh(true); loadBrief(key, true);
+    };
+  }
+
   function renderChips() {
     let st = 0, working = 0, nd = 0;
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
@@ -663,7 +688,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}<span class="lbl">${label}</span><span class="n">${n}</span></button>`;
     applyView();
     renderPinned();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>') + '<button type="button" class="chip srch" id="srchBtn" aria-label="Search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + (ui.muteNeeds ? '' : c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>')) + '<button type="button" class="chip srch" id="srchBtn" aria-label="Search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -904,7 +929,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     main.classList.toggle('chat', chat);
     const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + decSig;
     if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
-    if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); return; }
+    if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
     if (!hit) { main.innerHTML = (ui.inbox || decs.open.length) ? inboxHtml() : overview(); return; }
     const { s, repo } = hit;
@@ -921,6 +946,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           <button type="button" class="btn" id="toDetails">Details</button>
           <a class="btn" href="${esc(s.open_url)}" target="_blank" rel="noopener">Open in CCC</a>
         </div>
+        <div class="brief-line" id="briefLine" aria-live="polite"></div>
         <div class="thread" id="thread"></div>
         <div id="askCard" class="ask-card" style="display:none" aria-live="polite"></div>
         <div class="composer">
@@ -929,6 +955,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           <button type="button" class="send" id="sendBtn" title="Send" aria-label="Send"></button>
         </div>
         ${s.engine === 'pi' ? '<div class="stamp" style="padding:8px 16px">Pi replies take a minute: a message resumes the session in the background.</div>' : ''}`;
+      loadBrief(s.key, true);
       const wire = () => {
         if (!window.NavChat) { setTimeout(wire, 60); return; }
         $('#sendBtn').innerHTML = '<svg width="17" height="17" viewBox="0 0 20 20" fill="none"><path d="M3 10h13M11 4.5L16.5 10 11 15.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -1476,6 +1503,23 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   let themeMode = store.get('theme', 'auto'); applyTheme(themeMode);
   $('#ovBtn').addEventListener('click', () => { ui.ov = !ui.ov; store.set('ov', ui.ov); schedulePushView({ ov: ui.ov }); renderOv(); });
+  const BELL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+  const BELL_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="M2 2l20 20"/></svg>';
+  function renderMute() {
+    const b = $('#muteNeeds'); if (!b) return;
+    b.innerHTML = ui.muteNeeds ? BELL_OFF : BELL;
+    b.setAttribute('aria-pressed', String(ui.muteNeeds));
+    b.classList.toggle('muted', ui.muteNeeds);
+    b.title = ui.muteNeeds ? '"Needs you" is off. Click to turn it back on' : 'Turn the "needs you" indicator off';
+    b.setAttribute('aria-label', b.title);
+  }
+  renderMute();
+  $('#muteNeeds').addEventListener('click', () => {
+    ui.muteNeeds = !ui.muteNeeds; store.set('muteNeeds', ui.muteNeeds);
+    const partial = { mute_needs: ui.muteNeeds };
+    if (ui.muteNeeds && ui.f.needs) { ui.f.needs = false; store.set('filters', ui.f); partial.needs = false; }
+    schedulePushView(partial); renderMute(); renderChips(); renderList(); renderDetail(true);
+  });
   $('#theme').addEventListener('click', () => { themeMode = THEMES[(THEMES.indexOf(themeMode) + 1) % 3]; store.set('theme', themeMode); applyTheme(themeMode); });
   $('#foldAll').innerHTML = FOLD;
   $('#foldAll').addEventListener('click', () => {

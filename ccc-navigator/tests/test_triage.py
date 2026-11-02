@@ -37,9 +37,11 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(self.label(item(live=True), []), "idle")
 
     def test_question_needs_you_and_reason_is_the_question(self):
-        label, reason = triage.classify(item(), said("Done with A.\nShould I also do B?\nNotes below."), NOW)
+        label, reason = triage.classify(item(), said("Done with A.\nWhich one do you want, B or C?\nNotes below."), NOW)
         self.assertEqual(label, "needs-you")
-        self.assertEqual(reason, "Should I also do B?")
+        self.assertEqual(reason, "Which one do you want, B or C?")
+        # an optional offer is not a blocker
+        self.assertNotEqual(triage.classify(item(), said("Done with A.\nShould I also do B?"), NOW)[0], "needs-you")
 
     def test_blocked_but_not_on_negations(self):
         self.assertEqual(self.label(item(), said("I'm blocked on the Cloudflare token.")), "blocked")

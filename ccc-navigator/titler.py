@@ -43,6 +43,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+import llm
+
 DEFAULT_URL = "http://127.0.0.1:8095"
 DEFAULT_STATE = "~/.ccc-navigator/titler.json"
 DEFAULT_MAX = 20
@@ -520,7 +522,9 @@ def title_candidate(client, candidate, opts, state):
     else:
         if has_real_title(item):  # the agent already summarised it; a rule-based title would be worse
             return {"key": key, "status": "skipped", "reason": "has-title", "events": count}
-        reply = local_title(messages)
+        # the navigator's small model (Groq, then Gemini) when a key is set; the local rules otherwise
+        res = llm.complete(PROMPT + "\n\n" + snippet, max_tokens=30) if llm.enabled() else None
+        reply = res[1] if res else local_title(messages)
 
     title = sanitize_title(reply)
     if not title:
