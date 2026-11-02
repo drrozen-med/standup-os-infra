@@ -104,16 +104,18 @@ def log_event(db, project, key, kind, text, at=None):
 
 
 HOOK_TEXT = {"Stop": "turn ended", "SessionEnd": "session ended", "SubagentStop": "background helper finished"}
+HOOK_ENGINES = ("claude", "codex", "devin")
 _SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{7,63}")
 
 
 def record_hook(db, payload, now=None):
-    """Log one Claude Code hook (end of a turn or of a session) right away. -> session key, or None if ignored."""
+    """Log one agent hook (end of a turn or of a session) right away. -> session key, or None if ignored."""
     event = str(payload.get("hook_event_name") or payload.get("event") or "")
     sid = str(payload.get("session_id") or "")
-    if event not in HOOK_TEXT or not _SID_RE.fullmatch(sid):
+    engine = str(payload.get("engine") or "claude")
+    if event not in HOOK_TEXT or engine not in HOOK_ENGINES or not _SID_RE.fullmatch(sid):
         return None
-    key = "claude:" + sid
+    key = engine + ":" + sid
     row = db.execute("SELECT project FROM sessions WHERE key=?", (key,)).fetchone()
     project = (row["project"] if row else "") or os.path.basename(str(payload.get("cwd") or "").rstrip("/"))
     reason = str(payload.get("reason") or "")[:40]

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Claude Code hook (Stop, SessionEnd, SubagentStop): tell the navigator a turn or session ended.
+"""Agent hook (Stop, SessionEnd, SubagentStop): tell the navigator a turn or session ended.
+
+Works for Claude Code, Codex and Devin, which share the hook format; pass the
+engine as the first argument (default claude): claude_hook.py codex
 
 The navigator logs it in the running log at once and refreshes that session's
 brief a few seconds later. Sends only the event name, session id, folder and
@@ -23,6 +26,7 @@ def main():
     try:
         data = json.loads(sys.stdin.read() or "{}")
         body = {k: data.get(k) for k in ("hook_event_name", "session_id", "cwd", "reason")}
+        body["engine"] = sys.argv[1] if len(sys.argv) > 1 else "claude"
         req = urllib.request.Request(URL, data=json.dumps(body).encode(), method="POST",
                                      headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=2).read()
