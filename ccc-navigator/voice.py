@@ -96,8 +96,10 @@ class Worker:
     def _start(self):
         if not self.available():
             raise VoiceUnavailable("%s is not installed (%s missing)" % (self.name, self.python))
+        # Whisper runs ffmpeg itself, so the worker needs it on its PATH too.
+        env = dict(os.environ, PATH=os.pathsep.join([str(Path(FFMPEG).parent), os.environ.get("PATH", "")]))
         self.proc = subprocess.Popen([str(self.python), "-c", self.code, self.arg], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
         ready = self.proc.stdout.readline()
         if not ready:
             self.proc = None
