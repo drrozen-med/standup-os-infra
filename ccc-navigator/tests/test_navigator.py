@@ -177,6 +177,43 @@ class TranscriptActivity(unittest.TestCase):
             self.assertEqual(read.call_count, 1)
 
 
+class FileCacheOnDisk(unittest.TestCase):
+    def test_restart_reuses_reads_and_rereads_changed_files(self):
+        import activity
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "s.jsonl"
+            path.write_text(json.dumps({"type": "assistant", "timestamp": "2026-10-31T10:05:00Z",
+                                        "message": {"content": [{"type": "text", "text": "done"}]}}) + "\n")
+            first = activity.read_activity(str(path))
+            cache = Path(d) / "file-cache.json"
+            navigator.save_file_caches(cache)
+            activity._cache.pop(str(path), None)               # a fresh process
+            navigator.load_file_caches(cache)
+            with mock.patch.object(activity, "_read_activity_inner") as read:
+                self.assertEqual(activity.read_activity(str(path)), first)
+                read.assert_not_called()
+            with path.open("a") as fh:                          # the file grew since the save
+                fh.write("\n")
+            with mock.patch.object(activity, "_read_activity_inner", return_value=None) as read:
+                activity.read_activity(str(path))
+                read.assert_called_once()
+
+    def test_pi_live_flag_is_recomputed_on_load(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d) / "file-cache.json"
+            old = {"session_id": "p1", "modified": time.time() - 3600, "is_live": True, "live": True}
+            cache.write_text(json.dumps({"v": 1, "pi": {d + "/x.jsonl": [[1.0, 2], old]}}))
+            navigator.load_file_caches(cache)
+            row = navigator._pi_cache.pop(d + "/x.jsonl")[1]
+            self.assertFalse(row["is_live"] or row["live"])
+
+    def test_bad_cache_file_is_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d) / "file-cache.json"
+            cache.write_text("{not json")
+            self.assertEqual(navigator.load_file_caches(cache), 0)
+
+
 class SessionState(unittest.TestCase):
     NOW = time.time()
 
