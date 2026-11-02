@@ -1647,6 +1647,7 @@ class App:
         load_file_caches(self.file_cache)
         self._build = threading.RLock()   # one tree build at a time: parallel cold builds each re-read everything
         self._saved = {"at": time.time(), "busy": False}
+        self._hook_lock, self._hook_pending, self._hook_done, self._hook_worker = threading.Lock(), set(), {}, None
 
     def moved(self, sid):
         """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
@@ -1709,6 +1710,43 @@ class App:
             res["rename"] = self.rename({"kind": "session", "key": key, "name": brief["title"],
                                          "sid": item.get("sid") or "", "engine": item.get("engine") or ""})
         return res
+
+    HOOK_GAP = 90      # seconds: at most one model summary per session from hooks in this window
+    HOOK_SETTLE = 5    # seconds: let the transcript and CCC catch up before reading it
+
+    def hook(self, payload):
+        """A Claude Code hook fired (turn or session ended): log it now, refresh that session's brief soon."""
+        db = briefs.connect()
+        try:
+            key = briefs.record_hook(db, payload)
+        finally:
+            db.close()
+        if not key:
+            return {"ok": False, "error": "ignored"}
+        with self._hook_lock:
+            self._hook_pending.add(key)
+            if not self._hook_worker or not self._hook_worker.is_alive():
+                self._hook_worker = threading.Thread(target=self._hook_drain, daemon=True)
+                self._hook_worker.start()
+        return {"ok": True, "key": key}
+
+    def _hook_drain(self):
+        while True:
+            time.sleep(self.HOOK_SETTLE)
+            with self._hook_lock:
+                due = [k for k in self._hook_pending if time.time() - self._hook_done.get(k, 0) >= self.HOOK_GAP]
+                if not self._hook_pending:
+                    self._hook_worker = None
+                    return
+                if not due:
+                    continue
+                key = due[0]
+                self._hook_pending.discard(key)
+                self._hook_done[key] = time.time()
+            try:
+                self.brief_refresh(key)
+            except Exception as e:   # best effort: the 2-minute briefer pass catches anything missed
+                print("hook refresh %s failed: %s" % (key, e), file=sys.stderr)
 
     def rename(self, b):
         """Rename a session / group / project and write it through to the tool that owns the name."""
@@ -2188,7 +2226,7 @@ class Handler(BaseHTTPRequestHandler):
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
-                "/api/ask/answer", "/api/brief/refresh"}
+                "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -2555,6 +2593,10 @@ class Handler(BaseHTTPRequestHandler):
             st.set_nickname(str(body.get("key") or ""), body.get("name"))
         elif p == "/api/assign":
             st.assign(str(body.get("key") or ""), str(body.get("repo") or ""), body.get("group"))
+        elif p == "/api/hook":
+            if self._rem:
+                return self._send(403, {"error": "only from the Mac itself"})
+            return self._send(200, self.app.hook(body))
         elif p == "/api/brief/refresh":
             return self._send(200, self.app.brief_refresh(str(body.get("key") or ""), bool(body.get("rename"))))
         elif p == "/api/rename":

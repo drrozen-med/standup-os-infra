@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -100,6 +101,25 @@ def _row(r):
 def log_event(db, project, key, kind, text, at=None):
     db.execute("INSERT INTO events(at, project, session_key, kind, text) VALUES(?,?,?,?,?)",
                (at or time.time(), project, key, kind, (text or "")[:500]))
+
+
+HOOK_TEXT = {"Stop": "turn ended", "SessionEnd": "session ended", "SubagentStop": "background helper finished"}
+_SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{7,63}")
+
+
+def record_hook(db, payload, now=None):
+    """Log one Claude Code hook (end of a turn or of a session) right away. -> session key, or None if ignored."""
+    event = str(payload.get("hook_event_name") or payload.get("event") or "")
+    sid = str(payload.get("session_id") or "")
+    if event not in HOOK_TEXT or not _SID_RE.fullmatch(sid):
+        return None
+    key = "claude:" + sid
+    row = db.execute("SELECT project FROM sessions WHERE key=?", (key,)).fetchone()
+    project = (row["project"] if row else "") or os.path.basename(str(payload.get("cwd") or "").rstrip("/"))
+    reason = str(payload.get("reason") or "")[:40]
+    log_event(db, project, key, "hook", HOOK_TEXT[event] + (" (%s)" % reason if reason else ""), now)
+    db.commit()
+    return key
 
 
 # ---------------------------------------------------------------- reads (used by the navigator and the CLI)
