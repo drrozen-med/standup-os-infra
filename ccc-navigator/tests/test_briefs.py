@@ -67,3 +67,11 @@ def test_record_hook_ignores_unknown_events_and_bad_ids():
         assert briefs.record_hook(db, {"hook_event_name": "PreToolUse", "session_id": "abcdef12"}) is None
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "../../etc"}) is None
         assert db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_record_hook_keys_codex_and_devin_sessions():
+    with tempfile.TemporaryDirectory() as d:
+        db = briefs.connect(os.path.join(d, "b.db"))
+        assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "devincli-booming-coriander",
+                                       "engine": "devin"}) == "devin:devincli-booming-coriander"
+        assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "abcdef12", "engine": "pi"}) is None
