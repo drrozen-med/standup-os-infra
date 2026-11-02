@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -118,10 +119,25 @@ def usage():
     return _usage()
 
 
+def _ssl_context():
+    """Default trust store, plus macOS's own bundle: a python.org/Homebrew python may ship without one."""
+    ctx = ssl.create_default_context()
+    for cafile in ("/etc/ssl/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem"):
+        if os.path.exists(cafile):
+            try:
+                ctx.load_verify_locations(cafile)
+            except (OSError, ssl.SSLError):
+                pass
+    return ctx
+
+
+_SSL = _ssl_context()
+
+
 def _post(url, payload, headers):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
                                  headers=dict({"Content-Type": "application/json"}, **headers))
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL) as r:
         return json.loads(r.read())
 
 
