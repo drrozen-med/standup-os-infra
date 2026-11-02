@@ -311,7 +311,7 @@
 .row.them > .speak:hover, .row.them > .speak.on { opacity: 1; color: var(--primary); }
 
 /* plain-language brief under the session header (briefs.py) */
-.brief-line { display: flex; align-items: flex-start; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; font-size: 13px; line-height: 1.4; }
+.brief-line { display: flex; align-items: flex-start; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); border-left: 3px solid oklch(0.68 0.12 250); background: color-mix(in oklch, var(--panel), oklch(0.68 0.12 250) 12%); flex: none; font-size: 13px; line-height: 1.4; }
 .brief-line:empty { display: none; }
 .brief-line .btxt { flex: 1; min-width: 0; }
 .brief-line .about { color: var(--text); display: block; }
