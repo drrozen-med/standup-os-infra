@@ -74,4 +74,6 @@ def test_record_hook_keys_codex_and_devin_sessions():
         db = briefs.connect(os.path.join(d, "b.db"))
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "devincli-booming-coriander",
                                        "engine": "devin"}) == "devin:devincli-booming-coriander"
+        assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "troubled-justice",
+                                       "engine": "devin"}) == "devin:devincli-troubled-justice"
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "abcdef12", "engine": "pi"}) is None
