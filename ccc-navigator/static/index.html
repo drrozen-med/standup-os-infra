@@ -149,6 +149,15 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .tri{font-weight:600}.tri.needs-you{color:var(--accent)}.tri.blocked{color:var(--danger)}.tri.done{color:var(--live)}.tri.stale{color:var(--dim)}
 .note-m{color:var(--info)}
 .overview .hint{color:var(--dim);font-size:12px;margin:0}
+.today{padding:0 36px 28px;max-width:780px;display:flex;flex-direction:column;gap:14px}
+.today .td-h{font-size:13px;font-weight:700;margin:0;color:var(--text)}
+.today .hint{color:var(--dim);font-size:12px;margin:0}
+.td-p{border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.td-name{font-size:13px;font-weight:600;color:var(--text)}.td-n{font-weight:400;font-size:11px;color:var(--dim);margin-left:6px}
+.td-row{display:flex;gap:10px;font-size:12.5px;line-height:1.45}.td-row ul{margin:0;padding-left:16px;flex:1;color:var(--muted)}
+.td-k{width:96px;flex:none;font-size:11px;font-weight:600;color:var(--dim);padding-top:1px}
+.td-row.done .td-k{color:var(--live)}.td-row.waiting .td-k{color:var(--accent)}
+@media (max-width:700px){.today{padding:0 16px 16px}.td-row{flex-direction:column;gap:2px}}
 .ovbtn{display:inline-flex;vertical-align:middle;margin-left:8px;width:16px;height:16px;align-items:center;justify-content:center;border-radius:4px;color:var(--dim);opacity:.55;cursor:pointer}.ovbtn:hover{opacity:1;background:var(--line2)}.ovbtn svg{width:12px;height:12px}
 .ovline{font-size:10.5px;color:var(--dim);padding:0 2px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ovline[hidden]{display:none}
 #focusBar{padding:8px 14px;border-bottom:1px solid var(--line);background:var(--accent-soft);display:flex;flex-direction:column;gap:4px}
@@ -678,6 +687,20 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     };
   }
 
+  let today = null, todayAt = 0;
+  async function loadToday() {
+    if (!today || Date.now() - todayAt > 120000) {
+      try { const r = await fetch('/api/digest'); if (r.ok) { today = await r.json(); todayAt = Date.now(); } } catch (e) {}
+    }
+    const el = $('#today'); if (!el) return;
+    const ps = (today && today.projects) || [];
+    const hhmm = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const row = (cls, label, xs) => (xs && xs.length) ? `<div class="td-row ${cls}"><span class="td-k">${label}</span><ul>${xs.map(x => `<li dir="auto">${esc(x)}</li>`).join('')}</ul></div>` : '';
+    el.innerHTML = '<h3 class="td-h">Today, project by project</h3>' + (ps.length
+      ? ps.map(p => `<section class="td-p"><div class="td-name" dir="auto">${esc(p.project)}<span class="td-n">${p.sessions} sessions · updated ${hhmm(p.made_at)}</span></div>${row('done', 'Done', p.done)}${row('doing', 'In progress', p.doing)}${row('waiting', 'Waiting on you', p.waiting)}</section>`).join('')
+      : '<p class="hint">No account yet today. The small model writes one every 2 hours from the running log.</p>');
+  }
+
   function renderChips() {
     let st = 0, working = 0, nd = 0;
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
@@ -931,7 +954,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
-    if (!hit) { main.innerHTML = (ui.inbox || decs.open.length) ? inboxHtml() : overview(); return; }
+    if (!hit) { main.innerHTML = ((ui.inbox || decs.open.length) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; loadToday(); return; }
     const { s, repo } = hit;
     if (chat) {
       const dotc = dotState(s);

@@ -2413,6 +2413,14 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             key = (q.get("key") or [""])[0]
             return self._send(200, self.app.api_ask(key))
+        if u.path == "/api/digest":
+            try:
+                day = (urllib.parse.parse_qs(u.query).get("day") or [""])[0]
+                if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                    return self._send(400, {"error": "day must be YYYY-MM-DD"})
+                return self._send(200, briefs.digest(day or None))
+            except briefs.sqlite3.Error as e:
+                return self._send(400, {"error": str(e)})
         if u.path in ("/api/brief", "/api/log"):
             q = urllib.parse.parse_qs(u.query)
             one = lambda k: (q.get(k) or [""])[0]

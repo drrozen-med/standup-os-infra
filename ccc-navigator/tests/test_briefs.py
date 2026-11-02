@@ -58,7 +58,7 @@ def test_record_hook_logs_turn_and_session_end():
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": sid, "cwd": "/x/Proj/"}) == "claude:" + sid
         assert briefs.record_hook(db, {"hook_event_name": "SessionEnd", "session_id": sid, "reason": "logout"})
         ev = db.execute("SELECT project, kind, text FROM events ORDER BY id").fetchall()
-        assert [tuple(r) for r in ev] == [("Proj", "hook", "turn ended"), ("", "hook", "session ended (logout)")]
+        assert [tuple(r) for r in ev] == [("", "hook", "turn ended"), ("", "hook", "session ended (logout)")]
 
 
 def test_record_hook_ignores_unknown_events_and_bad_ids():
@@ -77,3 +77,25 @@ def test_record_hook_keys_codex_and_devin_sessions():
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "troubled-justice",
                                        "engine": "devin"}) == "devin:devincli-troubled-justice"
         assert briefs.record_hook(db, {"hook_event_name": "Stop", "session_id": "abcdef12", "engine": "pi"}) is None
+
+
+def test_daily_account_marks_only_current_asks_as_waiting(monkeypatch):
+    with tempfile.TemporaryDirectory() as d:
+        db = briefs.connect(os.path.join(d, "b.db"))
+        now = time.time()
+        db.execute("INSERT INTO sessions(key, project, title, about, state) VALUES('c:1','P','Fix Login','Login works','needs you')")
+        db.execute("INSERT INTO sessions(key, project, title, about, state) VALUES('c:2','P','Ads','Ad test','idle')")
+        for key, text in (("c:1", "fixing"), ("c:1", "Merge it?"), ("c:2", "paused ads"), ("c:2", "paused ads")):
+            briefs.log_event(db, "P", key, "summary", text, now)
+        seen = {}
+
+        def fake(prompt, **kw):
+            seen["prompt"] = prompt
+            return "groq", '{"done": ["Ads paused"], "doing": [], "waiting": ["Merge the login fix"]}'
+        monkeypatch.setattr(briefs.llm, "complete", fake)
+        assert briefs.summarise_day(db, "P", now=now)
+        assert "## Fix Login [NEEDS YOU NOW]" in seen["prompt"] and "## Ads:" in seen["prompt"]
+        assert seen["prompt"].count("paused ads") == 1
+        out = briefs.digest(db=db)
+        assert out["projects"][0]["done"] == ["Ads paused"] and out["projects"][0]["waiting"] == ["Merge the login fix"]
+        assert briefs.refresh_digests(db, now) == 0     # nothing new since the account was written

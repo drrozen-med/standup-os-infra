@@ -142,3 +142,11 @@ curl -s 'http://127.0.0.1:8095/api/brief?session=<key>'      # also ?project=<na
 
 The session view shows that line on top, with a ✨ Rename button (fresh summary plus a better name).
 `titler.py` uses the same model for new sessions when a key is set.
+
+Hooks report turn and session ends the moment they happen (Claude Code, Codex and Devin; `hooks/claude_hook.py`,
+registered in `~/.claude/settings.json`, `~/.codex/hooks.json` and `~/.config/devin/config.json`). The navigator
+logs them and refreshes that session's brief within seconds.
+
+Every 2 hours the briefer also writes **today's account per project** (done / in progress / waiting on you, the
+last only from sessions that need you right now). It shows when no session is open, and agents read it with
+`python3 nav.py digest --table` or `GET /api/digest?day=YYYY-MM-DD`. `python3 briefs.py --digest` rewrites it now.

@@ -41,6 +41,8 @@ GROW_EVENTS = 8          # new messages before a session is summarised again
 GROW_RATIO = 0.3
 SESSION_GAP = 600        # seconds between two summaries of one session
 PROJECT_GAP = 1800       # seconds between two summaries of one project
+DIGEST_GAP = 2 * 3600    # seconds between two daily accounts of one project
+MAX_DIGESTS = 4          # daily accounts written per pass
 MAX_PER_PASS = 8
 KEEP_DAYS = 30
 FIRST_LIMIT, RECENT_LIMIT, RECENT_COUNT = 800, 700, 6
@@ -63,6 +65,15 @@ PROJECT_PROMPT = (
     "now: one sentence, at most 25 words: what is moving right now and what needs the founder.\n\n"
 )
 
+DIGEST_PROMPT = (
+    'This is what the agents of one project did today, session by session. Return JSON '
+    '{"done": ["..."], "doing": ["..."], "waiting": ["..."]}.\n'
+    "done: up to 4 things finished today (shipped, merged, fixed, answered). "
+    "doing: up to 3 things still in progress. waiting: up to 3 things blocked on the founder, taken ONLY from sessions "
+    "marked [NEEDS YOU NOW] and their last line; empty when no session is marked. "
+    "Each item at most 14 words, plain language, no duplicates, empty list when nothing fits.\n\n"
+)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   key TEXT PRIMARY KEY, project TEXT, grp TEXT, engine TEXT, title TEXT, about TEXT, now TEXT,
@@ -70,6 +81,9 @@ CREATE TABLE IF NOT EXISTS sessions(
 CREATE TABLE IF NOT EXISTS projects(name TEXT PRIMARY KEY, about TEXT, now TEXT, summarised_at REAL, updated_at REAL);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, project TEXT, session_key TEXT, kind TEXT, text TEXT);
+CREATE TABLE IF NOT EXISTS digests(
+  day TEXT, project TEXT, done TEXT, doing TEXT, waiting TEXT, sessions INTEGER, provider TEXT, made_at REAL,
+  PRIMARY KEY(day, project));
 CREATE INDEX IF NOT EXISTS ev_proj ON events(project, at);
 CREATE INDEX IF NOT EXISTS ev_sess ON events(session_key, at);
 """
@@ -119,7 +133,7 @@ def record_hook(db, payload, now=None):
         sid = "devincli-" + sid     # CCC names Devin sessions with this prefix; Devin's own hook omits it
     key = engine + ":" + sid
     row = db.execute("SELECT project FROM sessions WHERE key=?", (key,)).fetchone()
-    project = (row["project"] if row else "") or os.path.basename(str(payload.get("cwd") or "").rstrip("/"))
+    project = (row["project"] if row else "") or ""   # a folder name is not the project name the navigator shows
     reason = str(payload.get("reason") or "")[:40]
     log_event(db, project, key, "hook", HOOK_TEXT[event] + (" (%s)" % reason if reason else ""), now)
     db.commit()
@@ -151,6 +165,88 @@ def project_brief(name, limit=30, db=None):
 def all_projects(db=None):
     db = db or connect()
     return [dict(r) for r in db.execute("SELECT * FROM projects ORDER BY updated_at DESC")]
+
+
+def _day_start(day):
+    return time.mktime(time.strptime(day, "%Y-%m-%d"))
+
+
+def today():
+    return time.strftime("%Y-%m-%d")
+
+
+def digest(day=None, db=None):
+    """The daily account of every project for one day (default today), most active first."""
+    db = db or connect()
+    day = day or today()
+    out = []
+    for r in db.execute("SELECT * FROM digests WHERE day=? ORDER BY sessions DESC, project", (day,)):
+        d = dict(r)
+        for k in ("done", "doing", "waiting"):
+            d[k] = json.loads(d[k] or "[]")
+        out.append(d)
+    return {"day": day, "projects": out}
+
+
+def _day_material(db, project, day):
+    """Per session active that day: its title, what it is for, and its distinct status lines in order."""
+    start = _day_start(day)
+    rows = db.execute("SELECT session_key, kind, text FROM events WHERE project=? AND at>=? AND at<? "
+                      "AND session_key IS NOT NULL ORDER BY at", (project, start, start + 86400)).fetchall()
+    lines = {}
+    for r in rows:
+        if r["kind"] not in ("summary", "status") or not r["text"]:
+            continue
+        seen = lines.setdefault(r["session_key"], [])
+        if r["text"] not in seen:
+            seen.append(r["text"])
+    out = []
+    for key, said in lines.items():
+        s = db.execute("SELECT title, about, state FROM sessions WHERE key=?", (key,)).fetchone()
+        mark = " [NEEDS YOU NOW]" if s and s["state"] in ("needs you", "needs-you") else ""
+        head = "## %s%s: %s" % ((s and s["title"]) or "session", mark, (s and s["about"]) or "")
+        out.append(head + "\n" + "\n".join("- " + t for t in said[-6:]))
+    return out
+
+
+def summarise_day(db, project, day=None, now=None):
+    """Write the daily account of one project with the small model. -> True when stored."""
+    day, now = day or today(), now or time.time()
+    blocks = _day_material(db, project, day)
+    if not blocks:
+        return False
+    res = llm.complete(DIGEST_PROMPT + "Project: %s\n\n%s" % (project, "\n\n".join(blocks[-25:])[-9000:]),
+                       system=SYSTEM, max_tokens=400, as_json=True)
+    data = llm.parse_json(res[1]) if res else {}
+    lists = {k: [_clean(x, 16) for x in (data.get(k) or []) if isinstance(x, str) and x.strip()][:4]
+             for k in ("done", "doing", "waiting")}
+    if not any(lists.values()):
+        return False
+    db.execute("INSERT INTO digests(day, project, done, doing, waiting, sessions, provider, made_at) "
+               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(day, project) DO UPDATE SET done=excluded.done, "
+               "doing=excluded.doing, waiting=excluded.waiting, sessions=excluded.sessions, "
+               "provider=excluded.provider, made_at=excluded.made_at",
+               (day, project, json.dumps(lists["done"]), json.dumps(lists["doing"][:3]),
+                json.dumps(lists["waiting"][:3]), len(blocks), res[0], now))
+    db.commit()
+    return True
+
+
+def refresh_digests(db, now=None, limit=MAX_DIGESTS):
+    """Rewrite today's account of projects with new activity, at most every DIGEST_GAP each."""
+    now, day = now or time.time(), today()
+    active = db.execute("SELECT project, MAX(at) AS last FROM events WHERE at>=? AND project<>'' "
+                        "AND kind IN ('summary','status') GROUP BY project ORDER BY last DESC",
+                        (_day_start(day),)).fetchall()
+    made = 0
+    for r in active:
+        if made >= limit:
+            break
+        d = db.execute("SELECT made_at FROM digests WHERE day=? AND project=?", (day, r["project"])).fetchone()
+        if d and (r["last"] <= d["made_at"] or now - d["made_at"] < DIGEST_GAP):
+            continue
+        made += bool(summarise_day(db, r["project"], day, now))
+    return made
 
 
 def events_since(project=None, key=None, since=0, limit=100, db=None):
@@ -294,10 +390,11 @@ def run_pass(client, window="7d", db=None, now=None, max_per_pass=MAX_PER_PASS):
             prow = db.execute("SELECT summarised_at FROM projects WHERE name=?", (name,)).fetchone()
             if prow is None or now - (prow["summarised_at"] or 0) >= PROJECT_GAP:
                 projects += bool(summarise_project(db, name, now))
+    digests = refresh_digests(db, now) if use_llm else 0
     db.execute("DELETE FROM events WHERE at<?", (now - KEEP_DAYS * 86400,))
     db.commit()
     return {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "sessions": len(items), "llm": use_llm,
-            "status_events": logged, "summarised": summarised, "projects": projects, "errors": errors[:5],
+            "status_events": logged, "summarised": summarised, "projects": projects, "digests": digests, "errors": errors[:5],
             "usage": llm.usage().get("calls")}
 
 
@@ -309,9 +406,18 @@ def main(argv=None):
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--session")
     ap.add_argument("--project")
+    ap.add_argument("--digest", nargs="?", const="today", metavar="DAY", help="write and print the daily account")
     args = ap.parse_args(argv)
     if args.session:
         print(json.dumps(session_brief(args.session), ensure_ascii=False, indent=2))
+        return 0
+    if args.digest:
+        db = connect()
+        day = today() if args.digest == "today" else args.digest
+        for r in db.execute("SELECT DISTINCT project FROM events WHERE at>=? AND at<? AND project<>''",
+                            (_day_start(day), _day_start(day) + 86400)).fetchall():
+            summarise_day(db, r["project"], day)
+        print(json.dumps(digest(day, db), ensure_ascii=False, indent=2))
         return 0
     if args.project:
         print(json.dumps(project_brief(args.project), ensure_ascii=False, indent=2))
