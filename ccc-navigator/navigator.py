@@ -761,6 +761,47 @@ def _read_pi(f: Path, st):
     }
 
 
+def load_file_caches(path):
+    """Refill the per-file caches (transcript activity, Pi headers, desktop records) from the last run, so a
+    restart does not re-read ~2,000 transcripts (2026-11-02: the first tree after a restart took 112 s).
+    Every entry keeps its file's signature, so a file that changed since is simply read again."""
+    try:
+        d = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(d, dict) or d.get("v") != 1:
+        return 0
+    now, n = time.time(), 0
+    try:
+        for p, (sig, res) in (d.get("activity") or {}).items():
+            activity._cache.setdefault(p, (tuple(sig), res))
+            n += 1
+        for p, (sig, row) in (d.get("pi") or {}).items():
+            if row:   # "live" was true when the row was read; recompute it for now
+                live = now - float(row.get("modified") or 0) < 120
+                row = dict(row, is_live=live, live=live)
+            _pi_cache.setdefault(p, (tuple(sig), row))
+            n += 1
+        for p, (m, rec) in (d.get("desktop") or {}).items():
+            _desktop_cache.setdefault(p, (m, rec))
+            n += 1
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return n
+
+
+def save_file_caches(path):
+    """Write the per-file caches next to the state file (atomically: a crash mid-write keeps the old copy)."""
+    d = {"v": 1, "activity": dict(activity._cache), "pi": dict(_pi_cache), "desktop": dict(_desktop_cache)}
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(d, default=str))
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError, RuntimeError):
+        pass
+
+
 def _pi_file_for_sid(pi_dir, sid):
     """Look up the Pi jsonl for a session id, reusing the Pi cache."""
     try:
@@ -1602,6 +1643,10 @@ class App:
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
         self.voice = voice.Voice(home / "voice")
         self._last_text = {}
+        self.file_cache = home / "file-cache.json"
+        load_file_caches(self.file_cache)
+        self._build = threading.RLock()   # one tree build at a time: parallel cold builds each re-read everything
+        self._saved = {"at": time.time(), "busy": False}
 
     def moved(self, sid):
         """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
@@ -1728,6 +1773,22 @@ class App:
         return res
 
     def tree(self, window, show_hidden=False):
+        t0 = time.time()
+        with self._build:
+            t = self._tree(window, show_hidden)
+        # a slow build read files the disk copy lacks; otherwise refresh it every 10 min
+        if (time.time() - t0 > 1.0 or time.time() - self._saved["at"] > 600) and not self._saved["busy"]:
+            self._saved.update(at=time.time(), busy=True)
+
+            def save():
+                try:
+                    save_file_caches(self.file_cache)
+                finally:
+                    self._saved["busy"] = False
+            threading.Thread(target=save, daemon=True).start()
+        return t
+
+    def _tree(self, window, show_hidden=False):
         rows, ccc_meta = self.ccc.rows()
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         orows, o_meta = sources.outsourcerer_jobs()
