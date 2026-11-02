@@ -42,6 +42,8 @@ import orca
 import pi_run
 import remote
 import actions
+import briefs
+import nav
 import refs
 import sources
 import voice
@@ -364,6 +366,7 @@ class State:
                 "show_mine": False,
                 "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
                 "ov": True,
+                "mute_needs": False,
             }
             cur = dict(self.data.get("view") or {})
             for k, v in default_view.items():
@@ -387,7 +390,7 @@ class State:
                         if len(v) > 200:
                             raise ValueError("query must be at most 200 characters")
                         cur["query"] = v
-                    elif k in ("star", "live", "needs", "show_mine", "ov"):
+                    elif k in ("star", "live", "needs", "show_mine", "ov", "mute_needs"):
                         cur[k] = bool(v)
                     elif k == "display" and isinstance(v, dict):
                         disp = dict(cur.get("display") or default_view["display"])
@@ -403,7 +406,7 @@ class State:
                 cur["query"] = ""
             if len(cur.get("query") or "") > 200:
                 cur["query"] = cur["query"][:200]
-            for b in ("star", "live", "needs", "show_mine", "ov"):
+            for b in ("star", "live", "needs", "show_mine", "ov", "mute_needs"):
                 cur[b] = bool(cur.get(b))
             if not isinstance(cur.get("display"), dict):
                 cur["display"] = dict(default_view["display"])
@@ -1642,6 +1645,26 @@ class App:
         delivery = self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
         return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery}
 
+    def brief_refresh(self, key, rename=False):
+        """Summarise one session now with the small model; with rename, also apply the suggested title."""
+        if not briefs.llm.enabled():
+            return {"ok": False, "error": "no model key (see llm.py)"}
+        item = next((i for i in nav.flatten_tree(self.tree("all", True)) if i.get("key") == key), None)
+        if item is None:
+            return {"ok": False, "error": "unknown session"}
+        client = nav.NavigatorClient("http://127.0.0.1:%d" % self.args.port)
+        try:
+            brief = briefs.refresh_session(client, item)
+        except nav.NavError as e:
+            return {"ok": False, "error": str(e)[:200]}
+        if not brief:
+            return {"ok": False, "error": "the model did not answer, try again in a minute"}
+        res = {"ok": True, "brief": brief}
+        if rename and brief.get("title"):
+            res["rename"] = self.rename({"kind": "session", "key": key, "name": brief["title"],
+                                         "sid": item.get("sid") or "", "engine": item.get("engine") or ""})
+        return res
+
     def rename(self, b):
         """Rename a session / group / project and write it through to the tool that owns the name."""
         kind, name = str(b.get("kind") or "session"), (b.get("name") or "").strip()
@@ -2104,7 +2127,7 @@ class Handler(BaseHTTPRequestHandler):
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
-                "/api/ask/answer"}
+                "/api/ask/answer", "/api/brief/refresh"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -2291,6 +2314,20 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(u.query)
             key = (q.get("key") or [""])[0]
             return self._send(200, self.app.api_ask(key))
+        if u.path in ("/api/brief", "/api/log"):
+            q = urllib.parse.parse_qs(u.query)
+            one = lambda k: (q.get(k) or [""])[0]
+            try:
+                if u.path == "/api/log":
+                    return self._send(200, {"events": briefs.events_since(one("project") or None, one("session") or None,
+                                                                          float(one("since") or 0), int(one("limit") or 100))})
+                if one("session"):
+                    return self._send(200, briefs.session_brief(one("session")))
+                if one("project"):
+                    return self._send(200, briefs.project_brief(one("project")))
+                return self._send(200, {"projects": briefs.all_projects()})
+            except (ValueError, briefs.sqlite3.Error) as e:
+                return self._send(400, {"error": str(e)})
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -2457,6 +2494,8 @@ class Handler(BaseHTTPRequestHandler):
             st.set_nickname(str(body.get("key") or ""), body.get("name"))
         elif p == "/api/assign":
             st.assign(str(body.get("key") or ""), str(body.get("repo") or ""), body.get("group"))
+        elif p == "/api/brief/refresh":
+            return self._send(200, self.app.brief_refresh(str(body.get("key") or ""), bool(body.get("rename"))))
         elif p == "/api/rename":
             return self._send(200, self.app.rename(body))
         elif p == "/api/icon":

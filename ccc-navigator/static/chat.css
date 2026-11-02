@@ -309,3 +309,13 @@
   margin: 2px 0 0 2px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--dim);
   cursor: pointer; opacity: .75; }
 .row.them > .speak:hover, .row.them > .speak.on { opacity: 1; color: var(--primary); }
+
+/* plain-language brief under the session header (briefs.py) */
+.brief-line { display: flex; align-items: flex-start; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; font-size: 13px; line-height: 1.4; }
+.brief-line:empty { display: none; }
+.brief-line .btxt { flex: 1; min-width: 0; }
+.brief-line .about { color: var(--text); display: block; }
+.brief-line .now { color: var(--muted); display: block; }
+.brief-line .bbtn { flex: none; background: transparent; border: 1px solid var(--line2); border-radius: 7px; padding: 3px 8px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.brief-line .bbtn:hover { color: var(--text); border-color: var(--line3); }
+.brief-line .bbtn:disabled { opacity: .6; cursor: default; }

@@ -16,6 +16,37 @@ ASK_RE = re.compile(
     r"|\bneeds? your\b|\byour (go-ahead|answer|input|choice|ok|approval|decision|call)\b)",
     re.IGNORECASE | re.MULTILINE)
 
+# an optional next step the agent offers ("want me to...?", "should I...?") is not a blocker:
+# the owner's instructions make agents end most replies like that
+OFFER_RE = re.compile(
+    r"(\bwant me to\b|\bshould i\b|\bshall i\b|\bwould you like\b|\bdo you want me to\b|\bwant that\b"
+    r"|\bnext\?\s*$|\blet me know\b|\bif you('d| would) like\b|\bhappy to\b|\bi can also\b)",
+    re.IGNORECASE | re.MULTILINE)
+BLOCKER_RE = re.compile(
+    r"(\bplease (confirm|approve|choose|decide|answer)|\bwaiting (for|on) (you|your)\b|\bdecision for you\b"
+    r"|\bover to you\b|\bneeds? your\b|\byour (call|decision|approval|go-ahead|answer|input|choice|ok)\b"
+    r"|\bi need (you|your)\b|\bcan(no|')t (continue|proceed) (until|without)\b"
+    r"|\b(should|shall|can) i (deploy|merge|ship|delete|send|publish|push|pay|buy)\b"
+    r"|\bwhich (one|option|do you)\b|\bdo you approve\b|\bok to (merge|deploy|ship|send|delete|proceed)\b)",
+    re.IGNORECASE | re.MULTILINE)
+ASK_TTL = 3 * 86400            # an unanswered ask older than this is no longer "needs you"
+ASK_TOOL_IDLE_TTL = 12 * 3600  # a pending ask tool in a session that is not running
+
+
+def asks_owner(text):
+    """True when the text really waits on the owner, not when it only offers a next step."""
+    if not text:
+        return False
+    # only the closing lines count; quoted drafts ("> ...") are text for someone else
+    lines = [ln.strip() for ln in str(text)[-600:].splitlines() if ln.strip() and not ln.lstrip().startswith(">")]
+    tail = "\n".join(lines[-3:])
+    if BLOCKER_RE.search(tail):
+        return True
+    # the question lines, minus the ones that are only an offer
+    asks = [ln for ln in lines[-3:] if ASK_RE.search(ln)]
+    return any(not OFFER_RE.search(ln) for ln in asks)
+
+
 ASK_TOOLS = {
     "AskUserQuestion": "asked you a question in the Claude app",
     "ExitPlanMode": "waiting for your OK on a plan",
@@ -44,14 +75,14 @@ def _is_claude_prompt(o):
         msg = o.get('message') or {}
         content = msg.get('content')
         if isinstance(content, str):
-            return True
+            return not content.lstrip().startswith("[Request interrupted")
         if isinstance(content, list) and content:
             all_tr = all((isinstance(b, dict) and b.get('type') == 'tool_result') for b in content)
             if all_tr:
                 return False
             for b in content:
                 if isinstance(b, dict) and b.get('type') == 'text':
-                    return True
+                    return not str(b.get('text') or '').lstrip().startswith("[Request interrupted")
             return False
     return False
 
@@ -181,7 +212,32 @@ def read_activity(path):
     except Exception:
         result = None
     _cache[path] = (sig, result)
+    sub = _subagent_mtime(path)
+    if result is not None and sub:
+        result = dict(result, subagent_mtime=sub)
     return result
+
+
+def _is_import(events):
+    """Codex Desktop can import a Claude transcript: every line written in the same second and the
+    tool calls replayed as "[external_agent_tool_call ...]" text. That is a copy, not a live turn."""
+    times = [ev.get('mtime') for ev in events if ev.get('mtime')]
+    if not times or max(times) - min(times) > 10:
+        return False
+    for ev in events:
+        for b in ev.get('blocks') or []:
+            if isinstance(b, dict) and str(b.get('text') or '').startswith("[external_agent_tool_"):
+                return True
+    return False
+
+
+def _subagent_mtime(path):
+    """Latest write by a background subagent of this Claude session (<sid>/subagents/*.jsonl), or None."""
+    d = Path(path[:-6] if path.endswith(".jsonl") else path) / "subagents"
+    try:
+        return max((e.stat().st_mtime for e in os.scandir(d) if e.name.endswith(".jsonl")), default=None)
+    except OSError:
+        return None
 
 
 def _read_activity_inner(path, st):
@@ -324,6 +380,7 @@ def _read_activity_inner(path, st):
                     break
 
     turn_wrapped = False
+    turn_blocked = False
     turn_ask = ""
     turn_actions = []
     for ev in current_turn_events:
@@ -340,6 +397,7 @@ def _read_activity_inner(path, st):
                             if isinstance(inp, dict):
                                 ask = inp.get('ask') or ''
                                 turn_ask = str(ask).strip()
+                                turn_blocked = bool(inp.get('blocked'))
                                 actions = inp.get('actions') or []
                                 if isinstance(actions, list):
                                     for a in actions:
@@ -431,7 +489,7 @@ def _read_activity_inner(path, st):
                 continue
             if tid and tid not in tool_results:
                 pending = {'name': name, 'mtime': mtime_c}
-                if name == 'AskUserQuestion':
+                if name in ('AskUserQuestion', 'mcp__ccd_session__start_session'):
                     inp = bblock.get('input') if isinstance(bblock, dict) else None
                     pending_input = inp
                 break
@@ -447,7 +505,7 @@ def _read_activity_inner(path, st):
                         break
                 if not has_res:
                     pending = {'name': name, 'mtime': mtime_c}
-                    if name == 'AskUserQuestion':
+                    if name in ('AskUserQuestion', 'mcp__ccd_session__start_session'):
                         inp = bblock.get('input') if isinstance(bblock, dict) else None
                         pending_input = inp
                     break
@@ -478,6 +536,8 @@ def _read_activity_inner(path, st):
         'final_text': final_text or "",
         'turn_wrapped': bool(turn_wrapped),
         'turn_ask': turn_ask or "",
+        'turn_blocked': bool(turn_blocked),
+        'imported': _is_import(events),
         'turn_actions': turn_actions,
         'pending_input': pending_input,
         'pending': pending,
@@ -546,20 +606,27 @@ def state(row, act, now, running=False, dismissed_ts=None):
     age = now - act_mtime if act_mtime is not None else 10**18
     pending = act.get('pending') if act else None
 
-    if pending and pending.get('name') in ASK_TOOLS:
+    imported = bool(act and act.get('imported'))
+    if act and act.get('subagent_mtime') and now - act['subagent_mtime'] < 90:
+        return ("working", "", "")      # the main turn ended but its background agents are still running
+    p_input = (act.get('pending_input') if act else None) or {}
+    real_offer = not (pending and pending.get('name') == 'mcp__ccd_session__start_session'
+                      and isinstance(p_input, dict) and p_input.get('initiation') == 'user_asked')
+    if pending and pending.get('name') in ASK_TOOLS and real_offer and not imported:
         p_mtime = pending.get('mtime')
         p_age = age
         if p_mtime is not None:
             p_age = now - p_mtime
-        if p_age < 3 * 86400:
+        if p_age < (ASK_TTL if running else ASK_TOOL_IDLE_TTL):
             if not (dismissed_ts and act_mtime is not None and dismissed_ts > act_mtime):
                 reason = ASK_TOOLS.get(pending['name'])
                 return ("needs-you", reason, None)
     # backward compat for old event style
     if act and isinstance(act.get('last'), dict):
         last = act['last']
-        if last.get('role') == 'assistant' and last.get('kind') == 'tool_use' and last.get('tool') in ASK_TOOLS:
-            if age < 3 * 86400:
+        if (last.get('role') == 'assistant' and last.get('kind') == 'tool_use' and last.get('tool') in ASK_TOOLS
+                and not pending and not imported):
+            if age < (ASK_TTL if running else ASK_TOOL_IDLE_TTL):
                 if not (dismissed_ts and act_mtime is not None and dismissed_ts > act_mtime):
                     reason = ASK_TOOLS.get(last['tool'])
                     return ("needs-you", reason, None)
@@ -579,14 +646,14 @@ def state(row, act, now, running=False, dismissed_ts=None):
 
     if act:
         if act.get('turn_wrapped'):
-            if act.get('turn_ask'):
+            if act.get('turn_ask') and (act.get('turn_blocked') or BLOCKER_RE.search(act.get('turn_ask'))) and age < ASK_TTL:
                 ask = str(act.get('turn_ask') or '').strip()
                 if not (dismissed_ts and act_mtime is not None and dismissed_ts > act_mtime):
                     return ("needs-you", ask, None)
         else:
             final_text = act.get('final_text') if act else ""
-            if final_text and age < 3 * 86400:
-                if ASK_RE.search(final_text):
+            if final_text and age < ASK_TTL and not imported:
+                if asks_owner(final_text):
                     reason = _ask_line(final_text)
                     if len(reason) > 160:
                         reason = reason[:160]
