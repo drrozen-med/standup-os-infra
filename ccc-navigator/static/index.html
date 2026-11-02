@@ -405,7 +405,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   <div class="top">
     <div class="row1">
       <div style="display:flex;align-items:center"><button type="button" class="menubtn" id="menuBtn" aria-label="Menu" title="Menu"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span class="upd" id="updDot" hidden></span></button><div class="brand">Sessions<span class="ovbtn" id="ovBtn" role="button" tabindex="0" title="Show or hide the summary line" aria-label="Show or hide the summary line"></span></div></div>
-      <div class="tools"><button type="button" class="iconbtn" id="muteNeeds" aria-pressed="false"></button><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
+      <div class="tools"><button type="button" class="iconbtn" id="todayBtn" title="Today, project by project" aria-label="Today, project by project"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 14h4M7 17h8"/></svg></button><button type="button" class="iconbtn" id="muteNeeds" aria-pressed="false"></button><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
     </div>
     <div class="ovline" id="ovLine"></div>
     <label class="search">
@@ -593,7 +593,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     await loadDecisions(); renderChips(); renderDetail(true);
   }
   function openInbox() {
-    ui.inbox = true; ui.selected = null; store.set('selected', null);
+    ui.inbox = true; ui.today = false; ui.selected = null; store.set('selected', null);
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
   }
@@ -950,11 +950,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const hit = findSel();
     const chat = !!(hit && ui.pane === 'chat' && (hit.s.open_url || hit.s.engine === 'pi') && !hit.s.batch);
     main.classList.toggle('chat', chat);
-    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + decSig;
+    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + !!ui.today + '|' + decSig;
     if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
-    if (!hit) { main.innerHTML = ((ui.inbox || decs.open.length) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; loadToday(); return; }
+    if (!hit) { main.innerHTML = (ui.today ? '<div class="detail overview"><button type="button" class="mback" data-mback>‹ Sessions</button></div>' : (ui.inbox || decs.open.length) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; loadToday(); return; }
     const { s, repo } = hit;
     if (chat) {
       const dotc = dotState(s);
@@ -1163,7 +1163,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   const narrow = () => matchMedia('(max-width: 760px)').matches;
   function select(key, fromUser) {
-    ui.selected = key; store.set('selected', key); ui.inbox = false;
+    ui.selected = key; store.set('selected', key); ui.inbox = false; ui.today = false;
     if (fromUser && narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
@@ -1537,6 +1537,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     b.setAttribute('aria-label', b.title);
   }
   renderMute();
+  $('#todayBtn').addEventListener('click', () => {
+    ui.today = true; ui.inbox = false; ui.selected = null; store.set('selected', null); todayAt = 0;
+    if (narrow()) document.body.classList.add('m-detail');
+    renderList(); renderDetail(true);
+  });
   $('#muteNeeds').addEventListener('click', () => {
     ui.muteNeeds = !ui.muteNeeds; store.set('muteNeeds', ui.muteNeeds);
     const partial = { mute_needs: ui.muteNeeds };
