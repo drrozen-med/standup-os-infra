@@ -115,6 +115,8 @@ def record_hook(db, payload, now=None):
     engine = str(payload.get("engine") or "claude")
     if event not in HOOK_TEXT or engine not in HOOK_ENGINES or not _SID_RE.fullmatch(sid):
         return None
+    if engine == "devin" and not sid.startswith("devincli-"):
+        sid = "devincli-" + sid     # CCC names Devin sessions with this prefix; Devin's own hook omits it
     key = engine + ":" + sid
     row = db.execute("SELECT project FROM sessions WHERE key=?", (key,)).fetchone()
     project = (row["project"] if row else "") or os.path.basename(str(payload.get("cwd") or "").rstrip("/"))
