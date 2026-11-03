@@ -83,6 +83,9 @@ def main():
         except Exception as e:  # CCC logs the error and retries later; never fall back to a paid engine
             print("ccc-claude-shim: %s" % str(e)[:200], file=sys.stderr)
             return 1
+    if not (os.path.isfile(REAL) and os.access(REAL, os.X_OK)):
+        print("ccc-claude-shim: real claude not found at %s" % REAL, file=sys.stderr)
+        return 127
     os.execv(REAL, [REAL] + args)
 
 
