@@ -73,7 +73,8 @@ class State:
      "groups":    {repo_key: [group, ...]},
      "assign":    {key: {"repo": repo_key, "group": name}},
      "moved":     {key: repo_key},   # session filed under another project than its folder
-     "desktop_map": {desktop group name: repo_key}}   # unmapped desktop groups are their own project
+     "desktop_map": {desktop group name: repo_key},   # unmapped desktop groups are their own project
+     "owners":    {repo_key: session key}}   # each project's AI owner (docs/owners.md)
     """
 
     def __init__(self, path: Path):
@@ -129,6 +130,7 @@ class State:
             "notes": {k: list(v) for k, v in (d.get("notes") or {}).items()},
             "triage": dict(d.get("triage") or {}),
             "copilot": str(d.get("copilot") or ""),   # session key of Uri's main assistant
+            "owners": {str(k): str(v) for k, v in (d.get("owners") or {}).items() if k and v},
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
             "repo_order": list(d.get("repo_order") or []),
             "group_order": {k: list(v) for k, v in (d.get("group_order") or {}).items()},
@@ -198,6 +200,18 @@ class State:
         with self.lock:
             before = self.data["copilot"]
             self.data["copilot"] = (key or "").strip()[:200]
+            self._save()
+        return before
+
+    def set_owner(self, repo, key):
+        """Register (or with an empty key, clear) a project's owner session. -> the previous key or None."""
+        repo, key = str(repo or "").strip()[:500], str(key or "").strip()[:200]
+        with self.lock:
+            before = self.data["owners"].get(repo)
+            if key:
+                self.data["owners"][repo] = key
+            else:
+                self.data["owners"].pop(repo, None)
             self._save()
         return before
 
@@ -1302,12 +1316,14 @@ def session_state(r, event=None, now=None, dismissed_ts=None):
 
 def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, show_hidden=False,
                desktop=None, auto_titles=None, desktop_group=None, always=None, archived_sids=None):
-    """always: a session key that is never filtered out or hidden (the co-pilot). desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
+    """always: a session key, or a set of them, never filtered out or hidden (the co-pilot, project owners). desktop_group: CLI session id -> Claude desktop sidebar group. Placement order:
     an explicit move, then the desktop group (its mapped project, or its own), then the folder."""
     now = now or time.time()
     cutoff = now - WINDOWS[window] if WINDOWS.get(window) else 0
+    always = {always} if isinstance(always, str) else set(always or ())
+
     def is_always(r):
-        return bool(always) and "%s:%s" % (r.get("engine") or "claude", r.get("session_id")) == always
+        return bool(always) and "%s:%s" % (r.get("engine") or "claude", r.get("session_id")) in always
 
     def transcript_path(r):
         return r.get("jsonl_path") or r.get("rollout_path")
@@ -1541,7 +1557,7 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
         kept = []
         repo_hidden = bool(hmap.get("r:" + repo["key"]))
         for it in repo["items"]:
-            if it["key"] != always and (repo_hidden or hmap.get(it["key"]) or hmap.get("g:%s|%s" % (repo["key"], it["group"]))):
+            if it["key"] not in always and (repo_hidden or hmap.get(it["key"]) or hmap.get("g:%s|%s" % (repo["key"], it["group"]))):
                 user_hidden += 1
                 if not show_hidden:
                     continue
@@ -1627,6 +1643,78 @@ def build_tree(rows, state, window, orca_ws, ccc_base, batch_min=3, now=None, sh
     }
 
 
+# ---------------------------------------------------------------- project owners (docs/owners.md)
+
+OWNER_STALE_H = 24          # a status older than this is stale
+_owner_cache = {}           # status.json path -> (mtime, parsed); keeps /api/tree from re-reading files
+
+
+def owner_root():
+    return Path(os.environ.get("OWNER_DIR") or "~/.ccc-navigator/owners").expanduser()
+
+
+def owner_slug(repo):
+    """Folder name of a project's owner: the basename of its key without a folder:/desktop: prefix,
+    path-safe (same rule as bin/owner.py)."""
+    base = re.sub(r"^[a-z]+:", "", os.path.basename(str(repo or "").rstrip("/")))
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", base).lstrip(".") or "_"
+
+
+def owner_status(repo):
+    """The project's status.json (None when missing or unreadable), cached by mtime."""
+    path = owner_root() / owner_slug(repo) / "status.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        _owner_cache.pop(str(path), None)
+        return None
+    hit = _owner_cache.get(str(path))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        data = json.loads(path.read_text())
+        data = data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        data = None
+    _owner_cache[str(path)] = (mtime, data)
+    return data
+
+
+def owner_status_ts(status):
+    """updated_at of a status as epoch seconds, or None."""
+    try:
+        return datetime.datetime.fromisoformat(str((status or {}).get("updated_at") or "")).timestamp()
+    except ValueError:
+        return None
+
+
+def owner_log(repo, actor, text, when=None):
+    """Append `- YYYY-MM-DD HH:MM [actor] text` to the project's log.md."""
+    d = owner_root() / owner_slug(repo)
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(when or time.time()))
+    with open(d / "log.md", "a") as f:
+        f.write("- %s [%s] %s\n" % (stamp, actor, " ".join(str(text).split())))
+
+
+def owner_info(repo, key, turn=None, now=None):
+    """The tree's `owner` field. turn: (start, end) of the owner's last finished turn, when known."""
+    now = now or time.time()
+    st = owner_status(repo)
+    ts = owner_status_ts(st)
+    out = {"key": key, "summary": "", "state": "", "updated_at": None, "stale": True, "problem": "no status yet"}
+    if not st or ts is None:
+        return out
+    out.update(summary=str(st.get("summary") or ""), state=str(st.get("state") or ""),
+               updated_at=st.get("updated_at"), stale=False, problem="")
+    start = (turn or (None, None))[0]
+    if start and ts < start:            # its last turn ended without writing a status
+        out.update(stale=True, problem="no status this turn")
+    elif now - ts > OWNER_STALE_H * 3600:
+        out.update(stale=True, problem="status %dh old" % ((now - ts) // 3600))
+    return out
+
+
 # ---------------------------------------------------------------- http
 
 class App:
@@ -1648,6 +1736,8 @@ class App:
         self._build = threading.RLock()   # one tree build at a time: parallel cold builds each re-read everything
         self._saved = {"at": time.time(), "busy": False}
         self._hook_lock, self._hook_pending, self._hook_done, self._hook_worker = threading.Lock(), set(), {}, None
+        self._owner_turns = {}    # owner session key -> [start, end] of its last finished turn (Stop hooks)
+        self._owner_lock = threading.Lock()
 
     def moved(self, sid):
         """A Claude session whose log exists in two folders: a CCC send would resume the wrong copy and
@@ -1723,12 +1813,66 @@ class App:
             db.close()
         if not key:
             return {"ok": False, "error": "ignored"}
+        if str(payload.get("hook_event_name") or payload.get("event") or "") == "Stop":
+            try:
+                self.owner_turn_end(key)
+            except Exception as e:   # never let the owner check break the hook
+                print("owner check %s failed: %s" % (key, e), file=sys.stderr)
         with self._hook_lock:
             self._hook_pending.add(key)
             if not self._hook_worker or not self._hook_worker.is_alive():
                 self._hook_worker = threading.Thread(target=self._hook_drain, daemon=True)
                 self._hook_worker.start()
         return {"ok": True, "key": key}
+
+    OWNER_DUP = 2    # seconds: a second Stop this close to the last one is the same turn delivered twice
+
+    def _owner_turn(self, key, before):
+        """[start, end] of the owner's last finished turn; seeded once from the hook log in briefs.db
+        (Stop hooks logged before `before`)."""
+        if key not in self._owner_turns:
+            stops = []
+            try:
+                db = briefs.connect()
+                try:
+                    stops = [r[0] for r in db.execute(
+                        "SELECT at FROM events WHERE session_key=? AND kind='hook' AND text LIKE 'turn ended%' "
+                        "AND at < ? ORDER BY at DESC LIMIT 2", (key, before))]
+                finally:
+                    db.close()
+            except Exception:
+                pass
+            self._owner_turns[key] = [stops[1] if len(stops) > 1 else None, stops[0] if stops else None]
+        return self._owner_turns[key]
+
+    def owner_turn_end(self, key, now=None):
+        """A registered owner finished a turn (Stop hook). A turn runs from the previous Stop to this one;
+        if no status was written in it, log that in the project's log.md, once per turn. -> True when logged."""
+        now = now or time.time()
+        repos = [r for r, k in self.state.snapshot()["owners"].items() if k == key]
+        if not repos:
+            return False
+        with self._owner_lock:
+            turn = self._owner_turn(key, now - self.OWNER_DUP)
+            if turn[1] and now - turn[1] < self.OWNER_DUP:
+                return False                       # the same turn, hook delivered twice
+            turn[0], turn[1] = turn[1], now
+        logged = False
+        for repo in repos:
+            ts = owner_status_ts(owner_status(repo))
+            if ts is None or (turn[0] and ts < turn[0]):
+                owner_log(repo, "navigator", "turn ended without a status update", now)
+                logged = True
+        return logged
+
+    def owner(self, repo):
+        """The tree's `owner` field for one project (None when it has no owner)."""
+        key = self.state.snapshot()["owners"].get(repo)
+        if not key:
+            return None
+        with self._owner_lock:
+            turn = tuple(self._owner_turn(key, time.time() - self.OWNER_DUP))
+        return owner_info(repo, key, turn)
 
     def _hook_drain(self):
         while True:
@@ -1834,15 +1978,23 @@ class App:
         ws, orca_meta = orca.load_workspaces(self.args.orca_dir)
         t = build_tree(rows + prows + orows + vrows, self.state.snapshot(), window, ws, self.ccc.base,
                        show_hidden=show_hidden, desktop=desktop_titles(), auto_titles=titler_titles(),
-                       desktop_group=desktop_groups(), always=self.state.snapshot()["copilot"] or None,
+                       desktop_group=desktop_groups(), always=self.always_keys(),
                        archived_sids=desktop_archived())
         t["copilot"] = self.copilot()
+        t["owners"] = {repo: self.owner(repo) for repo in self.state.snapshot()["owners"]}   # also projects not shown
+        for r in t.get("repos") or []:
+            r["owner"] = t["owners"].get(r["key"])
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta,
                         "outsourcerer": o_meta, "vm251": v_meta}
         t["generated_at"] = time.time()
         return t
+
+    def always_keys(self):
+        """Sessions that are never hidden or dropped by the window: the co-pilot and every project owner."""
+        snap = self.state.snapshot()
+        return {k for k in [snap["copilot"]] + list(snap["owners"].values()) if k}
 
     def copilot(self):
         """The main assistant's session and the links that open it, or None when none is set."""
@@ -2224,7 +2376,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/order",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
                 "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
@@ -2686,6 +2838,12 @@ class Handler(BaseHTTPRequestHandler):
             cid = self.app.changes.record(self._actor(), "copilot.set", {"key": key},
                                           {"copilot": {"key": before or None}}, {"copilot": {"key": key or None}})
             return self._send(200, {"ok": True, "copilot": self.app.copilot(), "change": cid})
+        elif p == "/api/owner":
+            try:
+                res = actions.dispatch(self, "project.owner", {"repo": body.get("repo"), "key": body.get("key") or ""})
+            except actions.ActionError as e:
+                return self._send(400, {"ok": False, "error": e.message, "field": e.field})
+            return self._send(200, res["result"])
         elif p == "/api/desktop-map":
             group, repo = str(body.get("group") or "").strip(), str(body.get("repo") or "")
             if not group:

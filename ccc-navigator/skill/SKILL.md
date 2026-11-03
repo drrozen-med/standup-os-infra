@@ -183,6 +183,11 @@ Set project icon (changes state, undoable; targets: project)
 - `ref` ref
 - `icon` str, required
 
+### `project.owner`
+Make a session the project's owner (empty key clears it) (changes state, undoable; targets: project)
+- `repo` str, required - project key
+- `key` str - owner session key <engine>:<id>; empty clears
+
 ### `project.rename`
 Rename project (changes state, undoable; targets: project)
 - `repo` str
