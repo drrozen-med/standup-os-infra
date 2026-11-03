@@ -112,6 +112,14 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .repo-h{width:100%;display:flex;align-items:center;gap:8px;padding:9px 16px;background:var(--panel);border:0;border-top:1px solid var(--line);cursor:pointer;text-align:left;position:sticky;top:0;z-index:3}
 .repo-h:hover{background:var(--hover)}
 .repo-h .name{font:700 13.5px var(--display);letter-spacing:-.005em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-h .rtxt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.repo-h .rtxt .name{flex:none}
+.repo-h .osum{font:400 11.5px var(--sans);color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-h .osum.warn{color:var(--accent)}
+.repo-h .osum.bad{color:var(--danger)}
+.owner-b{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;font-size:13px;line-height:1;cursor:pointer}
+.owner-b:hover,.owner-b:focus-visible{background:var(--line2)}
+.owner-b.warn{background:var(--accent-soft)}
 .chev{flex:none;transition:transform .12s}
 .open>.repo-h .chev,.open>.grp-h .chev{transform:rotate(90deg)}
 .livec{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;font-weight:600}
@@ -370,7 +378,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .chat-head .btn{display:none}
   .s,.grp-h,.repo-h{min-height:40px}
   .s>.eye,.s>.star-b{display:none}
-  .dots,.eye,.star-b{width:30px;height:30px}
+  .dots,.eye,.star-b,.owner-b{width:30px;height:30px}
   .row1{flex-wrap:wrap;gap:6px}
   .row1 .tools{gap:4px}
   .seg button{padding:4px 6px}
@@ -680,25 +688,45 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
       + `<a class="pin-row" href="/ride" style="text-decoration:none;color:inherit"><span class="pn">Ride mode</span><span class="ps">hear it all, answer by voice</span></a>`;
   }
+  // Project owner (docs/owners.md): the summary line under the project name, and the 🧠 button that opens the owner chat.
+  function ownerLine(ow) {
+    const bad = ow.state === 'blocked', warn = !!ow.stale || ow.state === 'waiting-on-uri';
+    const txt = ow.stale ? (ow.problem || 'status is out of date') : (ow.summary || ow.problem || '');
+    return { txt, cls: bad ? 'bad' : warn ? 'warn' : '' };
+  }
+  function ownerName(repo) {
+    const name = `<span class="name"><bdi>${esc(repo.name)}</bdi></span>`, ow = repo.owner;
+    if (!ow) return name;
+    const l = ownerLine(ow);
+    return `<span class="rtxt">${name}<span class="osum ${l.cls}" dir="auto" title="${esc(l.txt)}">${esc(l.txt)}</span></span>`;
+  }
+  function ownerBtn(repo) {
+    const ow = repo.owner; if (!ow) return '';
+    const l = ownerLine(ow);
+    return `<span class="owner-b ${l.cls ? 'warn' : ''}" role="button" tabindex="0" data-owner-open="${esc(repo.key)}" aria-label="Open owner" title="${esc('Open owner: ' + (ow.summary || l.txt))}">🧠</span>`;
+  }
   function flatSessions() { const out = []; for (const repo of tree.repos) for (const g of repo.groups) for (const s of g.items) out.push({ s, repo, g }); return out; }
+  // Open a session's chat in the main pane. The Super-co-pilot and project owners both go through here.
+  function openChatSession(key, what) {
+    if (!key) return;
+    if (!flatSessions().some(x => x.s.key === key)) return toast(what + ' session not found yet, try again in a moment');
+    ui.pane = 'chat'; store.set('pane', 'chat'); select(key, true);
+  }
+  function openCopilot() { const cp = tree && tree.copilot; if (cp) openChatSession(cp.key, 'Co-pilot'); }
+  function openOwner(repoKey) {
+    const repo = tree && tree.repos.find(r => r.key === repoKey), ow = repo && repo.owner;
+    if (ow) openChatSession(ow.key, 'Owner');
+  }
   $('#pinned').addEventListener('click', e => {
     if (e.target.closest('#decRow')) return openInbox();
-    if (e.target.closest('#pilotRow')) {
-      const cp = tree && tree.copilot; if (!cp) return;
-      if (!flatSessions().some(x => x.s.key === cp.key)) return toast('Co-pilot session not found yet, try again in a moment');
-      ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
-    }
+    if (e.target.closest('#pilotRow')) openCopilot();
   });
   $('#pinned').addEventListener('keydown', e => {
     const row = e.target.closest('.pin-row'); if (!row) return;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
     if (row.id === 'decRow') return openInbox();
-    if (row.id === 'pilotRow') {
-      const cp = tree && tree.copilot; if (!cp) return;
-      if (!flatSessions().some(x => x.s.key === cp.key)) return toast('Co-pilot session not found yet, try again in a moment');
-      ui.pane = 'chat'; store.set('pane', 'chat'); select(cp.key, true);
-    }
+    if (row.id === 'pilotRow') openCopilot();
   });
   // one plain-language line on top of a session: what it is for, what is happening now (small model, briefs.py)
   let briefAt = {};
@@ -966,9 +994,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const activityCompact = `<span class="livec compact" aria-label="${esc(activity)}" title="${esc(activity)}">${repoWorking ? `<span class="pair"><span class="dot working"></span><span class="num">${repoWorking}</span></span>` : ''}${repoNeeds ? `<span class="pair"><span class="dot needs-you"></span><span class="num">${repoNeeds}</span></span>` : ''}</span>`;
       html += `<div class="${rOpen ? 'open' : ''}">
         <button type="button" class="repo-h ${repo.hidden ? 'ishidden' : ''}" draggable="true" data-toggle="${esc(repo.key)}" data-repo-header="${esc(repo.key)}" aria-expanded="${!!rOpen}" title="${esc(repo.path)}">
-          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}<span class="name"><bdi>${esc(repo.name)}</bdi></span>
+          ${CHEV}${tree.icons && tree.icons['r:' + repo.key] ? `<span class="gicon">${esc(tree.icons['r:' + repo.key])}</span>` : BRANCH}${ownerName(repo)}
           ${(repoWorking || repoNeeds) ? `<span class="livec full">${activity}</span>${activityCompact}` : ''}
-          <span class="cnt">${repoCount}</span>
+          <span class="cnt">${repoCount}</span>${ownerBtn(repo)}
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
           <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
         <div class="groups">${groupsHtml}</div></div>`;
@@ -1428,6 +1456,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (action === 'pin' || action === 'star') return 'Updated stars';
     if (action === 'triage') return 'Updated triage';
     if (action === 'copilot.set') return 'Changed co-pilot';
+    if (action === 'project.owner' || action === 'owner.set') return 'Changed project owner';
     if (action === 'icon.set') return 'Updated icon';
     if (action === 'note.add') return 'Added a note';
     if (action === 'note.remove') return 'Removed a note';
@@ -1509,6 +1538,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         { label: 'Rename…', fn: () => askText({ title: 'Rename session', value: s.nick || '', hint: 'Applied here and in Claude / Codex / Devin via CCC. Empty clears.', ok: 'Rename' }).then(n => { if (n !== null) renameSession(s, n); }) },
         ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
         ...(s.engine === 'claude' && !s.batch ? [{ label: tree.copilot && tree.copilot.key === s.key ? 'Stop being my co-pilot' : 'Make this my co-pilot', fn: () => post('/api/copilot', { key: tree.copilot && tree.copilot.key === s.key ? '' : s.key }) }] : []),
+        ...(s.engine === 'claude' && !s.batch ? (() => { const mine = !!(here.owner && here.owner.key === s.key); return [{ label: mine ? 'Stop being the owner' : 'Make this the owner of ' + here.name, fn: () => post('/api/owner', { repo: here.key, key: mine ? '' : s.key }) }]; })() : []),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
         { label: s.pinned ? 'Unstar' : 'Star', fn: () => act('session.star', { key: s.key, pinned: !s.pinned }) },
         '-',
@@ -1552,6 +1582,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
     return [
       { hd: repo.name + ' · ' + all.length },
+      ...(repo.owner ? [{ label: 'Open owner', fn: () => openOwner(repo.key) }, { label: 'Remove owner', fn: () => post('/api/owner', { repo: repo.key, key: '' }) }, '-'] : []),
       { label: 'Move up', fn: () => moveRepoBy('up', repo.key) },
       { label: 'Move down', fn: () => moveRepoBy('down', repo.key) },
       '-',
@@ -1619,6 +1650,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   $('#list').addEventListener('click', e => {
     const dots = e.target.closest('[data-menu]');
     if (dots) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === dots) return closeMenu(); return openMenu(dots, menuFor(dots)); }
+    const ob = e.target.closest('[data-owner-open]');
+    if (ob) { e.stopPropagation(); e.preventDefault(); return openOwner(ob.dataset.ownerOpen); }
     const stp = e.target.closest('[data-star]');
     if (stp) { e.stopPropagation(); return act('session.star', { key: stp.dataset.star, pinned: stp.dataset.on !== '1' }); }
     const eye = e.target.closest('[data-hide]');
@@ -1627,6 +1660,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (s) return select(s.dataset.key, true);
     const t = e.target.closest('[data-toggle]');
     if (t) { const k = t.dataset.toggle; ui.collapsed[k] = !ui.collapsed[k]; store.set('collapsed', ui.collapsed); renderList(); }
+  });
+  $('#list').addEventListener('keydown', e => {
+    const ob = e.target.closest && e.target.closest('[data-owner-open]');
+    if (ob && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); openOwner(ob.dataset.ownerOpen); }
   });
   $('#list').addEventListener('dblclick', e => {
     const s = e.target.closest('.s'); if (!s) return;
@@ -1642,7 +1679,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   $('#list').addEventListener('dragstart', e => {
     const rh = e.target.closest('.repo-h');
-    if (rh && rh.dataset.repoHeader && !e.target.closest('.dots,.eye,.star-b')) {
+    if (rh && rh.dataset.repoHeader && !e.target.closest('.dots,.eye,.star-b,.owner-b')) {
       dragType = 'repo'; dragRepoKey = rh.dataset.repoHeader; dragKey = null; dragRepo = null;
       e.dataTransfer.effectAllowed = 'move';
       try { e.dataTransfer.setData('text/x-nav-repo', dragRepoKey); } catch(_){}
@@ -1650,7 +1687,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       return;
     }
     const gh = e.target.closest('.grp-h');
-    if (gh && gh.dataset.grp && gh.dataset.repoKey && !e.target.closest('.dots,.eye,.star-b')) {
+    if (gh && gh.dataset.grp && gh.dataset.repoKey && !e.target.closest('.dots,.eye,.star-b,.owner-b')) {
       dragType = 'group'; dragRepoKey = gh.dataset.repoKey; dragGroupName = gh.dataset.grp; dragKey = null; dragRepo = null;
       e.dataTransfer.effectAllowed = 'move';
       try { e.dataTransfer.setData('text/x-nav-group', dragRepoKey + '|' + dragGroupName); } catch(_){}
