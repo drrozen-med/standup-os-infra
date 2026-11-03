@@ -49,12 +49,16 @@ WAKE_MIN = 45           # previous log line older than this means the Mac slept 
 PROMPT = """[Automatic check-in, every 15 min. Uri is not typing this.]
 You own Uri's repos. Rules: ~/.ccc-navigator/briefs/COPILOT-OWNER.md (what you may do alone, what stays Uri's) and ~/.ccc-navigator/briefs/RULES.md (workers). Read both if they are not in your context.
 NAV=~/projects/standup-os/ccc-navigator/nav.py
-1. Read `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
+BOARD=~/projects/standup-os/bin/owner-scoreboard.py
+RECALL=~/.claude/total-recall/plugins/total-recall/brain.dist/brain
+Target for every managed repo: main CI green, at most 5 open PRs, none idle 7 days or more.
+1. Read `python3 $BOARD` (worst repo first; it refreshes each repo's owner file ~/.ccc-navigator/owners/<repo>.md), `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
 2. Workers waiting on a question: if the answer is inside the rules, read the session's last messages first. Type into it only if it is idle, ends on that question and went quiet under 24 h ago; otherwise start a new session in that repo with a short brief. Questions outside the rules become one decision for Uri.
 3. Blocked, failed or stuck workers: unblock, restart, or hand the job to a new worker (free models first).
-4. Red CI on a default branch, or a stuck PR with no owner: start a free-model worker to fix it. Merge only green PRs reviewed by a second model.
-5. Inbox: close decisions that are verifiably done (`NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`), add new ones only for what is Uri's (`NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`), rank the top 5 (`NAV_ACTOR=copilot python3 $NAV rank <id1> ... --why <id>=<reason>`). Never pick an answer for Uri on a real choice.
-6. Reply in at most 3 short lines: what you did and what needs Uri. If nothing changed, reply exactly: Check-in: nothing new."""
+4. Move the scoreboard: unless every repo is at target, take the worst repo that has no worker on it and move at least one item this check-in: close a duplicate or superseded PR, merge a green PR reviewed by a second model, or start a free-model worker (Outsourcerer, opencode-go/iceman-contributor-free or opencode-go/beam-free) on red main CI or the oldest idle PR. Record what you did: `python3 $BOARD --log <repo> "<what, PR/issue numbers, worker job id>"`.
+5. Before asking Uri anything, search what he already decided: `$RECALL search --query "<topic>" --mode preview --limit 5` (add --deep if thin). If he already answered it, apply that answer and cite the session instead of asking again.
+6. Inbox: close decisions that are verifiably done (`NAV_ACTOR=copilot python3 $NAV decide <id> other --note "closed by co-pilot: <reason>"`), add new ones only for what is Uri's (`NAV_ACTOR=copilot python3 $NAV ask --id <short-id> --question "..." --option "..." --option "..."`), rank the top 5 (`NAV_ACTOR=copilot python3 $NAV rank <id1> ... --why <id>=<reason>`). Never pick an answer for Uri on a real choice.
+7. Reply in at most 3 short lines: the scoreboard line (N of 8 at target), what you moved, and what needs Uri. Reply exactly "Check-in: all repos at target, nothing new." only when every repo is at target and nothing changed."""
 
 
 def log(msg):
