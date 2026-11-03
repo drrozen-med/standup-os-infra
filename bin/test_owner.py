@@ -120,6 +120,9 @@ class Validation(Base):
         self.assertIn("needs_uri is empty", self.reasons(good(state="waiting-on-uri")))
         self.assertIn("needs_uri is empty", self.reasons(good(state="waiting-on-uri", needs_uri=["  "])))
         self.assertEqual(owner.validate(good(state="waiting-on-uri", needs_uri=["cdl-price"]))[1], [])
+        # the decision ids carry it, so "still waiting on Uri's permission" is honest here
+        self.assertEqual(owner.validate(good(state="waiting-on-uri", needs_uri=["cdl-price"],
+                                             summary="Still waiting on Uri's permission to raise the price"))[1], [])
 
     def test_blocked_is_dropped_unless_state_is_blocked(self):
         clean, _ = owner.validate(good(blocked=BLOCKED))

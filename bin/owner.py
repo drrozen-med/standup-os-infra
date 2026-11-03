@@ -33,6 +33,7 @@ ACTOR_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
 OWNER_PY = "~/projects/standup-os/bin/owner.py"
 NAV = "~/projects/standup-os/ccc-navigator/nav.py"
 RECALL = "~/.claude/total-recall/plugins/total-recall/brain.dist/brain"
+OSRC = "~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh"
 
 
 def root():
@@ -162,7 +163,7 @@ def validate(obj):
         blocked_ok = not bp
     if state == "waiting-on-uri" and not lists["needs_uri"]:
         reasons.append("state is waiting-on-uri but needs_uri is empty: list the decision ids in the navigator inbox")
-    if not blocked_ok:
+    if not blocked_ok and state != "waiting-on-uri":   # waiting-on-uri is backed by needs_uri decision ids
         for f in ("summary", "doing"):
             hits = passive_hits(obj.get(f) if isinstance(obj.get(f), str) else "")
             if hits:
@@ -249,8 +250,10 @@ def brief(slug, session=None):
         _section("Toolbelt", "\n".join([
             "- gh: GitHub (PRs, issues, CI runs) for this project's repo.",
             "- orca CLI (/usr/local/bin/orca): worktrees and terminals; spawn or hand off agents.",
-            "- Outsourcerer free models for grunt work (e.g. `outsourcerer.sh --provider opencode bg -m free \"task\"`). "
-            "Free models ship bugs: you review every change yourself before it merges.",
+            "- Outsourcerer free models for grunt work, one git worktree per job: "
+            "`OSRC_REQUIRE_INTERACTIVE=0 %s --provider opencode edit -m opencode-go/iceman-contributor-free \"task\"` "
+            "(or opencode-go/beam-free). Free models ship bugs: read the full diff, run the checks and fix it yourself "
+            "before it merges." % OSRC,
             "- python3 %s: the Navigator (sessions, decision inbox, `ask` puts a decision to Uri)." % NAV,
             "- Total Recall, before asking anything Uri may already have decided: "
             "%s search --query \"<topic>\" --mode preview --limit 5" % RECALL,

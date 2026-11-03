@@ -120,6 +120,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .owner-b{flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;font-size:13px;line-height:1;cursor:pointer}
 .owner-b:hover,.owner-b:focus-visible{background:var(--line2)}
 .owner-b.warn{background:var(--accent-soft)}
+.repo-h .osum-m{display:none}
 .chev{flex:none;transition:transform .12s}
 .open>.repo-h .chev,.open>.grp-h .chev{transform:rotate(90deg)}
 .livec{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;font-weight:600}
@@ -379,6 +380,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .s,.grp-h,.repo-h{min-height:40px}
   .s>.eye,.s>.star-b{display:none}
   .dots,.eye,.star-b,.owner-b{width:30px;height:30px}
+  /* phones: the owner's status gets its own full-width line under the row instead of a clipped one */
+  .repo-h{flex-wrap:wrap;row-gap:2px}
+  .repo-h .rtxt .osum{display:none}
+  .repo-h .osum-m{display:block;order:99;flex:1 0 100%;padding-left:44px;white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .row1{flex-wrap:wrap;gap:6px}
   .row1 .tools{gap:4px}
   .seg button{padding:4px 6px}
@@ -700,6 +705,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const l = ownerLine(ow);
     return `<span class="rtxt">${name}<span class="osum ${l.cls}" dir="auto" title="${esc(l.txt)}">${esc(l.txt)}</span></span>`;
   }
+  function ownerLineM(repo) {   // the same line, full width, for phones (CSS shows one or the other)
+    const ow = repo.owner; if (!ow) return '';
+    const l = ownerLine(ow);
+    return `<span class="osum osum-m ${l.cls}" dir="auto">${esc(l.txt)}</span>`;
+  }
   function ownerBtn(repo) {
     const ow = repo.owner; if (!ow) return '';
     const l = ownerLine(ow);
@@ -998,7 +1008,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
           ${(repoWorking || repoNeeds) ? `<span class="livec full">${activity}</span>${activityCompact}` : ''}
           <span class="cnt">${repoCount}</span>${ownerBtn(repo)}
           <span class="star-b ${repo.pinned ? 'on' : ''}" role="button" tabindex="0" data-star="${esc('r:' + repo.key)}" data-on="${repo.pinned ? 1 : 0}" title="${repo.pinned ? 'Unstar project' : 'Star project (never hidden, sorts first)'}">${repo.pinned ? STAR_ON : STAR}</span>
-          <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span></button>
+          <span class="eye" role="button" tabindex="0" data-hide="${esc('r:' + repo.key)}" data-hidden="${repo.hidden ? 1 : 0}" title="${repo.hidden ? 'Unhide project' : 'Hide project (stays hidden for new sessions)'}">${repo.hidden ? EYE_OFF : EYE}</span><span class="dots" role="button" tabindex="0" data-menu="r" data-repo="${esc(repo.key)}" title="Project actions" aria-label="Project actions">${DOTS}</span>${ownerLineM(repo)}</button>
         <div class="groups">${groupsHtml}</div></div>`;
     }
     renderFocusBar(focusInfo);
