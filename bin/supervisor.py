@@ -221,6 +221,20 @@ def live_of(item, now):
             "working_now": idle is not None and idle < WORKING_MIN}
 
 
+def process_running(key):
+    """True when a process on this Mac is running the owner's session right now (claude/codex/devin with the
+    session id on its command line). A long turn waiting on a sub-process writes nothing to its transcript, so
+    the transcript age alone made it look idle and a wake started a second copy of the same session."""
+    sid = str(key or "").split(":", 1)[-1]
+    if len(sid) < 8:
+        return False
+    try:
+        out = subprocess.run(["pgrep", "-f", "--", sid], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and bool(out.stdout.strip())
+
+
 # ---------------------------------------------------------------- one owner
 
 def observe(pkey, info, tree, answers, open_map, board_rows, ps, now):
@@ -233,6 +247,8 @@ def observe(pkey, info, tree, answers, open_map, board_rows, ps, now):
     upd = (status or {}).get("updated_at")
     upd_ts = epoch(upd)
     live = live_of(find_item(tree, key), now)
+    if live["found"] and not live["working_now"] and process_running(key):
+        live["working_now"] = True          # mid-turn: a process holds the session, never wake it now
 
     # idle check-ins: consecutive cycles with nothing new in status (held while the session is mid-turn)
     first = "seen_updated_at" not in ps

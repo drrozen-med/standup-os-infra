@@ -104,7 +104,9 @@ class Base(unittest.TestCase):
         os.environ.pop("NAV_ACTOR", None)
         self.nav = FakeNav()
         self.runs = FakeRun()
-        for p in (mock.patch.object(sup, "get", self.nav), mock.patch.object(sup.subprocess, "run", self.runs)):
+        self.busy = set()       # owner keys whose session a process is running right now
+        for p in (mock.patch.object(sup, "get", self.nav), mock.patch.object(sup.subprocess, "run", self.runs),
+                  mock.patch.object(sup, "process_running", lambda key: key in self.busy)):
             p.start()
             self.addCleanup(p.stop)
         FakeNav.now = NOON
@@ -234,6 +236,13 @@ class NeverWake(Base):
         self.run_cycle()
         self.assertEqual(self.runs.sends(), [])
         self.assertIn("alpha: working now", self.cycles()[-1])
+
+    def test_running_process_counts_as_working_even_with_an_old_transcript(self):
+        self.add_owner(P1, K1, status(state="working"), idle_min=90)
+        self.busy.add(K1)
+        self.run_cycle()
+        self.assertEqual(self.runs.sends(), [])
+        self.assertIn("working now", self.cycles()[-1])
 
     def test_waiting_on_uri_without_new_answer(self):
         self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["d1"]), idle_min=100,
