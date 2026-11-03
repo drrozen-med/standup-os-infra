@@ -667,6 +667,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   });
   // one plain-language line on top of a session: what it is for, what is happening now (small model, briefs.py)
   let briefAt = {};
+  const ORGANIZE_PROMPT = 'Organize the Navigator. Review all projects and sessions. '
+    + '1) Find duplicate or mis-filed projects (same folder or repo shown twice: Orca, Devin, desktop or cloud copies) and merge them with `nav.py move-project` (dry-run first; it is reversible). '
+    + '2) Fix wrong, duplicate or missing project icons and unclear names. '
+    + '3) Leave anything uncertain alone and list it. '
+    + 'Report in at most 3 short bullets, with the undo command.';
   async function loadBrief(key, force) {
     const el = $('#briefLine'); if (!el) return;
     if (!force && Date.now() - (briefAt[key] || 0) < 60000) return;
@@ -677,7 +682,20 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const txt = b && (b.about || b.now)
       ? `<span class="about" dir="auto">${esc(b.about || '')}</span>${b.now ? `<span class="now" dir="auto">${esc(b.now)}</span>` : ''}`
       : '<span class="now">No summary yet.</span>';
-    cur.innerHTML = `<div class="btxt">${txt}</div><button type="button" class="bbtn" data-brief-name title="Ask the small model for a fresh summary and a better name">✨ Rename</button>`;
+    const isPilot = !!(tree && tree.copilot && tree.copilot.key === key);
+    cur.innerHTML = `<div class="btxt">${txt}</div><button type="button" class="bbtn" data-brief-name title="Ask the small model for a fresh summary and a better name">✨ Rename</button>`
+      + (isPilot ? `<button type="button" class="bbtn" data-organize title="Ask the co-pilot to tidy the Navigator: merge duplicate projects, fix icons and names">🪄 Organize</button>` : '');
+    const orgBtn = cur.querySelector('[data-organize]');
+    if (orgBtn) orgBtn.onclick = () => {
+      // type the prompt into the chat box and press Enter, so it goes through the normal send path
+      if (ui.selected !== key || !(tree && tree.copilot && tree.copilot.key === key)) return toast('Open the Super-co-pilot first');
+      const box = $('#cmp');
+      if (!box) return toast('Chat is still loading, try again in a moment');
+      box.value = ORGANIZE_PROMPT;
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      orgBtn.disabled = true; setTimeout(() => { orgBtn.disabled = false; }, 4000);
+      toast('Asked the co-pilot to organize');
+    };
     cur.querySelector('[data-brief-name]').onclick = async (ev) => {
       const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Thinking…';
       let res = null;
