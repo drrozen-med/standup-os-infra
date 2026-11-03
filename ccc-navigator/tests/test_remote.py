@@ -12,6 +12,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -232,6 +233,23 @@ class GateTests(unittest.TestCase):
         self.assertEqual(navigator.Handler.app.state.snapshot()["owners"], {"/r/owned": "claude:owner1"})
         self.req("POST", "/api/owner", cookie=cookie, body={"repo": "/r/owned", "key": ""}, origin="https://" + HOST)
         self.assertEqual(navigator.Handler.app.state.snapshot()["owners"], {})
+
+    def test_remote_supervisor_needs_pairing_and_our_origin(self):
+        body = {"action": "pause"}
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"SUPERVISOR_DIR": d}):
+            self.assertEqual(self.req("POST", "/api/supervisor", body=body)[0], 401)
+            self.assertEqual(self.req("GET", "/api/supervisor")[0], 401)
+            cookie, _ = self.pair()
+            self.assertEqual(self.req("POST", "/api/supervisor", cookie=cookie, body=body,
+                                      origin="https://evil.example")[0], 403)
+            self.assertEqual(self.req("POST", "/api/supervisor", cookie=cookie, body=body)[0], 403)  # no Origin
+            self.assertFalse(os.path.exists(os.path.join(d, "state.json")))
+            st, _, out = self.req("POST", "/api/supervisor", cookie=cookie, body=body, origin="https://" + HOST)
+            self.assertEqual(st, 200)
+            self.assertTrue(json.loads(out)["paused"])
+            self.assertIn("pause all by you", Path(d, "cycles.log").read_text())   # the phone is Uri
+            st, _, out = self.req("GET", "/api/supervisor", cookie=cookie)
+            self.assertEqual((st, json.loads(out)["paused"]), (200, True))
 
     def test_pairing_endpoints_are_local_only(self):
         cookie, _ = self.pair()

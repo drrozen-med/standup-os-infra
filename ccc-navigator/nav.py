@@ -521,6 +521,14 @@ def build_parser():
     owl = ow_sub.add_parser("ls", help="every registered owner with its status")
     _add_global_options(owl, subcommand=True)
 
+    sv = subparsers.add_parser("supervisor", help="the project-owner supervisor: register, pause, resume, manual wake")
+    _add_global_options(sv, subcommand=True)
+    sv.add_argument("action", nargs="?", default="show", choices=("show", "pause", "resume", "wake"),
+                    help="show (default) the register; pause/resume all or one project; wake one owner")
+    sv.add_argument("project", nargs="?", default="", metavar="PROJECT",
+                    help="project key, folder name or display name (required for wake)")
+    sv.add_argument("--reason", default="", help="wake: what the owner should do")
+
     dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
     _add_global_options(dg, subcommand=True)
 
@@ -1136,6 +1144,43 @@ def cmd_owner(args, client):
     else:
         print_json(out)
     return 0
+
+
+def cmd_supervisor(args, client):
+    if args.action == "show":
+        v = client.get("/api/supervisor")
+        if not args.table:
+            print_json(v)
+            return 0
+        print(f"supervisor {'PAUSED' if v.get('paused') else 'running'}; last cycle {v.get('last_cycle') or 'never'}"
+              + (f"; paused projects: {', '.join(v['paused_projects'])}" if v.get("paused_projects") else ""))
+        for r in v.get("register") or []:
+            if r.get("error"):
+                print(f"{r.get('project', '?'):<20} ERROR {r['error']}")
+                continue
+            ship = "-" if r.get("days_since_shipped") is None else f"{r['days_since_shipped']}d"
+            old = "" if r.get("oldest_decision_days") is None else f" ({r['oldest_decision_days']}d)"
+            wake = (r.get("last_wake") or {}).get("reason") or "-"
+            flags = (" [" + ", ".join(r["flags"]) + "]") if r.get("flags") else ""
+            print(f"{r['project']:<20} {r.get('state') or 'no status':<15} shipped {ship:<6} decisions "
+                  f"{r.get('decisions_open', 0)}{old:<8} idle {r.get('idle_checkins', 0)} wakes "
+                  f"{r.get('wakes_today', 0)} last {wake:<12}{flags}{' (paused)' if r.get('paused') else ''}")
+        return 0
+    if args.action == "wake" and not args.project:
+        raise UsageError("wake needs a project")
+    body = {"action": args.action}
+    if args.project:
+        body["project"] = args.project
+    if args.reason:
+        body["reason"] = args.reason
+    res = client.post("/api/supervisor", body)   # a refused wake (cap, pause) is HTTP 400 with the reason: NavError
+    res.pop("supervisor", None)
+    if args.table:
+        print(f"supervisor {args.action} {args.project or 'all'}: "
+              + ("ok" if res.get("ok") else res.get("skip") or res.get("error") or "refused"))
+    else:
+        print_json(res)
+    return 0 if res.get("ok") else 1
 
 
 def desktop_to_key(local_id):
@@ -2591,6 +2636,8 @@ def main(argv=None):
             return cmd_copilot(args, client)
         if args.command == "owner":
             return cmd_owner(args, client)
+        if args.command == "supervisor":
+            return cmd_supervisor(args, client)
         if args.command == "desktop-groups":
             return cmd_desktop_groups(args, client)
         if args.command == "map-desktop-group":

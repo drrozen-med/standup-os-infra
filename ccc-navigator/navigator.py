@@ -1715,6 +1715,61 @@ def owner_info(repo, key, turn=None, now=None):
     return out
 
 
+# ---------------------------------------------------------------- supervisor (docs/supervisor.md)
+
+SUPERVISOR_PY = HERE.parent / "bin" / "supervisor.py"
+SUPERVISOR_ACTIONS = ("pause", "resume", "wake")
+
+
+def supervisor_dir():
+    return Path(os.environ.get("SUPERVISOR_DIR") or "~/.ccc-navigator/supervisor").expanduser()
+
+
+def supervisor_view(tail=20):
+    """GET /api/supervisor: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail},
+    read from the files bin/supervisor.py writes (same shape as `supervisor.py status --json`)."""
+    d = supervisor_dir()
+
+    def read(name):
+        try:
+            v = json.loads((d / name).read_text())
+            return v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            return {}
+    try:
+        lines = [ln for ln in (d / "cycles.log").read_text().splitlines() if ln.strip()][-tail:]
+    except OSError:
+        lines = []
+    st = read("state.json")
+    return {"register": read("register.json").get("rows") or [], "digest_at": read("digest.json").get("generated_at"),
+            "paused": bool(st.get("paused")), "paused_projects": st.get("paused_projects") or [],
+            "last_cycle": st.get("last_cycle"), "cycles_tail": lines}
+
+
+def supervisor_run(body, actor, nav_url):
+    """POST /api/supervisor {action: pause|resume|wake, project?, reason?}: runs bin/supervisor.py.
+    -> (http status, result)."""
+    action = str(body.get("action") or "").strip()
+    project = str(body.get("project") or "").strip()[:300]
+    reason = str(body.get("reason") or "").strip()[:500]
+    if action not in SUPERVISOR_ACTIONS:
+        return 400, {"ok": False, "error": "action must be one of: " + ", ".join(SUPERVISOR_ACTIONS)}
+    if action == "wake" and not project:
+        return 400, {"ok": False, "error": "wake needs a project"}
+    argv = [sys.executable, str(SUPERVISOR_PY), action] + ([project] if project else [])
+    argv += (["--reason", reason] if action == "wake" and reason else []) + ["--json"]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=150,
+                           env=dict(os.environ, NAV_ACTOR=actor, CCC_NAV_URL=nav_url))
+        res = json.loads((r.stdout or "").strip().splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
+        return 500, {"ok": False, "error": "supervisor.py failed: %s" % e}
+    res = res if isinstance(res, dict) else {"ok": False, "error": "unexpected output"}
+    res["action"] = action
+    res["supervisor"] = supervisor_view()
+    return (200 if res.get("ok") else 400), res
+
+
 # ---------------------------------------------------------------- http
 
 class App:
@@ -2376,7 +2431,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/order",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
                 "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
@@ -2558,6 +2613,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/decisions":
             return self._send(200, dict(self.app.inbox.list(), ok=True))
+        if u.path == "/api/supervisor":
+            return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/desktop-groups":
             return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
                                     "folders": self.app.project_folders()})
@@ -2844,6 +2901,9 @@ class Handler(BaseHTTPRequestHandler):
             except actions.ActionError as e:
                 return self._send(400, {"ok": False, "error": e.message, "field": e.field})
             return self._send(200, res["result"])
+        elif p == "/api/supervisor":
+            code, res = supervisor_run(body, self._actor(), "http://127.0.0.1:%d" % self.server.server_address[1])
+            return self._send(code, res)
         elif p == "/api/desktop-map":
             group, repo = str(body.get("group") or "").strip(), str(body.get("repo") or "")
             if not group:

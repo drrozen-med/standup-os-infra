@@ -219,6 +219,47 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dopt{min-height:36px;padding:6px 14px;border-radius:10px;border:1px solid var(--line3);background:transparent;color:var(--text);font-weight:600;font-size:13px;cursor:pointer}
 .dopt:hover{background:var(--primary-soft);border-color:var(--primary-hi)}.dopt.other{color:var(--muted)}
 .dsrc{font-size:11px;color:var(--dim)}
+/* Supervisor status board (docs/supervisor.md, "UI: the status board") */
+.pin-row.sup{flex-wrap:wrap;row-gap:0}
+.pin-row.sup .ps{flex:1 0 100%;margin:0;overflow:hidden;text-overflow:ellipsis}
+.detail.sup{max-width:1000px;gap:14px;container:supb/inline-size}
+.sup h2{font:700 18px var(--display);margin:0}
+.sup-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sup-head h2{margin-inline-end:4px}
+.sup-pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 10px;border:1px solid var(--line2);color:var(--live)}
+.sup-pill.paused{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.sup-last{font-size:12px;color:var(--dim)}.sup-last.late{color:var(--accent)}
+.sup-head .dopt{margin-inline-start:auto}
+.sup-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+.sup-row{display:grid;grid-template-columns:12px minmax(110px,170px) minmax(0,1fr) auto 28px 28px;grid-template-areas:"dot name sum meta brain menu" ". . flags flags . .";column-gap:10px;row-gap:4px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
+.sup-row:first-child{border-top:0}
+.sup-row.paused{opacity:.7}
+.sup-row>.dot{grid-area:dot}
+.sup-name{grid-area:name;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sup-name b{font:700 13.5px var(--display);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sup-name i{font:400 11px var(--sans);font-style:normal;color:var(--dim)}
+.sup-name i.bad{color:var(--danger)}.sup-name i.warn{color:var(--accent)}
+.sup-sum{grid-area:sum;min-width:0;font-size:12.5px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.sup-row.open .sup-sum{white-space:normal;overflow:visible}
+.sup-meta{grid-area:meta;display:flex;flex-direction:column;gap:1px;font-size:11.5px;color:var(--dim);white-space:nowrap;text-align:end}
+.sup-meta .warn{color:var(--accent);font-weight:700}
+.sup-flags{grid-area:flags;display:flex;flex-wrap:wrap;gap:5px}
+.sup-flags:empty{display:none}
+.sup-flag{font-size:10.5px;font-weight:700;letter-spacing:.2px;border-radius:999px;padding:1px 8px;background:var(--accent-soft);color:var(--accent)}
+.sup-flag.bad{background:oklch(0.72 0.16 28/16%);color:var(--danger)}
+.sup-row>.owner-b{grid-area:brain}
+.sup-row>.dots{grid-area:menu}
+.sup-row>.owner-b,.sup-row>.dots{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;cursor:pointer;color:var(--muted)}
+.sup-row>.dots:hover,.sup-row>.dots:focus-visible,.sup-row>.dots.on{background:var(--line2);color:var(--text)}
+/* stacked rows whenever the pane is narrow: phones, or a half-width window */
+@container supb (max-width:720px){
+  .sup-row{grid-template-columns:12px minmax(0,1fr) 30px 30px;grid-template-areas:"dot name brain menu" "sum sum sum sum" "meta meta meta meta" "flags flags flags flags";padding:10px 12px;row-gap:3px}
+  .sup-name{flex-direction:row;align-items:baseline;gap:8px}
+  .sup-sum{grid-column:1 / -1;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .sup-row.open .sup-sum{display:block}
+  .sup-meta{flex-direction:row;flex-wrap:wrap;gap:2px 10px;white-space:normal;text-align:start}
+  .sup-row>.owner-b,.sup-row>.dots{width:30px;height:30px}
+}
 .dlg{position:fixed;inset:0;z-index:200;background:oklch(0 0 0/50%);display:flex;align-items:center;justify-content:center;padding:16px}
 .dlg-box{width:min(440px,100%);max-height:80vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 20px 60px oklch(0 0 0/40%)}
 .dlg-t{font:700 15px var(--display);color:var(--text)}.dlg-h{font-size:12px;color:var(--dim);line-height:1.5}
@@ -407,6 +448,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .pin-row{flex:1;min-width:0;min-height:34px;padding:4px 10px;font-size:13px;border:1px solid var(--line2);border-radius:999px}
   .pin-row .ps{display:none}
   .pin-row .pn{flex:1}
+  #pinned{flex-wrap:wrap}
+  .pin-row{flex:1 1 calc(50% - 6px)}   /* four pills: two rows of two, names stay readable */
+  .pin-row.sup .ps{display:none}
+  .detail.sup{padding:12px}
+  .sup-head .dopt{margin-inline-start:0}
+  .sup-row>.owner-b,.sup-row>.dots{width:30px;height:30px}
   #side.folded .chips,#side.folded #pinned,#side.folded .status,#side.folded .search{display:none}
   .foot{padding:4px 12px;gap:0}
   .foot .frow,.foot .btn{min-height:30px}
@@ -515,6 +562,8 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
   let decs = { open: [], answered: [] }, decSig = '';
+  let sup = null, supSig = '', supAt = 0, supFailAt = 0;   // supervisor register (GET /api/supervisor)
+  const supOpen = new Set();   // projects whose summary is expanded
 
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -568,6 +617,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.focus ? 'all' : ui.win) + (ui.showMine || ui.focus ? '&hidden=1' : ''));
       tree = await r.json();
       await loadDecisions();
+      await loadSupervisor();
       fetchServerView();
       render();
     } catch (e) {
@@ -582,6 +632,118 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       decs = d;
       if (sig !== decSig) { decSig = sig; lastDetailKey = null; }
     } catch (e) { /* inbox stays as it was */ }
+  }
+
+  // ---- supervisor status board (docs/supervisor.md). Rides the normal refresh: at most one read per 30 s while closed.
+  async function loadSupervisor(force) {
+    const now = Date.now();
+    if (!force && !ui.sup) {
+      if (now - supAt < 30000) return;
+      if (supFailAt && now - supFailAt < 300000) return;   // the server has no supervisor yet: ask again in 5 min
+    }
+    supAt = now;
+    try {
+      const r = await fetch('/api/supervisor');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (!d || typeof d !== 'object') throw new Error('bad payload');
+      sup = d; supFailAt = 0;
+    } catch (e) { sup = null; supFailAt = now; }
+    const sig = JSON.stringify(sup) + '|' + Math.floor(now / 60000);   // times on screen move once a minute
+    if (sig !== supSig) { supSig = sig; if (ui.sup) lastDetailKey = null; }
+  }
+  const supT = v => { if (v == null || v === '') return 0; if (typeof v === 'number') return v > 1e12 ? v / 1000 : v; const n = Date.parse(v); return isNaN(n) ? 0 : n / 1000; };
+  const supBase = p => String(p || '').split('/').filter(Boolean).pop() || String(p || '');
+  const supPausedInfo = () => {   // global flag, or {all, projects:[...]} when the server reports both
+    const p = sup && sup.paused;
+    if (p && typeof p === 'object') return { all: !!(p.all || p.global), projects: new Set(Array.isArray(p.projects) ? p.projects : Object.keys(p.projects || {})) };
+    return { all: !!p, projects: new Set((sup && sup.paused_projects) || []) };
+  };
+  const supRowPaused = (r, pi) => !!(r.paused || pi.projects.has(r.project));
+  const supRepo = r => tree && tree.repos.find(x => x.key === r.project || supBase(x.key) === r.project || x.name === r.project);
+  const FLAG_LABEL = { 'idle-2x': 'idle 2 check-ins', 'no-status': 'no status', 'blocked-past-due': 'blocked past due', 'decision-7d': 'decision 7d+' };
+  const supFlagLabel = f => FLAG_LABEL[f] || String(f).replace(/-/g, ' ');
+  const STATE_LABEL = { working: 'working', 'waiting-on-uri': 'waiting on you', blocked: 'blocked', 'picking-next': 'picking next' };
+  function supSummary() {
+    const rows = (sup && sup.register) || [], n = rows.length, push = rows.filter(r => (r.flags || []).length).length, pi = supPausedInfo();
+    const t = supT(sup && sup.digest_at), parts = [];
+    parts.push(n ? n + (n === 1 ? ' owner' : ' owners') : 'no owners yet');
+    if (push) parts.push(push + (push === 1 ? ' needs' : ' need') + ' a push');
+    if (pi.all) parts.push('paused');
+    parts.push(t ? 'last cycle ' + agoLong(t) : 'no cycle yet');
+    return { txt: parts.join(' · '), n: push };
+  }
+  function supRowHtml(r, pi) {
+    const repo = supRepo(r), name = repo ? repo.name : supBase(r.project), paused = supRowPaused(r, pi);
+    const flags = Array.isArray(r.flags) ? r.flags : [];
+    const dot = paused ? 'dormant' : r.state === 'working' ? 'working' : (r.state === 'waiting-on-uri' || r.state === 'blocked') ? 'needs-you' : '';
+    const stTxt = paused ? 'paused' : (STATE_LABEL[r.state] || r.state || 'no status');
+    const stCls = !paused && r.state === 'blocked' ? 'bad' : !paused && (r.state === 'waiting-on-uri' || r.stale) ? 'warn' : '';
+    const sum = r.summary || r.problem || 'No summary yet.';
+    const sd = r.days_since_shipped != null ? r.days_since_shipped : (r.last_shipped && supT(r.last_shipped.when) ? Math.floor((Date.now() / 1000 - supT(r.last_shipped.when)) / 86400) : null);
+    const shipped = sd == null ? 'never shipped' : sd < 1 ? 'shipped today' : 'shipped ' + Math.floor(sd) + 'd ago';
+    const shipTitle = r.last_shipped && r.last_shipped.text ? r.last_shipped.text : '';
+    const dn = Number(r.decisions_open) || 0, od = r.oldest_decision_days;
+    const decTxt = dn ? `${dn} decision${dn === 1 ? '' : 's'} open${od != null ? ' · oldest ' + (od < 1 ? 'today' : Math.floor(od) + 'd') : ''}` : 'no decisions open';
+    const lw = r.last_wake, lwt = lw && supT(lw.when);
+    const wake = lw && lw.reason ? `woke ${lwt ? agoLong(lwt) : 'earlier'}: ${lw.reason}` : 'not woken yet';
+    const chips = (paused ? ['<span class="sup-flag">paused</span>'] : []).concat(flags.map(f => `<span class="sup-flag ${/blocked|past-due/.test(f) ? 'bad' : ''}">${esc(supFlagLabel(f))}</span>`));
+    return `<div class="sup-row ${paused ? 'paused' : ''} ${supOpen.has(r.project) ? 'open' : ''}" data-sup-proj="${esc(r.project)}">
+      <span class="dot ${dot}" title="${esc(stTxt)}"></span>
+      <span class="sup-name"><b dir="auto" title="${esc(r.project)}"><bdi>${esc(name)}</bdi></b><i class="${stCls}">${esc(stTxt)}</i></span>
+      <span class="sup-sum" dir="auto" title="${esc(sum)}" data-sup-sum>${esc(sum)}</span>
+      <span class="sup-meta"><span title="${esc(shipTitle)}">${esc(shipped)}</span><span class="${dn && od >= 7 ? 'warn' : ''}">${esc(decTxt)}</span><span title="${esc((r.wakes_today || 0) + ' wake(s) today')}">${esc(wake)}</span></span>
+      <span class="sup-flags">${chips.join('')}</span>
+      <span class="owner-b ${stCls ? 'warn' : ''}" role="button" tabindex="0" data-sup-owner="${esc(r.project)}" aria-label="Open owner" title="Open owner">🧠</span>
+      <span class="dots" role="button" tabindex="0" data-sup-menu="${esc(r.project)}" aria-label="Supervisor actions for ${esc(name)}" title="Actions">${DOTS}</span>
+    </div>`;
+  }
+  function supHtml() {
+    const back = '<button type="button" class="mback" data-mback>‹ Sessions</button>';
+    if (!sup) return `<div class="detail sup">${back}<h2>Supervisor</h2><p class="hint">The supervisor is not available yet. This page fills in once it has run a cycle.</p></div>`;
+    const rows = Array.isArray(sup.register) ? sup.register : [], pi = supPausedInfo(), t = supT(sup.digest_at);
+    const late = !pi.all && t && Date.now() / 1000 - t > 45 * 60;   // a cycle runs every 15 min
+    return `<div class="detail sup">${back}
+      <div class="sup-head"><h2>Supervisor</h2>
+        <span class="sup-pill ${pi.all ? 'paused' : ''}">${pi.all ? 'Paused' : 'Running'}</span>
+        <span class="sup-last ${late ? 'late' : ''}">${t ? 'Last cycle ' + agoLong(t) : 'No cycle yet'}</span>
+        <button type="button" class="dopt" data-sup-act="${pi.all ? 'resume' : 'pause'}" title="${pi.all ? 'Let the supervisor wake owners again' : 'Stop the supervisor from waking any owner'}">${pi.all ? 'Resume' : 'Pause'}</button>
+      </div>
+      ${rows.length ? `<div class="sup-list">${rows.map(r => supRowHtml(r, pi)).join('')}</div>` : '<p class="hint">No owners yet. Make a session the owner of a project from its menu.</p>'}
+    </div>`;
+  }
+  async function supPost(body, okMsg) {
+    let msg = okMsg;
+    try {
+      const r = await fetch('/api/supervisor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) msg = 'Not done: ' + ((d.error && (d.error.message || d.error)) || d.message || 'HTTP ' + r.status);
+      else if (d.message || d.detail) msg = d.message || d.detail;
+    } catch (e) { msg = 'Not done: server unreachable'; }
+    toast(msg);
+    await loadSupervisor(true); renderPinned(); renderDetail(true);
+  }
+  function supMenu(anchor) {
+    const proj = anchor.dataset.supMenu, row = ((sup && sup.register) || []).find(r => r.project === proj); if (!row) return [];
+    const paused = supRowPaused(row, supPausedInfo()), name = (supRepo(row) || {}).name || supBase(proj);
+    return [
+      { hd: name },
+      { label: 'Wake now', fn: () => supPost({ action: 'wake', project: proj }, 'Woke ' + name) },
+      paused ? { label: 'Resume this project', fn: () => supPost({ action: 'resume', project: proj }, 'Resumed ' + name) }
+             : { label: 'Pause this project', fn: () => supPost({ action: 'pause', project: proj }, 'Paused ' + name) },
+    ];
+  }
+  function openSupOwner(proj) {
+    const row = ((sup && sup.register) || []).find(r => r.project === proj); if (!row) return;
+    const repo = supRepo(row);
+    if (repo && repo.owner) return openOwner(repo.key);
+    openChatSession(row.owner_key, 'Owner');
+  }
+  function openSupervisor() {
+    ui.sup = true; ui.inbox = false; ui.today = false; ui.selected = null; store.set('selected', null);
+    if (narrow()) document.body.classList.add('m-detail');
+    renderList(); renderDetail(true);
+    loadSupervisor(true).then(() => { if (ui.sup) { renderPinned(); renderDetail(true); } });
   }
 
   // ---- decision inbox: what only Uri can decide, answered with one tap
@@ -640,7 +802,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     await loadDecisions(); renderChips(); renderDetail(true);
   }
   function openInbox() {
-    ui.inbox = true; ui.today = false; ui.selected = null; store.set('selected', null);
+    ui.inbox = true; ui.today = false; ui.sup = false; ui.selected = null; store.set('selected', null);
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
   }
@@ -691,6 +853,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0">
         <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc(cpName)}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
       + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
+      + (sup ? (sm => `<button type="button" class="pin-row sup ${sm.n ? 'has' : ''}" id="supRow" aria-label="Supervisor, ${esc(sm.txt)}" aria-current="${!!ui.sup}" tabindex="0"><span class="pn">Supervisor</span>${sm.n ? `<span class="n">${sm.n}</span>` : ''}<span class="ps" title="${esc(sm.txt)}">${esc(sm.txt)}</span></button>`)(supSummary()) : '')
       + `<a class="pin-row" href="/ride" style="text-decoration:none;color:inherit"><span class="pn">Ride mode</span><span class="ps">hear it all, answer by voice</span></a>`;
   }
   // Project owner (docs/owners.md): the summary line under the project name, and the 🧠 button that opens the owner chat.
@@ -729,6 +892,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   $('#pinned').addEventListener('click', e => {
     if (e.target.closest('#decRow')) return openInbox();
+    if (e.target.closest('#supRow')) return openSupervisor();
     if (e.target.closest('#pilotRow')) openCopilot();
   });
   $('#pinned').addEventListener('keydown', e => {
@@ -736,6 +900,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
     if (row.id === 'decRow') return openInbox();
+    if (row.id === 'supRow') return openSupervisor();
     if (row.id === 'pilotRow') openCopilot();
   });
   // one plain-language line on top of a session: what it is for, what is happening now (small model, briefs.py)
@@ -1041,10 +1206,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const hit = findSel();
     const chat = !!(hit && ui.pane === 'chat' && (hit.s.open_url || hit.s.engine === 'pi') && !hit.s.batch);
     main.classList.toggle('chat', chat);
-    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + !!ui.today + '|' + decSig;
+    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + !!ui.today + '|' + decSig + (ui.sup ? '|sup|' + supSig : '');
     if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
+    if (!hit && ui.sup) { main.innerHTML = supHtml(); return; }
     if (!hit) { main.innerHTML = (ui.today ? '<div class="detail overview"><button type="button" class="mback" data-mback>‹ Sessions</button></div>' : (ui.inbox || decs.open.length) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; loadToday(); return; }
     const { s, repo } = hit;
     if (chat) {
@@ -1254,7 +1420,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 
   const narrow = () => matchMedia('(max-width: 760px)').matches;
   function select(key, fromUser) {
-    ui.selected = key; store.set('selected', key); ui.inbox = false; ui.today = false;
+    ui.selected = key; store.set('selected', key); ui.inbox = false; ui.today = false; ui.sup = false;
     if (fromUser && narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true); setTimeout(warmNeighbours, 150);
     const el = document.querySelector(`.s[data-key="${CSS.escape(key)}"]`);
@@ -1272,7 +1438,19 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (cc) { const box = cc.closest('.dother'); box.querySelector('textarea').value = ''; box.hidden = true; }
     const ro = e.target.closest('[data-reopen]'); if (ro) return reopenDecision(ro.dataset.reopen);
   });
+  $('#main').addEventListener('click', e => {   // supervisor board
+    const act = e.target.closest('[data-sup-act]');
+    if (act) { e.stopPropagation(); const a = act.dataset.supAct; return supPost({ action: a }, a === 'pause' ? 'Supervisor paused' : 'Supervisor resumed'); }
+    const m = e.target.closest('[data-sup-menu]');
+    if (m) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === m) return closeMenu(); return openMenu(m, supMenu(m)); }
+    const ob = e.target.closest('[data-sup-owner]');
+    if (ob) { e.stopPropagation(); e.preventDefault(); return openSupOwner(ob.dataset.supOwner); }
+    const sm = e.target.closest('[data-sup-sum]');
+    if (sm) { const row = sm.closest('[data-sup-proj]'), p = row.dataset.supProj; if (supOpen.has(p)) supOpen.delete(p); else supOpen.add(p); row.classList.toggle('open', supOpen.has(p)); }
+  });
   $('#main').addEventListener('keydown', e => {
+    const sb = e.target.closest && e.target.closest('[data-sup-owner],[data-sup-menu]');
+    if (sb && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); sb.click(); return; }
     const t = e.target.closest && e.target.closest('.dother textarea'); if (!t) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); t.closest('.dother').querySelector('[data-send]').click(); }
     if (e.key === 'Escape') t.closest('.dother').querySelector('[data-cancel]').click();
@@ -1632,7 +1810,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   renderMute();
   $('#todayBtn').addEventListener('click', () => {
-    ui.today = true; ui.inbox = false; ui.selected = null; store.set('selected', null); todayAt = 0;
+    ui.today = true; ui.inbox = false; ui.sup = false; ui.selected = null; store.set('selected', null); todayAt = 0;
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
   });
