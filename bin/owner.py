@@ -238,6 +238,10 @@ def brief(slug, session=None):
         "before it merges. Your memory is the folder %s; a fresh session must be able to take over from it, so "
         "write what matters there, not only in this chat." % (s, d),
         "",
+        "Before you plan, deploy or tell anyone how something works: read the repo's own CLAUDE.md and AGENTS.md "
+        "(and the skills they point to). They hold how this project really builds, deploys and is hosted, and "
+        "they override your assumptions.",
+        "",
         _section("Rules (masterplan #79)", RULES),
         _section("Goals (goals.md, written by Uri; propose edits in your log)",
                  goals or "No goals.md yet. Propose 1-3 dated outcome goals in your log and ask the supervisor to "

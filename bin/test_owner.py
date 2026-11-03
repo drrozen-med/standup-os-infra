@@ -219,6 +219,7 @@ class LogAndBrief(Base):
         owner.set_status("cdl", good(), session="claude:abc")
         b = owner.brief("cdl")
         self.assertIn("CDL closed test running by Nov 15", b)
+        self.assertIn("read the repo's own CLAUDE.md and AGENTS.md", b)   # owners missed the real deploy path once
         self.assertIn('"open_prs": 7', b)
         self.assertIn(good()["summary"], b)
         self.assertNotIn("entry 02", b)          # only the last 10 log lines (11 entries + the status line)
