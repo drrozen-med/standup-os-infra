@@ -509,6 +509,18 @@ def build_parser():
     cpx.add_argument("--set", metavar="KEY", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
     cpx.add_argument("--clear", action="store_true", help="remove the Co-pilot button")
 
+    ow = subparsers.add_parser("owner", help="project owners: set, clear or list each project's AI owner session")
+    ow_sub = ow.add_subparsers(dest="owner_cmd", required=True)
+    ows = ow_sub.add_parser("set", help="make a session the owner of a project")
+    _add_global_options(ows, subcommand=True)
+    ows.add_argument("project", metavar="PROJECT", help="project key, slug (folder name) or display name")
+    ows.add_argument("session", metavar="SESSION", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
+    owc = ow_sub.add_parser("clear", help="remove a project's owner")
+    _add_global_options(owc, subcommand=True)
+    owc.add_argument("project", metavar="PROJECT", help="project key, slug (folder name) or display name")
+    owl = ow_sub.add_parser("ls", help="every registered owner with its status")
+    _add_global_options(owl, subcommand=True)
+
     dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
     _add_global_options(dg, subcommand=True)
 
@@ -1072,6 +1084,57 @@ def cmd_copilot(args, client):
         print_json(res.get("copilot"))
     else:
         print_json(client.tree().get("copilot"))
+    return 0
+
+
+def owner_project(tree, needle):
+    """Project key for an owner command: exact key, then slug (folder name) or display name, then a
+    registered owner's slug, then an existing folder. Exactly one match or UsageError."""
+    needle = str(needle or "").strip()
+    owners = tree.get("owners") or {}
+    keys = {str(r.get("key") or ""): r for r in tree.get("repos") or [] if isinstance(r, dict)}
+    if needle in keys or needle in owners:
+        return needle
+    slug = lambda k: re.sub(r"^[a-z]+:", "", os.path.basename(str(k).rstrip("/"))).lower()
+    low = needle.lower()
+    hits = sorted({k for k, r in keys.items() if low in (slug(k), str(r.get("name") or "").lower(),
+                                                          str(r.get("orig_name") or "").lower())}
+                  | {k for k in owners if slug(k) == low})
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        raise UsageError(f"{needle!r} matches {len(hits)} projects: " + ", ".join(hits[:8]) + "; pass the exact key")
+    path = os.path.expanduser(needle)
+    if path.startswith("/") and os.path.isdir(path):     # a project folder with no sessions shown yet
+        return os.path.realpath(path)
+    raise UsageError(f"no project {needle!r}; use its key, folder name or display name (nav.py ls --repos)")
+
+
+def cmd_owner(args, client):
+    tree = client.tree()
+    if args.owner_cmd == "ls":
+        rows = [dict(o or {}, project=k) for k, o in sorted((tree.get("owners") or {}).items())]
+        if args.table:
+            for o in rows:
+                flag = " !" + o["problem"] if o.get("stale") else ""
+                print(f"{os.path.basename(o['project']):<22} {o.get('key') or '':<46} {o.get('state') or '-':<15} "
+                      f"{o.get('summary') or ''}{flag}")
+        else:
+            print_json(rows)
+        return 0
+    repo = owner_project(tree, args.project)
+    key = ""
+    if args.owner_cmd == "set":
+        key = args.session.strip()
+        if key.startswith("local_"):          # Claude desktop id -> CLI session key
+            key = desktop_to_key(key)
+    res = client.post("/api/owner", {"repo": repo, "key": key})
+    out = {"action": "owner." + args.owner_cmd, "project": repo, "key": key or None,
+           "owner": res.get("owner"), "change": res.get("change")}
+    if args.table:
+        print(f"{out['action']}: {repo} -> {key or '(none)'}  change {out['change']}")
+    else:
+        print_json(out)
     return 0
 
 
@@ -2526,6 +2589,8 @@ def main(argv=None):
             return cmd_unhide_all(args, client)
         if args.command == "copilot":
             return cmd_copilot(args, client)
+        if args.command == "owner":
+            return cmd_owner(args, client)
         if args.command == "desktop-groups":
             return cmd_desktop_groups(args, client)
         if args.command == "map-desktop-group":

@@ -890,3 +890,43 @@ class NavLsWindow(unittest.TestCase):
         code = nav.cmd_ls(args, client)
         self.assertEqual(client.last_window, "now")
         self.assertEqual(code, 0)
+
+
+class NavOwner(unittest.TestCase):
+    """`nav owner set|clear|ls` (docs/owners.md)."""
+
+    def setUp(self):
+        self.tree = {"repos": [
+            {"key": "/code/boardsBridge", "name": "ABA", "orig_name": "boardsBridge", "path": "/code/boardsBridge"},
+            {"key": "folder:cdl", "name": "CDL", "orig_name": "cdl", "path": "~/cdl"},
+            {"key": "/code/x/cdl", "name": "cdl copy", "orig_name": "cdl", "path": "/code/x/cdl"},
+        ], "owners": {"/gone/shlav": {"key": "claude:s9", "summary": "x", "state": "working", "stale": False,
+                                      "problem": "", "updated_at": None}}}
+        self.parser = nav.build_parser()
+
+    def owner(self, *argv):
+        client = FakeClient(self.tree)
+        _, out = run(nav.cmd_owner, self.parser.parse_args(["owner", *argv]), client)
+        return client, out
+
+    def test_set_by_key_slug_or_display_name(self):
+        for ref in ("/code/boardsBridge", "boardsBridge", "aba", "ABA"):
+            client, out = self.owner("set", ref, "claude:abc")
+            self.assertEqual(client.posts, [("/api/owner", {"repo": "/code/boardsBridge", "key": "claude:abc"})], ref)
+            self.assertEqual(out["action"], "owner.set")
+
+    def test_clear_reaches_a_registered_project_not_in_the_tree(self):
+        client, out = self.owner("clear", "shlav")
+        self.assertEqual(client.posts, [("/api/owner", {"repo": "/gone/shlav", "key": ""})])
+
+    def test_ambiguous_or_unknown_project_is_refused(self):
+        with self.assertRaises(nav.UsageError):
+            nav.owner_project(self.tree, "cdl")           # two projects named cdl
+        self.assertEqual(nav.owner_project(self.tree, "folder:cdl"), "folder:cdl")   # the exact key always works
+        self.assertEqual(nav.owner_project(self.tree, "cdl copy"), "/code/x/cdl")
+        with self.assertRaises(nav.UsageError):
+            nav.owner_project(self.tree, "nothing-like-it")
+
+    def test_ls(self):
+        _, out = self.owner("ls")
+        self.assertEqual([(o["project"], o["key"]) for o in out], [("/gone/shlav", "claude:s9")])
