@@ -143,6 +143,22 @@ writes its status with `bin/owner.py status set` (validated); when an owner's tu
 without one, the navigator appends `[navigator] turn ended without a status update` to its
 `log.md`.
 
+```bash
+# Supervisor (docs/supervisor.md): keeps every owner moving; bin/supervisor.py runs every 15 min.
+python3 nav.py supervisor --table                   # register: state, days since shipped, decisions, wakes, flags
+python3 nav.py supervisor                           # same as JSON: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail}
+python3 nav.py supervisor pause                     # pause all supervision (no cycle, no wakes)
+python3 nav.py supervisor pause boardsBridge        # pause one project (key, folder name or display name)
+python3 nav.py supervisor resume [boardsBridge]
+python3 nav.py supervisor wake cdl-bridge --reason "Rebase #12 first"   # manual wake, same caps
+```
+
+Same as `GET /api/supervisor` and `POST /api/supervisor {"action": "pause"|"resume"|"wake", "project"?,
+"reason"?}` (phone: paired and same origin, like every other change). A refused wake (paused, woken in the
+last 30 min, 24 wakes today) is HTTP 400 with `skip` saying why. The cycle writes
+`~/.ccc-navigator/supervisor/{digest.json,digest.md,register.json,state.json,cycles.log}`;
+`bin/supervisor.py cycle --dry-run` (or `SUPERVISOR_DRY_RUN=1`) decides and logs wakes but sends nothing.
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session

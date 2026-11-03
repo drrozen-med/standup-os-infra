@@ -95,6 +95,7 @@ class Base(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("SUPERVISOR_DRY_RUN", None)
+        os.environ.pop("NAV_ACTOR", None)
         self.nav = FakeNav()
         self.runs = FakeRun()
         for p in (mock.patch.object(sup, "get", self.nav), mock.patch.object(sup.subprocess, "run", self.runs)):
@@ -497,7 +498,7 @@ class Manual(Base):
         res = sup.wake_cmd("alpha", now=NOON + 10 * MIN)
         self.assertEqual((res["ok"], res["skip"]), (False, "woken 10 min ago"))
         self.assertEqual(len(self.runs.sends()), 1)
-        self.assertIn("manual wake alpha: woken 10 min ago", self.cycles()[-1])
+        self.assertIn("manual wake alpha by cli: woken 10 min ago", self.cycles()[-1])
 
     def test_manual_wake_paused(self):
         self.add_owner(P1, K1, status())

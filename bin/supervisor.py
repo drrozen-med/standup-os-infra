@@ -63,6 +63,11 @@ def nav_url():
     return os.environ.get("CCC_NAV_URL", "http://127.0.0.1:8095")
 
 
+def actor():
+    """Who asked for a pause/resume/manual wake: $NAV_ACTOR (the Navigator passes the request's actor)."""
+    return os.environ.get("NAV_ACTOR") or "cli"
+
+
 def dry_env():
     return os.environ.get("SUPERVISOR_DRY_RUN", "") not in ("", "0")
 
@@ -593,8 +598,8 @@ def wake_cmd(project, note="", now=None):
             if ok and not dry:
                 st.setdefault("projects", {})[slug] = ps
                 write_json(path("state.json"), st)
-    log_cycle("manual wake %s: %s%s" % (slug, "sent" if res["ok"] else res.get("skip") or res.get("output"),
-                                        " (dry run)" if dry else ""), now)
+    log_cycle("manual wake %s by %s: %s%s" % (slug, actor(), "sent" if res["ok"] else res.get("skip") or res.get("output"),
+                                              " (dry run)" if dry else ""), now)
     return res
 
 
@@ -615,7 +620,7 @@ def set_pause(project, on):
         else:
             st["paused"] = bool(on)
         write_json(path("state.json"), st)
-    log_cycle("%s %s" % ("pause" if on else "resume", slug or "all"))
+    log_cycle("%s %s by %s" % ("pause" if on else "resume", slug or "all", actor()))
     return {"ok": True, "paused": bool(st.get("paused")), "paused_projects": st.get("paused_projects") or []}
 
 
