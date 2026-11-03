@@ -1,4 +1,4 @@
-"""Tests for bin/owner-scoreboard.py: scoring, worst-first order, owner files keep their log.
+"""Tests for bin/owner-scoreboard.py: scoring, worst-first order, owner folders (scoreboard.json, log.md), migration.
 
 unittest only, against a temp Watchtower snapshot and a temp owner dir.
 Run: python3 bin/test_owner_scoreboard.py
@@ -64,17 +64,43 @@ class Scoreboard(unittest.TestCase):
         self.assertEqual(order[-1], "cdl-bridge")
         self.assertEqual(b["fetched"][:4], "2026")
 
-    def test_owner_file_keeps_log_across_refresh(self):
+    def owner_file(self, *parts):
+        return os.path.join(self.tmp.name, "owners", *parts)
+
+    def test_folder_layout_scoreboard_and_log(self):
         self.m.append_log("vera", "closed  #2\nas duplicate")
+        self.m.main(["--log", "vera", "--actor", "owner", "merged", "#3"])
         self.m.main([])
-        with open(self.m.owner_path("vera")) as f:
-            text = f.read()
-        self.assertIn("# Owner: vera", text)
-        self.assertIn("CI red on main", text)
-        self.assertIn("closed #2 as duplicate", text)
+        with open(self.owner_file("vera", "scoreboard.json")) as f:
+            board = json.load(f)
+        self.assertIn("CI red on main", board["problems"])
+        self.assertEqual(board["target"]["max_open_prs"], 5)
+        self.assertEqual(board["fetched"][:4], "2026")
         self.m.main([])
-        with open(self.m.owner_path("vera")) as f:
-            self.assertEqual(f.read().count("closed #2 as duplicate"), 1)
+        with open(self.owner_file("vera", "log.md")) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(len(lines), 2)                                     # refresh never touches the log
+        self.assertRegex(lines[0], r"^- \d{4}-\d\d-\d\d \d\d:\d\d \[supervisor\] closed #2 as duplicate$")
+        self.assertRegex(lines[1], r"\[owner\] merged #3$")
+        self.assertTrue(os.path.exists(self.owner_file("airline", "scoreboard.json")))   # every managed repo
+        self.assertEqual(self.m.main(["--log", "vera", "--actor", "Bad!", "x"]), 2)
+
+    def test_old_single_file_is_migrated_once(self):
+        os.makedirs(self.owner_file())
+        with open(self.owner_file("vera.md"), "w") as f:
+            f.write("# Owner: vera\n\nScoreboard: old\n\n## Log\n- 2026-11-03 07:21 re-ran CI\n"
+                    "- 2026-11-03 07:42 [owner] opened #166\nnot a log line\n")
+        os.makedirs(self.owner_file("vera"))
+        with open(self.owner_file("vera", "log.md"), "w") as f:
+            f.write("- 2026-11-03 09:00 [owner] working: newer\n")
+        self.m.main([])
+        self.m.main([])
+        with open(self.owner_file("vera", "log.md")) as f:
+            self.assertEqual(f.read().splitlines(), ["- 2026-11-03 07:21 [supervisor] re-ran CI",
+                                                     "- 2026-11-03 07:42 [owner] opened #166",
+                                                     "- 2026-11-03 09:00 [owner] working: newer"])
+        self.assertFalse(os.path.exists(self.owner_file("vera.md")))
+        self.assertTrue(os.path.exists(self.owner_file("vera.md.migrated")))
 
     def test_missing_snapshot(self):
         os.remove(os.path.join(self.tmp.name, "github.json"))

@@ -182,7 +182,7 @@ class GateTests(unittest.TestCase):
     def test_unpaired_remote_gets_nothing(self):
         for method, path in (("GET", "/"), ("GET", "/api/notes"), ("GET", "/api/conversations/x"),
                              ("POST", "/api/inject-input"), ("POST", "/api/pi/send"), ("POST", "/api/hide"),
-                             ("DELETE", "/api/anything")):
+                             ("POST", "/api/owner"), ("DELETE", "/api/anything")):
             st, hdrs, body = self.req(method, path, body={} if method == "POST" else None)
             self.assertEqual(st, 401, (method, path))
             self.assertNotIn(b"ccc", body)
@@ -219,6 +219,19 @@ class GateTests(unittest.TestCase):
         st, _, _ = self.req("POST", "/api/note", cookie=cookie, body={"key": "claude:x", "text": "hi"},
                             origin="https://" + HOST)
         self.assertEqual(st, 200)
+
+    def test_remote_owner_change_needs_pairing_and_our_origin(self):
+        body = {"repo": "/r/owned", "key": "claude:owner1"}
+        self.assertEqual(self.req("POST", "/api/owner", body=body)[0], 401)
+        cookie, _ = self.pair()
+        self.assertEqual(self.req("POST", "/api/owner", cookie=cookie, body=body, origin="https://evil.example")[0], 403)
+        self.assertEqual(self.req("POST", "/api/owner", cookie=cookie, body=body)[0], 403)  # no Origin at all
+        st, _, out = self.req("POST", "/api/owner", cookie=cookie, body=body, origin="https://" + HOST)
+        self.assertEqual(st, 200)
+        self.assertEqual(json.loads(out)["key"], "claude:owner1")
+        self.assertEqual(navigator.Handler.app.state.snapshot()["owners"], {"/r/owned": "claude:owner1"})
+        self.req("POST", "/api/owner", cookie=cookie, body={"repo": "/r/owned", "key": ""}, origin="https://" + HOST)
+        self.assertEqual(navigator.Handler.app.state.snapshot()["owners"], {})
 
     def test_pairing_endpoints_are_local_only(self):
         cookie, _ = self.pair()

@@ -5,8 +5,12 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Tuple
 
+import re
+
 import changes
 import refs
+
+_SESSION_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]*:\S+$")
 
 
 class ActionError(Exception):
@@ -813,10 +817,29 @@ def _project_icon(app, params, actor):
     return {"ok": True, "action": "project.icon", "change": cid, "result": {"ok": True}}
 
 
+def _project_owner(app, params, actor):
+    st = _state(app)
+    repo = (params.get("repo") or "").strip()
+    key = (params.get("key") or "").strip()
+    if not repo:
+        raise ActionError("missing_param", "missing required parameter", field="repo")
+    if key and not _SESSION_KEY_RE.match(key):
+        raise ActionError("bad_param", "key must be <engine>:<id>, or empty to clear", field="key")
+    before = st.set_owner(repo, key)
+    cid = _record(app, actor, "project.owner", {"repo": repo, "key": key},
+                  {"owners": {repo: before}}, {"owners": {repo: key or None}}, undoable=True)
+    owner = app.owner(repo) if hasattr(app, "owner") else None
+    return {"ok": True, "action": "project.owner", "change": cid,
+            "result": {"ok": True, "repo": repo, "key": key or None, "owner": owner, "change": cid}}
+
+
 register(Action("project.rename", "Rename project", (Param("repo", "str", required=False), Param("key", "str", required=False), Param("name", "str"), Param("ref", "ref", required=False)), ("project",), True, True, _project_rename))
 register(Action("project.hide", "Hide project", (Param("repo", "str", required=False), Param("key", "str", required=False), Param("ref", "ref", required=False)), ("project",), True, True, _project_hide))
 register(Action("project.unhide", "Unhide project", (Param("repo", "str", required=False), Param("key", "str", required=False), Param("ref", "ref", required=False)), ("project",), True, True, _project_unhide))
 register(Action("project.unhide-all", "Unhide all in project", (Param("repo", "str", required=False), Param("key", "str", required=False), Param("ref", "ref", required=False)), ("project",), True, True, _project_unhide_all))
+register(Action("project.owner", "Make a session the project's owner (empty key clears it)", (
+    Param("repo", "str", max_len=500, help="project key"),
+    Param("key", "str", required=False, help="owner session key <engine>:<id>; empty clears")), ("project",), True, True, _project_owner))
 register(Action("project.icon", "Set project icon", (Param("repo", "str", required=False), Param("key", "str", required=False), Param("ref", "ref", required=False), Param("icon", "str")), ("project",), True, True, _project_icon))
 
 
@@ -982,6 +1005,8 @@ def _undo_action(app, params, actor):
                             st.set_copilot(v.get("key") or "")
                         except Exception:
                             raise
+                elif s == "owners":
+                    st.set_owner(k, v or "")
                 elif s == "desktop_map":
                     if isinstance(v, dict):
                         for g, repo in v.items():

@@ -126,6 +126,23 @@ python3 nav.py copilot --clear
 
 In the UI: a session's ⋯ menu → Make this my co-pilot.
 
+```bash
+# Project owners (docs/owners.md): each project's AI owner session.
+python3 nav.py owner set boardsBridge claude:<uuid>      # project key, folder name or display name
+python3 nav.py owner set boardsBridge local_<uuid>       # a Claude desktop id works too
+python3 nav.py owner clear boardsBridge
+python3 nav.py owner ls --table                          # owner, state, one-line status, ! when stale
+```
+
+Same as `POST /api/owner {"repo": <project key>, "key": <session key or "">}` and the
+undoable v1 action `project.owner`. An owner session is never hidden and never drops out of
+the time window. Each project in `/api/tree` carries `owner` (`null`, or key, summary, state,
+updated_at, stale, problem read from `~/.ccc-navigator/owners/<slug>/status.json`); the tree's
+top-level `owners` map has the same for every registered project, shown or not. The owner
+writes its status with `bin/owner.py status set` (validated); when an owner's turn ends
+without one, the navigator appends `[navigator] turn ended without a status update` to its
+`log.md`.
+
 ## Renaming
 
 `rename` writes the new name through to the tool that owns it: a session
