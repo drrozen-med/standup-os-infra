@@ -454,7 +454,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     selected: store.get('selected', null),
     pane: store.get('pane', 'chat'),
     showHidden: false,
-    view: Object.assign({ orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false }, store.get('view', {})),
+    view: Object.assign({ orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false, osrc: false }, store.get('view', {})),
     f: store.get('filters', { star: false, live: false, needs: false }),
     showMine: store.get('showMine', false),
     query: '',
@@ -638,6 +638,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   const isStarred = (s, repo, group) => !!(s.pinned || group.pinned || repo.pinned);
 
   function matches(s, repo, group) {
+    if (!ui.view.osrc && s.engine === 'outsourcerer') return false;
     if (ui.f.star && !isStarred(s, repo, group)) return false;
     if (ui.f.live && s.state !== 'working') return false;
     if (ui.f.needs && !needsYou(s)) return false;
@@ -647,7 +648,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
 
   const forceOpen = () => ui.query || ui.f.star || ui.f.live || ui.f.needs || ui.focus;
-  const VIEW_ITEMS = [['orca', '🐋  Orca marker on groups'], ['wt', '⎇  Worktree / branch line under sessions'], ['eng', 'Agent pill (Claude, Codex, Devin…)'], ['ago', 'Time since last activity'], ['cnt', 'Counts on projects and groups'], ['livec', 'Working / needs-you counts on projects'], ['status', 'Status line (CCC · Pi · Orca)']];
+  const VIEW_ITEMS = [['orca', '🐋  Orca marker on groups'], ['wt', '⎇  Worktree / branch line under sessions'], ['eng', 'Agent pill (Claude, Codex, Devin…)'], ['ago', 'Time since last activity'], ['cnt', 'Counts on projects and groups'], ['livec', 'Working / needs-you counts on projects'], ['status', 'Status line (CCC · Pi · Orca)'], ['osrc', 'Outsourcerer helper jobs']];
   function applyView() { for (const [k] of VIEW_ITEMS) $('#side').classList.toggle('v-off-' + k, !ui.view[k]); }
   function openViewMenu(anchor) {
     closeMenu(); menuAnchor = anchor; anchor.classList.add('on'); menuEl.style.width = '';
@@ -656,12 +657,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const b = document.createElement('button'); b.type = 'button'; b.className = 'vrow' + (ui.view[k] ? ' on' : '');
       const paint = () => { b.className = 'vrow' + (ui.view[k] ? ' on' : ''); b.innerHTML = '<span class="box">' + (ui.view[k] ? '✓' : '') + '</span><span>' + label + '</span>'; };
       paint();
-      b.addEventListener('click', ev => { ev.stopPropagation(); ui.view[k] = !ui.view[k]; store.set('view', ui.view); applyView(); paint(); schedulePushView({ display: { [k]: ui.view[k] } }); });
+      b.addEventListener('click', ev => { ev.stopPropagation(); ui.view[k] = !ui.view[k]; store.set('view', ui.view); applyView(); paint(); if (k === 'osrc') renderList(); schedulePushView({ display: { [k]: ui.view[k] } }); });
       menuEl.appendChild(b);
     }
     const sep = document.createElement('div'); sep.className = 'sep'; menuEl.appendChild(sep);
     const r = document.createElement('button'); r.type = 'button'; r.textContent = 'Reset to cleanest defaults';
-    r.addEventListener('click', ev => { ev.stopPropagation(); ui.view = { orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false }; store.set('view', ui.view); applyView(); schedulePushView({ display: ui.view }); closeMenu(); });
+    r.addEventListener('click', ev => { ev.stopPropagation(); ui.view = { orca: true, wt: false, eng: true, ago: true, cnt: true, livec: true, status: false, osrc: false }; store.set('view', ui.view); applyView(); renderList(); schedulePushView({ display: ui.view }); closeMenu(); });
     menuEl.appendChild(r);
     menuEl.hidden = false;
     const rc = anchor.getBoundingClientRect(), mw = menuEl.offsetWidth, mh = menuEl.offsetHeight;
