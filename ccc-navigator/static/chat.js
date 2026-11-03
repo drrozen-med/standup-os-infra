@@ -53,6 +53,23 @@
     return out.replace(/\u0000(\d+)\u0000/g, function (_, i) { return fences[+i]; });
   }
 
+  /* an image sent from the reply box travels as its path on a line of its own ("Image: /…/pasted-images/paste-1.png");
+     a bubble shows it as a picture instead of the path */
+  var IMG_LINE = /^(?:Image: )?(\/\S*\/\.claude\/(?:command-center\/)?pasted-images\/paste-[\w.-]+\.(?:png|jpe?g|gif|webp))$/i;
+  function meHtml(text) {
+    var imgs = [], rest = [];
+    String(text || '').split('\n').forEach(function (l) {
+      var m = l.trim().match(IMG_LINE);
+      if (m) imgs.push(m[1]); else rest.push(l);
+    });
+    var html = rest.join('\n').trim() ? md(rest.join('\n').trim()) : '';
+    if (imgs.length) html += '<div class="msg-imgs">' + imgs.map(function (p) {
+      var u = '/api/pasted-image?path=' + encodeURIComponent(p);
+      return '<a href="' + u + '" target="_blank" rel="noopener"><img loading="lazy" alt="Image you sent" src="' + u + '"></a>';
+    }).join('') + '</div>';
+    return html;
+  }
+
   function stamp(ts) {
     if (!ts) return '';
     var d = new Date(ts);
@@ -150,7 +167,7 @@
     if (t === 'user_text') {
       if (/^\[Automatic check-in/.test(ev.text || '')) { acc.push(note(ICONS.dot + ' Automatic check-in')); return; }   // the long standing prompt is not a message from Uri
       var img = (ev.images || []).length;
-      acc.push(bubble('me', md(ev.text || '') + (img ? '<div class="stamp">' + img + ' image' + (img > 1 ? 's' : '') + '</div>' : '')));
+      acc.push(bubble('me', meHtml(ev.text || '') + (img ? '<div class="stamp">' + img + ' image' + (img > 1 ? 's' : '') + '</div>' : '')));
       return;
     }
     if (t === 'assistant') {
@@ -238,7 +255,7 @@
   function normText(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
 
   function pendNode(p) {
-    var row = bubble('me', md(p.text));
+    var row = bubble('me', meHtml(p.text));
     row.classList.add('pend', p.state);
     row.dataset.live = '1'; row.dataset.pid = String(p.id);
     var st = document.createElement('div');
@@ -626,8 +643,17 @@
     }, 1000);
 
     function post(retry) {
+      if (!retry && shots.some(function (x) { return x.state === 'up'; })) {
+        shotErr = 'An image is still uploading. Send again in a moment.'; paintShots();
+        return;
+      }
       var text = retry ? retry.text : box.value.trim();
+      if (!retry) {
+        var paths = shots.filter(function (x) { return x.path; }).map(function (x) { return 'Image: ' + x.path; });
+        if (paths.length) text = (text ? text + '\n\n' : '') + paths.join('\n');
+      }
       if (!text) return;
+      if (!retry) clearShots();
       var p = retry || { id: ++seq, text: text };
       var n = countUser(text);
       p.at = Date.now(); p.baseSame = n.same; p.baseAll = n.all; p.state = 'sending'; p.err = '';
@@ -682,6 +708,100 @@
       }
     });
 
+    /* ---- images: drop on the chat, paste into the box, or pick with the button ---- */
+    var IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+    var IMG_MAX = 20 * 1024 * 1024;     // CCC refuses more than 25 MB
+    var shots = [], shotSeq = 0, shotErr = '';      // shotErr: shown right under the pictures, not as a far-off toast
+    var composer = box.closest('.composer');
+    var tray = document.createElement('div');
+    tray.className = 'shots';
+    tray.setAttribute('aria-live', 'polite');
+    composer.parentNode.insertBefore(tray, composer);
+    var picker = document.createElement('input');
+    picker.type = 'file'; picker.accept = IMG_TYPES.join(','); picker.multiple = true; picker.hidden = true;
+    var clip = document.createElement('button');
+    clip.type = 'button'; clip.className = 'attach';
+    clip.title = 'Add images (PNG, JPG, GIF, WebP). You can also drop or paste them.';
+    clip.setAttribute('aria-label', 'Add images');
+    clip.innerHTML = '<svg width="19" height="19" viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" stroke="currentColor" stroke-width="1.5"/><circle cx="7.2" cy="8" r="1.5" fill="currentColor"/><path d="M3 14.5l4.2-3.8 3 2.6 2.6-2.2L17 14.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    composer.insertBefore(clip, box);
+    composer.appendChild(picker);
+    clip.addEventListener('click', function () { picker.click(); });
+    picker.addEventListener('change', function () { addFiles(picker.files); picker.value = ''; });
+
+    function paintShots() {
+      tray.innerHTML = '';
+      tray.classList.toggle('on', shots.length > 0 || !!shotErr);
+      shots.forEach(function (x) {
+        var c = document.createElement('div');
+        c.className = 'shot ' + x.state;
+        c.innerHTML = '<img alt="' + esc(x.name) + '" src="' + x.url + '">' +
+          (x.state === 'up' ? '<span class="shot-st">Uploading&hellip;</span>' : '') +
+          (x.state === 'bad' ? '<span class="shot-st">Failed</span>' : '') +
+          '<button type="button" class="shot-x" aria-label="Remove image" title="Remove">&times;</button>';
+        c.querySelector('.shot-x').addEventListener('click', function () {
+          URL.revokeObjectURL(x.url);
+          shots = shots.filter(function (y) { return y !== x; });
+          if (!shots.some(function (y) { return y.state === 'bad'; })) shotErr = '';
+          paintShots();
+        });
+        tray.appendChild(c);
+      });
+      if (shotErr) {
+        var e = document.createElement('div');
+        e.className = 'shots-err'; e.setAttribute('role', 'alert'); e.textContent = shotErr;
+        tray.appendChild(e);
+      }
+      send.disabled = shots.some(function (x) { return x.state === 'up'; });
+    }
+    function clearShots() {
+      shots.forEach(function (x) { URL.revokeObjectURL(x.url); });
+      shots = []; shotErr = ''; paintShots();
+    }
+    function addFiles(files) {
+      var skipped = [];
+      Array.prototype.forEach.call(files || [], function (f) {
+        if (IMG_TYPES.indexOf(f.type) < 0) { skipped.push((f.name || 'a file') + ' is not a PNG, JPG, GIF or WebP image'); return; }
+        if (f.size > IMG_MAX) { skipped.push((f.name || 'An image') + ' is over 20 MB'); return; }
+        var x = { id: ++shotSeq, name: f.name || 'image', url: URL.createObjectURL(f), state: 'up', path: '' };
+        shots.push(x);
+        fetch('/api/upload-image', { method: 'POST', headers: { 'Content-Type': f.type }, body: f })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (d) {
+            if (!d || !d.ok || !d.path) throw new Error((d && d.error) || 'upload failed');
+            x.state = 'ok'; x.path = d.path;
+          })
+          .catch(function () {
+            x.state = 'bad';
+            shotErr = 'An image did not upload (CCC may be down). Remove it and try again.';
+          })
+          .then(paintShots);
+      });
+      shotErr = skipped.length ? 'Not added: ' + skipped.join('; ') + '.' : '';
+      paintShots();
+    }
+    box.addEventListener('paste', function (e) {
+      var files = [];
+      Array.prototype.forEach.call((e.clipboardData && e.clipboardData.items) || [], function (it) {
+        if (it.kind === 'file' && /^image\//.test(it.type)) { var f = it.getAsFile(); if (f) files.push(f); }
+      });
+      if (files.length) { e.preventDefault(); addFiles(files); }
+    });
+    var dragDepth = 0;
+    function hasFiles(e) { return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') >= 0; }
+    function onDragEnter(e) { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; root.classList.add('dropping'); }
+    function onDragOver(e) { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
+    function onDragLeave(e) { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; root.classList.remove('dropping'); } }
+    function onDrop(e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); dragDepth = 0; root.classList.remove('dropping');
+      addFiles(e.dataTransfer.files); box.focus();
+    }
+    root.addEventListener('dragenter', onDragEnter);
+    root.addEventListener('dragover', onDragOver);
+    root.addEventListener('dragleave', onDragLeave);
+    root.addEventListener('drop', onDrop);
+
     box.addEventListener('input', autoGrow);
     box.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); post(); }
@@ -699,6 +819,12 @@
       if (tick) clearInterval(tick);
       if (askPoll) clearInterval(askPoll);
       document.removeEventListener('visibilitychange', onVisible);
+      root.removeEventListener('dragenter', onDragEnter);
+      root.removeEventListener('dragover', onDragOver);
+      root.removeEventListener('dragleave', onDragLeave);
+      root.removeEventListener('drop', onDrop);
+      shots.forEach(function (x) { URL.revokeObjectURL(x.url); });
+      if (tray.parentNode) tray.parentNode.removeChild(tray);
     };
     pollAsk();
     if (askPoll) clearInterval(askPoll);
@@ -706,6 +832,13 @@
     schedule();
     load();
   }
+
+  /* a file dropped just outside the chat must not replace the whole page with the image */
+  ['dragover', 'drop'].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') >= 0) e.preventDefault();
+    });
+  });
 
   window.NavChat = { prefetch: prefetch, Conversation: Conversation, md: md, render: render, size: size };
 })();
