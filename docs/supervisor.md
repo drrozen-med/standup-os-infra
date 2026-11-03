@@ -30,6 +30,7 @@ One run, in order:
    co-pilot check-in uses). The text starts with `[Supervisor wake: <reason>]`, says what to do, and ends
    with "End with owner.py status set". Each wake appends `[supervisor] woke owner: <reason>` to the
    project's `log.md`.
+   Then raise **loud alerts** for the few decisions that need Uri now (section "Loud alerts" below).
 4. **Register**: rewrite `~/.ccc-navigator/supervisor/register.json`, one row per project:
    `project, owner_key, state, summary, updated_at, stale, problem, last_shipped (text + when),
    days_since_shipped, decisions_open (count), oldest_decision_days, idle_checkins (consecutive cycles with
@@ -45,6 +46,32 @@ One run, in order:
 Env: `SUPERVISOR_DIR` (default `~/.ccc-navigator/supervisor`), `OWNER_DIR`, `CCC_NAV_URL`,
 `SUPERVISOR_DRY_RUN=1` (decide and log wakes, send nothing). Everything is atomic-write; a failing owner
 never stops the others; the run always exits 0 after logging the error.
+
+## Loud alerts
+
+The escalation ladder's loud step (#79 rule 5). An alert turns every open Navigator page red until Uri attends
+to it: a red bar above everything (phone too), a two-tone chime every 20 s (Web Audio, no files), the tab title
+flashing `(!) <title>` and one system notification per alert. It stops on **I'm on it** (ack), on opening the
+linked decision, or on answering that decision in the inbox; on other devices it stops at their next refresh.
+Store, API and CLI: `ccc-navigator/NAV_CLI.md`, "Loud alerts".
+
+Keep it rare, or it stops meaning anything. **Only the cycle raises alerts; owners never do** (an owner turns
+its question into a decision with `nav.py ask`; the cycle decides whether it is loud). In step 3, after the
+wakes, each cycle raises at most one alert per decision, for open decisions in Uri's inbox that are:
+
+| Reason | When |
+|---|---|
+| `P1` | the decision has priority 1. |
+| `due today` / `overdue since <date>` | its deadline is today or past. |
+| `blocks <project>` | it is in that owner's `needs_uri`, the owner's `state` is `blocked`, `blocked.unblocker` is `uri` and `blocked.by` is today or past. |
+
+Every reason that applies goes into the alert body ("Why now: P1; blocks alpha. Options: A / B.") and the title
+is "Decision for you: <question>". The alert links to the decision (Open shows it in Decisions) and its dedupe key
+is `decision:<id>`. Not raised when: an alert with that key is open, it was acked less than 12 h ago (the
+Navigator enforces both too), a paused project waits on the decision, or it is quiet hours (00-07) or the
+supervisor is paused (no cycle at all). `--dry-run` decides but raises nothing. `digest.json` `alerts` and
+`digest.md` list what was raised or held and why; `cycles.log` names the decisions raised. A failing raise never
+stops the cycle.
 
 ## Control
 

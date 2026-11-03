@@ -42,6 +42,7 @@ import orca
 import pi_run
 import remote
 import actions
+import alerts
 import briefs
 import nav
 import refs
@@ -1770,6 +1771,37 @@ def supervisor_run(body, actor, nav_url):
     return (200 if res.get("ok") else 400), res
 
 
+# ---------------------------------------------------------------- loud alerts (alerts.py, docs/supervisor.md)
+
+def alerts_view(app):
+    """GET /api/alerts: {open: newest first, acked: last 20}."""
+    return dict(app.alerts.list(), ok=True)
+
+
+def alert_raise(app, body, actor):
+    """POST /api/alerts/raise {title, body?, link?: {kind, ref}, key?}: dedupes on key (alerts.py)."""
+    res = app.alerts.raise_alert(body.get("title"), body.get("body"), body.get("link"), body.get("key"), by=actor)
+    a = res["alert"]
+    if res["raised"]:
+        res["change"] = app.changes.record(actor, "alert.raise", {"id": a["id"], "key": a["key"]}, {},
+                                           {"alerts": {a["id"]: "open"}}, undoable=False)
+    return dict(res, ok=True)
+
+
+def alert_ack(app, body, actor, why=""):
+    """POST /api/alerts/ack {id} | {all: true}; also {link} from answer_decision. -> {ok, acked: [ids], change?}."""
+    link = body.get("link") if isinstance(body.get("link"), dict) else None
+    hit = app.alerts.ack(str(body.get("id") or "").strip() or None, body.get("all") is True, by=actor, link=link)
+    out = {"ok": True, "acked": [a["id"] for a in hit]}
+    if hit:
+        params = {"ids": out["acked"]}
+        if why:
+            params["why"] = why
+        out["change"] = app.changes.record(actor, "alert.ack", params, {"alerts": {i: "open" for i in out["acked"]}},
+                                           {"alerts": {i: "acked" for i in out["acked"]}}, undoable=False)
+    return out
+
+
 # ---------------------------------------------------------------- http
 
 class App:
@@ -1784,6 +1816,7 @@ class App:
             os.environ.get("CCC_NAV_WATCHTOWER_DECISIONS",
                            "~/projects/standup-os/watchtower/decisions.json"))
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
+        self.alerts = alerts.Alerts(os.environ.get("CCC_NAV_ALERTS") or home / "alerts.json")
         self.voice = voice.Voice(home / "voice")
         self._last_text = {}
         self.file_cache = home / "file-cache.json"
@@ -1834,7 +1867,11 @@ class App:
         cid = self.changes.record(actor, "decision.answer", {"id": did, "choice": rec["choice"]},
                                   {"answers": {did: before}}, {"answers": {did: rec}})
         delivery = self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
-        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery}
+        try:        # the answer stands even if its alerts cannot be acked now (the banner's ack still works)
+            acked = alert_ack(self, {"link": {"kind": "decision", "ref": did}}, actor, why="decision answered")["acked"]
+        except (OSError, alerts.AlertError, changes.ChangeError):
+            acked = []
+        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery, "alerts_acked": acked}
 
     def brief_refresh(self, key, rename=False):
         """Summarise one session now with the small model; with rename, also apply the suggested title."""
@@ -2433,6 +2470,7 @@ class Handler(BaseHTTPRequestHandler):
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
+                "/api/alerts/raise", "/api/alerts/ack",
                 "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -2615,6 +2653,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, dict(self.app.inbox.list(), ok=True))
         if u.path == "/api/supervisor":
             return self._send(200, dict(supervisor_view(), ok=True))
+        if u.path == "/api/alerts":
+            return self._send(200, alerts_view(self.app))
         if u.path == "/api/desktop-groups":
             return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
                                     "folders": self.app.project_folders()})
@@ -2880,6 +2920,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "decision": d})
             except (decisions.DecisionError, changes.ChangeError) as e:
                 return self._send(400, {"ok": False, "error": {"code": getattr(e, 'code', 'error'), "message": str(e)}})
+        elif p in ("/api/alerts/raise", "/api/alerts/ack"):
+            try:
+                if p == "/api/alerts/raise":
+                    return self._send(200, alert_raise(self.app, body, self._actor()))
+                return self._send(200, alert_ack(self.app, {"id": body.get("id"), "all": body.get("all")}, self._actor()))
+            except alerts.AlertError as e:
+                return self._send(404 if e.code == "unknown_alert" else 400,
+                                  {"ok": False, "error": {"code": e.code, "message": str(e)}})
         elif p == "/api/move-project":
             keys = body.get("keys") if isinstance(body.get("keys"), list) else [body.get("key")]
             keys = [str(k) for k in keys if k and not str(k).startswith("batch:")]

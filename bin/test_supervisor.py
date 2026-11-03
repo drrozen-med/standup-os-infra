@@ -52,6 +52,7 @@ class FakeNav:
         self.items = {}         # session key -> minutes since last activity
         self.open = []          # open decisions
         self.answered = []      # [(id, answer)]
+        self.alerts = {"open": [], "acked": []}     # GET /api/alerts
         self.down = False
 
     def __call__(self, path):
@@ -64,6 +65,8 @@ class FakeNav:
             return {"owners": self.owners, "repos": [{"key": "r", "name": "r", "groups": [{"items": items}]}]}
         if path == "/api/decisions":
             return {"ok": True, "open": self.open, "answered": [dict(id=i, answer=a) for i, a in self.answered]}
+        if path == "/api/alerts":
+            return dict(self.alerts, ok=True)
         raise AssertionError("unexpected navigator call: " + path)
 
 
@@ -72,14 +75,17 @@ FakeNav.now = NOON
 
 class FakeRun:
     def __init__(self, code=0):
-        self.calls, self.code = [], code
+        self.calls, self.code, self.stdout = [], code, '{"sent": true}'
 
     def __call__(self, argv, **kwargs):
         self.calls.append((list(argv), kwargs))
-        return SimpleNamespace(returncode=self.code, stdout='{"sent": true}', stderr="")
+        return SimpleNamespace(returncode=self.code, stdout=self.stdout, stderr="")
 
     def sends(self):
         return [a for a, _ in self.calls if len(a) > 2 and a[2] == "send"]
+
+    def raises(self):
+        return [a for a, _ in self.calls if a[2:4] == ["alert", "raise"]]
 
 
 class Base(unittest.TestCase):
@@ -491,6 +497,158 @@ class Robustness(Base):
             self.run_cycle()
         self.assertEqual(sup.load_state()["paused_projects"], ["alpha"])
         self.assertIn("alpha", sup.load_state()["projects"])
+
+
+def dec(did, **kw):
+    d = {"id": did, "question": "Pick the pricing for %s" % did, "options": ["A", "B"], "priority": 2,
+         "deadline": None, "asked_at": NOON - DAY, "lane": "cdl"}
+    d.update(kw)
+    return d
+
+
+class LoudAlerts(Base):
+    """docs/supervisor.md, "Loud alerts": who raises, which decisions, dedupe, quiet hours, pause."""
+
+    def raised(self):
+        return [a[a.index("--decision") + 1] for a in self.runs.raises()]
+
+    def blocked_owner(self, by=TODAY, unblocker="uri", needs=("d1",)):
+        return status(state="blocked", needs_uri=list(needs), summary="blocked on Uri",
+                      blocked={"what": "pricing", "tried": ["a", "b"], "unblocker": unblocker, "by": by})
+
+    def test_priority_1_raises_with_key_link_and_actor(self):
+        self.nav.open = [dec("d1", priority=1), dec("d2", priority=2)]
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d1"])
+        argv, kw = [(a, k) for a, k in self.runs.calls if a[2:4] == ["alert", "raise"]][0]
+        self.assertEqual(argv[:4], [sys.executable, sup.NAV, "alert", "raise"])
+        self.assertEqual(argv[argv.index("--key") + 1], "decision:d1")
+        self.assertIn("Decision for you: Pick the pricing for d1", argv[argv.index("--title") + 1])
+        body = argv[argv.index("--body") + 1]
+        self.assertIn("Why now: P1.", body)
+        self.assertIn("Options: A / B.", body)
+        self.assertEqual(kw["env"]["NAV_ACTOR"], "supervisor")
+        dg = self.jfile("digest.json")
+        self.assertEqual(dg["alerts"], [{"decision": "d1", "reasons": ["P1"], "raised": True}])
+        self.assertIn("alerts d1 (P1)", self.cycles()[-1])
+        self.assertIn("Loud alerts: d1 (P1) raised", self.text("digest.md"))
+
+    def test_deadline_today_or_past_not_future(self):
+        self.nav.open = [dec("past", deadline="2026-11-01"), dec("today", deadline=TODAY),
+                         dec("future", deadline="2026-11-04"), dec("none")]
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["past"])                    # one new alert per cycle
+        reasons = {a["decision"]: a["reasons"] for a in self.jfile("digest.json")["alerts"]}
+        self.assertEqual(reasons, {"past": ["overdue since 2026-11-01"], "today": ["due today"]})
+
+    def test_owner_blocked_on_uri_due(self):
+        for by in (TODAY, "2026-11-01"):
+            with self.subTest(by=by):
+                self.runs.calls.clear()
+                self.nav.open = [dec("d1")]
+                self.add_owner(P1, K1, self.blocked_owner(by=by), idle_min=5)
+                self.run_cycle()
+                self.assertEqual(self.raised(), ["d1"])
+                self.assertEqual(self.jfile("digest.json")["alerts"][0]["reasons"], ["blocks alpha"])
+
+    def test_owner_block_not_due_or_not_on_uri_or_not_blocked_does_not_raise(self):
+        for st in (self.blocked_owner(by="2026-11-04"),                         # date in the future
+                   self.blocked_owner(unblocker="supervisor"),                  # someone else unblocks
+                   status(state="waiting-on-uri", needs_uri=["d1"]),           # waiting, not blocked
+                   self.blocked_owner(needs=("other",))):                       # blocked on another decision
+            with self.subTest(st=st):
+                self.runs.calls.clear()
+                self.nav.owners.clear()
+                self.nav.open = [dec("d1")]
+                self.add_owner(P1, K1, st, idle_min=5)
+                self.run_cycle()
+                self.assertEqual(self.raised(), [])
+
+    def test_one_alert_per_decision_even_with_every_reason(self):
+        self.nav.open = [dec("d1", priority=1, deadline="2026-11-01")]
+        self.add_owner(P1, K1, self.blocked_owner(), idle_min=5)
+        self.add_owner(P2, K2, self.blocked_owner(), idle_min=5)
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d1"])
+        self.assertEqual(self.jfile("digest.json")["alerts"][0]["reasons"],
+                         ["P1", "overdue since 2026-11-01", "blocks alpha", "blocks beta"])
+
+    def test_dedupe_open_alert_and_12h_after_ack(self):
+        self.nav.open = [dec("d1", priority=1), dec("d2", priority=1), dec("d3", priority=1)]
+        self.nav.alerts = {"open": [{"id": "al-1", "key": "decision:d1"}],
+                           "acked": [{"id": "al-2", "key": "decision:d2", "acked_at": NOON - 11 * 3600},
+                                     {"id": "al-3", "key": "decision:d3", "acked_at": NOON - 13 * 3600}]}
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d3"])
+        held = {a["decision"]: a.get("skip") for a in self.jfile("digest.json")["alerts"]}
+        self.assertEqual(held, {"d1": "alert already open", "d2": "acked 11.0 h ago", "d3": None})
+
+    def test_p1_gets_loud_only_after_a_day_and_one_new_alert_per_cycle(self):
+        self.nav.open = [dec("d1", priority=1, asked_at=NOON - 3600), dec("d2", priority=1), dec("d3", priority=1)]
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d2"])
+        held = {a["decision"]: a.get("skip") for a in self.jfile("digest.json")["alerts"]}
+        self.assertNotIn("d1", held)                                  # asked an hour ago: not loud yet
+        self.assertEqual(held["d3"], "one new alert per cycle")
+
+    def test_navigator_dedupe_reply_is_recorded_as_held(self):
+        self.nav.open = [dec("d1", priority=1)]
+        self.runs.stdout = '{"ok": true, "raised": false, "reason": "already open"}'
+        self.run_cycle()
+        self.assertEqual(self.jfile("digest.json")["alerts"][0],
+                         {"decision": "d1", "reasons": ["P1"], "raised": False, "skip": "navigator: already open"})
+
+    def test_quiet_hours_and_global_pause_raise_nothing(self):
+        self.nav.open = [dec("d1", priority=1, asked_at=NOON - 2 * DAY)]
+        self.run_cycle(now=datetime.datetime(2026, 11, 3, 6, 59).timestamp())
+        self.assertEqual(self.raised(), [])
+        sup.set_pause(None, True)
+        self.run_cycle()
+        self.assertEqual(self.raised(), [])
+        sup.set_pause(None, False)
+        self.run_cycle(now=datetime.datetime(2026, 11, 3, 7, 0).timestamp())
+        self.assertEqual(self.raised(), ["d1"])
+
+    def test_paused_project_holds_its_decisions(self):
+        self.nav.open = [dec("d1", priority=1), dec("d2", priority=1)]
+        self.add_owner(P1, K1, self.blocked_owner(needs=("d1",)), idle_min=5)
+        sup.set_pause("alpha", True)
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d2"])
+
+    def test_dry_run_decides_but_raises_nothing(self):
+        self.nav.open = [dec("d1", priority=1)]
+        self.run_cycle(dry=True)
+        self.assertEqual(self.raised(), [])
+        self.assertEqual(self.jfile("digest.json")["alerts"], [{"decision": "d1", "reasons": ["P1"], "raised": True}])
+        self.assertIn("would alert d1 (P1)", self.cycles()[-1])
+
+    def test_alert_failure_does_not_stop_the_cycle(self):
+        self.nav.open = [dec("d1", priority=1)]
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.runs.code = 1
+        self.run_cycle()
+        self.assertTrue(self.jfile("digest.json")["alerts"][0]["skip"].startswith("raise failed (exit 1)"))
+        self.assertEqual(self.reg()["state"], "working")
+
+    def test_navigator_without_alerts_still_raises(self):
+        self.nav.open = [dec("d1", priority=1)]
+        real = self.nav.__call__
+
+        def no_alerts(path):
+            if path == "/api/alerts":
+                raise OSError("HTTP 404")
+            return real(path)
+        with mock.patch.object(sup, "get", no_alerts):
+            self.run_cycle()
+        self.assertEqual(self.raised(), ["d1"])
+
+    def test_owner_wake_texts_never_ask_for_alerts(self):
+        """Only the cycle raises: no wake tells an owner to raise one."""
+        self.add_owner(P1, K1, self.blocked_owner(by="2026-11-01"), idle_min=40)
+        self.run_cycle()
+        self.assertEqual(self.raised(), [])                 # d1 is not an open decision in the inbox
+        self.assertNotIn("alert", self.sent_text().lower())
 
 
 class Manual(Base):

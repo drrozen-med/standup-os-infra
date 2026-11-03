@@ -529,6 +529,25 @@ def build_parser():
                     help="project key, folder name or display name (required for wake)")
     sv.add_argument("--reason", default="", help="wake: what the owner should do")
 
+    al = subparsers.add_parser("alerts", help="loud alerts: open ones, then the last 20 acked (the red banner in the UI)")
+    _add_global_options(al, subcommand=True)
+    alt = subparsers.add_parser("alert", help="raise or ack a loud alert (red banner, chime, notification until acked)")
+    alt_sub = alt.add_subparsers(dest="alert_cmd", required=True)
+    alr = alt_sub.add_parser("raise", help="raise an alert (only the supervisor does this on its own; dedupes on --key)")
+    # no per-command --url here: it is the link. The navigator address goes before the command (nav --url ... alert raise)
+    alr.add_argument("--table", action="store_true", default=argparse.SUPPRESS, help="print human-readable output instead of JSON")
+    alr.add_argument("--title", required=True, help="what needs Uri now, one line")
+    alr.add_argument("--body", default="", help="one or two lines of detail")
+    alrl = alr.add_mutually_exclusive_group()
+    alrl.add_argument("--decision", metavar="ID", help="link to a decision in the inbox (Open shows it; answering it acks)")
+    alrl.add_argument("--session", metavar="KEY", help="link to a session chat, e.g. claude:<uuid>")
+    alrl.add_argument("--url", dest="link_url", metavar="URL", help="link to a web page (http/https)")
+    alr.add_argument("--key", default="", help="dedupe key (default: the link, e.g. decision:<id>, else the title)")
+    ala = alt_sub.add_parser("ack", help="ack an alert (I'm on it): stops the banner, sound and title flash everywhere")
+    _add_global_options(ala, subcommand=True)
+    ala.add_argument("id", nargs="?", default="", help="alert id (from nav alerts)")
+    ala.add_argument("--all", action="store_true", help="ack every open alert")
+
     dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
     _add_global_options(dg, subcommand=True)
 
@@ -1181,6 +1200,56 @@ def cmd_supervisor(args, client):
     else:
         print_json(res)
     return 0 if res.get("ok") else 1
+
+
+def _alert_line(a):
+    link = a.get("link") or {}
+    when = human_age(a.get("acked_at") or a.get("raised_at"))
+    state = ("acked %s ago by %s" % (when, a.get("acked_by"))) if a.get("acked_at") else "OPEN %s" % when
+    return "%-12s %-22s %s%s%s" % (a.get("id"), state, a.get("title", ""),
+                                   ("  -> %s %s" % (link.get("kind"), link.get("ref"))) if link else "",
+                                   ("\n             " + a["body"]) if a.get("body") else "")
+
+
+def cmd_alerts(args, client):
+    v = client.get("/api/alerts")
+    if not args.table:
+        print_json({"open": v.get("open") or [], "acked": v.get("acked") or []})
+        return 0
+    rows = v.get("open") or []
+    print("%d open alert%s" % (len(rows), "" if len(rows) == 1 else "s"))
+    for a in rows + (v.get("acked") or []):
+        print(_alert_line(a))
+    return 0
+
+
+def cmd_alert(args, client):
+    if args.alert_cmd == "raise":
+        link = None
+        if args.decision:
+            link = {"kind": "decision", "ref": args.decision}
+        elif args.session:
+            link = {"kind": "session", "ref": args.session}
+        elif args.link_url:
+            link = {"kind": "url", "ref": args.link_url}
+        res = client.post("/api/alerts/raise", {"title": args.title, "body": args.body, "link": link, "key": args.key})
+        if args.table:
+            a = res.get("alert") or {}
+            print(("raised %s: %s" % (a.get("id"), a.get("title"))) if res.get("raised")
+                  else "not raised (%s): %s" % (res.get("reason"), a.get("id")))
+        else:
+            print_json(res)
+        return 0
+    if not args.id and not args.all:
+        raise UsageError("give an alert id, or --all")
+    if args.id and args.all:
+        raise UsageError("give an alert id or --all, not both")
+    res = client.post("/api/alerts/ack", {"id": args.id} if args.id else {"all": True})
+    if args.table:
+        print("acked: " + (", ".join(res.get("acked") or []) or "nothing (already acked)"))
+    else:
+        print_json(res)
+    return 0
 
 
 def desktop_to_key(local_id):
@@ -2638,6 +2707,10 @@ def main(argv=None):
             return cmd_owner(args, client)
         if args.command == "supervisor":
             return cmd_supervisor(args, client)
+        if args.command == "alerts":
+            return cmd_alerts(args, client)
+        if args.command == "alert":
+            return cmd_alert(args, client)
         if args.command == "desktop-groups":
             return cmd_desktop_groups(args, client)
         if args.command == "map-desktop-group":
