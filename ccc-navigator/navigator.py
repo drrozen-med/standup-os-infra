@@ -93,7 +93,7 @@ class State:
             "needs": False,
             "query": "",
             "show_mine": False,
-            "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+            "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False, "osrc": False},
             "ov": True,
         }
         view = dict(d.get("view") or {})
@@ -364,7 +364,7 @@ class State:
                 "needs": False,
                 "query": "",
                 "show_mine": False,
-                "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False},
+                "display": {"orca": True, "wt": False, "eng": True, "ago": True, "cnt": True, "livec": True, "status": False, "osrc": False},
                 "ov": True,
                 "mute_needs": False,
             }
