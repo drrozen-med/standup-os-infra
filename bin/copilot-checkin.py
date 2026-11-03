@@ -52,7 +52,7 @@ NAV=~/projects/standup-os/ccc-navigator/nav.py
 BOARD=~/projects/standup-os/bin/owner-scoreboard.py
 RECALL=~/.claude/total-recall/plugins/total-recall/brain.dist/brain
 Target for every managed repo: main CI green, at most 5 open PRs, none idle 7 days or more.
-1. Read `python3 $BOARD` (worst repo first; it refreshes each repo's owner file ~/.ccc-navigator/owners/<repo>.md), `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
+1. Read `python3 $BOARD` (worst repo first; it refreshes each repo's ~/.ccc-navigator/owners/<repo>/scoreboard.json, next to its log.md), `python3 $NAV brief --table`, `python3 $NAV decisions --table`, the worker status files in ~/.ccc-navigator/briefs/, and recent Outsourcerer jobs.
 2. Workers waiting on a question: if the answer is inside the rules, read the session's last messages first. Type into it only if it is idle, ends on that question and went quiet under 24 h ago; otherwise start a new session in that repo with a short brief. Questions outside the rules become one decision for Uri.
 3. Blocked, failed or stuck workers: unblock, restart, or hand the job to a new worker (free models first).
 4. Move the scoreboard: unless every repo is at target, take the worst repo that has no worker on it and move at least one item this check-in: close a duplicate or superseded PR, merge a green PR reviewed by a second model, or start a free-model worker (Outsourcerer, opencode-go/iceman-contributor-free or opencode-go/beam-free) on red main CI or the oldest idle PR. Record what you did: `python3 $BOARD --log <repo> "<what, PR/issue numbers, worker job id>"`.

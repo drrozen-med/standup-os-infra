@@ -6,13 +6,15 @@ each managed repo, says whether it is at target:
   - default-branch CI green (or no CI),
   - at most TARGET_PRS open PRs,
   - no open PR idle for STALE_DAYS or more.
-Each repo gets an owner file ~/.ccc-navigator/owners/<repo>.md: a scoreboard
-block that is rewritten on every run, and a "## Log" section below it that is
-only ever appended to (by `--log`), so it is the repo's running record.
+Each repo has an owner folder ~/.ccc-navigator/owners/<repo>/ (docs/owners.md):
+scoreboard.json is rewritten on every run, log.md is only ever appended to, one
+line per entry `- YYYY-MM-DD HH:MM [actor] text`, so it is the repo's running record.
+The old single file owners/<repo>.md is migrated once: its "## Log" lines move into
+log.md (tagged [supervisor]) and the file is renamed to <repo>.md.migrated.
 
-  owner-scoreboard.py                 table, worst repo first; refreshes owner files
-  owner-scoreboard.py --json          same as JSON
-  owner-scoreboard.py --log REPO TEXT append one dated line to REPO's log
+  owner-scoreboard.py                              table, worst repo first; refreshes scoreboard.json
+  owner-scoreboard.py --json                       same as JSON
+  owner-scoreboard.py --log REPO [--actor A] TEXT  append one line to REPO's log.md (actor: supervisor)
 
 Env OWNER_DIR / WATCHTOWER_GITHUB_JSON override the paths (for tests).
 """
@@ -92,54 +94,78 @@ def board():
             "at_target": sum(1 for s in rows if s["at_target"]), "repos": rows}
 
 
-def owner_path(repo):
-    return os.path.join(OWNER_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", repo) + ".md")
+def owner_dir(repo):
+    return os.path.join(OWNER_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", repo).lstrip(".") or "_")
 
 
-def read_log(path):
+def log_line(actor, text, when=None):
+    return "- %s [%s] %s" % ((when or datetime.datetime.now()).strftime("%Y-%m-%d %H:%M"), actor, " ".join(text.split()))
+
+
+def migrate(repo):
+    """Move the "## Log" lines of the old owners/<repo>.md into owners/<repo>/log.md, once."""
+    old = os.path.join(OWNER_DIR, os.path.basename(owner_dir(repo)) + ".md")
+    if not os.path.exists(old):
+        return False
+    with open(old) as f:
+        text = f.read()
+    i = text.find(LOG_HEAD)
+    lines = []
+    for ln in (text[i + len(LOG_HEAD):] if i >= 0 else "").splitlines():
+        m = re.match(r"^- (\d{4}-\d\d-\d\d \d\d:\d\d) (.*)$", ln)
+        if m:   # old lines have no actor: they were written by the co-pilot, the supervisor
+            rest = m.group(2) if re.match(r"^\[[a-z0-9._-]+\] ", m.group(2)) else "[supervisor] " + m.group(2)
+            lines.append("- %s %s" % (m.group(1), rest))
+    d = owner_dir(repo)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "log.md")
     try:
         with open(path) as f:
-            text = f.read()
+            current = f.read()
     except OSError:
-        return LOG_HEAD + "\n"
-    i = text.find(LOG_HEAD)
-    return text[i:] if i >= 0 else LOG_HEAD + "\n"
+        current = ""
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:      # old lines first: they are older than anything already in log.md
+        f.write("".join(ln + "\n" for ln in lines) + current)
+    os.replace(tmp, path)
+    os.replace(old, old + ".migrated")
+    return True
 
 
 def write_owner(s, fetched):
-    os.makedirs(OWNER_DIR, exist_ok=True)
-    path = owner_path(s["repo"])
-    head = ["# Owner: %s" % s["repo"], "",
-            "Goal: main CI green, at most %d open PRs, none idle %d days or more." % (TARGET_PRS, STALE_DAYS),
-            "Scoreboard (GitHub as of %s): %s" % (fetched or "unknown", "AT TARGET" if s["at_target"] else "; ".join(s["problems"]))]
-    if s["known"]:
-        head.append("Open PRs %d, idle %s, CI red %s, blocker issues %d." % (
-            s["open_prs"], ", ".join("#%d" % n for n in s["stale_prs"]) or "none",
-            ", ".join("#%d" % n for n in s["red_prs"]) or "none", s["blocker_issues"]))
+    migrate(s["repo"])
+    d = owner_dir(s["repo"])
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "scoreboard.json")
+    out = dict(s, fetched=fetched or None,
+               target={"max_open_prs": TARGET_PRS, "stale_days": STALE_DAYS, "main_ci": "green"})
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        f.write("\n".join(head) + "\n\n" + read_log(path))
+        json.dump(out, f, indent=1)
     os.replace(tmp, path)
+    return path
 
 
-def append_log(repo, text):
-    os.makedirs(OWNER_DIR, exist_ok=True)
-    path = owner_path(repo)
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            f.write("# Owner: %s\n\n%s\n" % (repo, LOG_HEAD))
-    line = " ".join(text.split())
+def append_log(repo, text, actor="supervisor"):
+    migrate(repo)
+    d = owner_dir(repo)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "log.md")
     with open(path, "a") as f:
-        f.write("- %s %s\n" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), line))
+        f.write(log_line(actor, text) + "\n")
     return path
 
 
 def main(argv):
     if argv[:1] == ["--log"]:
-        if len(argv) < 3:
-            print("usage: owner-scoreboard.py --log REPO TEXT", file=sys.stderr)
+        rest, actor = argv[1:], "supervisor"
+        if "--actor" in rest:
+            i = rest.index("--actor")
+            actor, rest = (rest[i + 1] if i + 1 < len(rest) else ""), rest[:i] + rest[i + 2:]
+        if len(rest) < 2 or not re.match(r"^[a-z0-9][a-z0-9._-]{0,39}$", actor):
+            print("usage: owner-scoreboard.py --log REPO [--actor A] TEXT", file=sys.stderr)
             return 2
-        print(append_log(argv[1], " ".join(argv[2:])))
+        print(append_log(rest[0], " ".join(rest[1:]), actor))
         return 0
     b = board()
     for s in b["repos"]:
