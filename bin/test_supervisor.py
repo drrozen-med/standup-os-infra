@@ -537,7 +537,7 @@ class LoudAlerts(Base):
         self.nav.open = [dec("past", deadline="2026-11-01"), dec("today", deadline=TODAY),
                          dec("future", deadline="2026-11-04"), dec("none")]
         self.run_cycle()
-        self.assertEqual(self.raised(), ["past", "today"])
+        self.assertEqual(self.raised(), ["past"])                    # one new alert per cycle
         reasons = {a["decision"]: a["reasons"] for a in self.jfile("digest.json")["alerts"]}
         self.assertEqual(reasons, {"past": ["overdue since 2026-11-01"], "today": ["due today"]})
 
@@ -583,6 +583,14 @@ class LoudAlerts(Base):
         held = {a["decision"]: a.get("skip") for a in self.jfile("digest.json")["alerts"]}
         self.assertEqual(held, {"d1": "alert already open", "d2": "acked 11.0 h ago", "d3": None})
 
+    def test_p1_gets_loud_only_after_a_day_and_one_new_alert_per_cycle(self):
+        self.nav.open = [dec("d1", priority=1, asked_at=NOON - 3600), dec("d2", priority=1), dec("d3", priority=1)]
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["d2"])
+        held = {a["decision"]: a.get("skip") for a in self.jfile("digest.json")["alerts"]}
+        self.assertNotIn("d1", held)                                  # asked an hour ago: not loud yet
+        self.assertEqual(held["d3"], "one new alert per cycle")
+
     def test_navigator_dedupe_reply_is_recorded_as_held(self):
         self.nav.open = [dec("d1", priority=1)]
         self.runs.stdout = '{"ok": true, "raised": false, "reason": "already open"}'
@@ -591,7 +599,7 @@ class LoudAlerts(Base):
                          {"decision": "d1", "reasons": ["P1"], "raised": False, "skip": "navigator: already open"})
 
     def test_quiet_hours_and_global_pause_raise_nothing(self):
-        self.nav.open = [dec("d1", priority=1)]
+        self.nav.open = [dec("d1", priority=1, asked_at=NOON - 2 * DAY)]
         self.run_cycle(now=datetime.datetime(2026, 11, 3, 6, 59).timestamp())
         self.assertEqual(self.raised(), [])
         sup.set_pause(None, True)

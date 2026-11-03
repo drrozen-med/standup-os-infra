@@ -54,6 +54,8 @@ URI_ACTORS = ("you", "uri", "")
 REASONS = ("answered", "no-status", "blocked-due", "keep-moving")
 ALERT_REARM = 12 * 3600 # an acked loud alert may come back this long after its ack (same rule as navigator alerts.py)
 ALERT_Q_CHARS = 90      # question text in an alert title
+ALERT_P1_AGE = 24 * 3600   # a P1 decision gets loud only after it has waited this long (owners mark many things P1)
+ALERT_MAX_NEW = 1       # new loud alerts raised per cycle, so the first live cycle is not a wall of chimes
 
 
 def sup_dir():
@@ -403,7 +405,9 @@ def alert_reasons(d, owners, now):
     owners: the cycle's digest entries (each with project, status, paused)."""
     out = []
     try:
-        if int(d.get("priority") or 3) == 1:
+        asked = d.get("asked_at")
+        asked = asked if isinstance(asked, (int, float)) else epoch(asked)
+        if int(d.get("priority") or 3) == 1 and asked is not None and now - asked >= ALERT_P1_AGE:
             out.append("P1")
     except (TypeError, ValueError):
         pass
@@ -467,6 +471,8 @@ def raise_alerts(open_list, owners, now, dry):
         key = "decision:" + a["id"]
         rec = {"decision": a["id"], "reasons": a["reasons"], "raised": False}
         skip = alert_skip(key, view, now)
+        if not skip and sum(1 for r in out if r["raised"]) >= ALERT_MAX_NEW:
+            skip = "one new alert per cycle"
         if not skip and not dry:
             code, res = nav("alert", "raise", "--title", a["title"], "--body", a["body"], "--decision", a["id"],
                             "--key", key, full=True)
