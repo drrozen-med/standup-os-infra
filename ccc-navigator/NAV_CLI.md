@@ -396,6 +396,7 @@ python3 nav.py find "billing"
 python3 nav.py undo CHANGE_ID
 python3 nav.py do session.star --key claude:1234
 python3 nav.py do session.hide --keys claude:1234 --keys claude:5678
+python3 nav.py skill [--write]   # skill/SKILL.md: hand-written intro + action reference from the registry
 ```
 
 `do` fetches capabilities and builds params at runtime (`ref`/`str`/`enum` → string, `int` → int, `bool` → flag, `refs` → repeatable). Unknown actions suggest close matches. Server errors from actions are raised as `NavError` with code/message and exit non-zero.
