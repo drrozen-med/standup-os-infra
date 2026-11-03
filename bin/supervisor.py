@@ -41,6 +41,7 @@ OWNER_PY = "~/projects/standup-os/bin/owner.py"
 QUIET = (0, 7)          # local hours [start, end): no cycle
 WORKING_MIN = 3         # activity this recent means the owner is working now: never wake
 IDLE_MIN = 30           # keep-moving: a working / picking-next owner idle this long
+WAIT_IDLE_MIN = 120     # keep-moving: a waiting-on-uri owner idle this long (waiting on Uri never stops the rest of the backlog)
 GAP_MIN = 30            # never wake an owner woken this recently
 MAX_WAKES = 24          # per owner per local day
 DECISION_OLD_DAYS = 7   # flag decision-7d
@@ -293,6 +294,8 @@ def wake_reason(entry, ps, now):
     idle = entry["live"]["idle_min"]
     if state in ("working", "picking-next") and idle is not None and idle >= IDLE_MIN:
         return "keep-moving"
+    if state == "waiting-on-uri" and idle is not None and idle >= WAIT_IDLE_MIN:
+        return "keep-moving"
     return None
 
 
@@ -323,7 +326,7 @@ def skip_reason(entry, reason, ps, now, paused):
         return "owner session not in the Navigator"
     if entry["live"]["working_now"]:
         return "working now"
-    if (entry["status"] or {}).get("state") == "waiting-on-uri" and reason != "answered":
+    if (entry["status"] or {}).get("state") == "waiting-on-uri" and reason not in ("answered", "keep-moving"):
         return "waiting on Uri, nothing newly answered"
     return cap_reason(ps, now, False)
 
@@ -352,6 +355,11 @@ def wake_text(entry, reason, ps, now, note=""):
                 "you have not tried yet (tried: %s), or escalate: ask the supervisor, or turn it into ONE decision "
                 "for Uri (`nav.py ask`) with options, a deadline and a default."
                 % (b.get("what", ""), b.get("by", ""), "; ".join(b.get("tried") or []) or "-"))
+    elif reason == "keep-moving" and st.get("state") == "waiting-on-uri":
+        body = (head + " You have been waiting on Uri for %d min (%s). Waiting on him for those does not stop the "
+                "rest of your backlog: do the next item that does not need his answer now. Use waiting-on-uri only "
+                "when nothing else can move; otherwise set state working and keep the ids in needs_uri."
+                % (entry["live"]["idle_min"] or 0, ", ".join(st.get("needs_uri") or []) or "-"))
     elif reason == "keep-moving":
         body = (head + " Your session has been idle %d min while your state is %s. Your next action was: \"%s\". "
                 "Do it now, or take the next item of your backlog toward the goals."

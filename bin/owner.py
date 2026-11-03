@@ -266,7 +266,7 @@ def brief(slug, session=None):
         _section("End of EVERY turn: write your status (required)",
                  "Run this as the last thing you do each turn. A rejected status prints every reason; fix it and "
                  "run it again.\n\n" + cmd + json.dumps(example, indent=1) + "\nEOF\n\n"
-                 "state is one of: %s. waiting-on-uri needs needs_uri (decision ids). blocked needs "
+                 "state is one of: %s. waiting-on-uri needs needs_uri (decision ids), and only when NOTHING else in your backlog can move: if any item can, state is working and the ids stay in needs_uri. blocked needs "
                  '"blocked": {"what": "...", "tried": ["way 1", "way 2"], "unblocker": "supervisor | uri | <who>", '
                  '"by": "YYYY-MM-DD"}.' % ", ".join(STATES)),
     ]
