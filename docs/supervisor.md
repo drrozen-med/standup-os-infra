@@ -91,3 +91,10 @@ A pinned row "Supervisor" next to "Super-co-pilot" and "Decisions" opens a scree
 row per project with the owner's state dot, summary, days since shipped, open decisions (and oldest age),
 last wake (reason, how long ago), flags as small warning chips, and a 🧠 that opens the owner (same path
 as the project row). Header: last cycle time, paused or running, a Pause/Resume button. Works at 375 px.
+
+### Mac alarm
+
+`bin/alert-alarm.py` (launchd `com.standup-os.alert-alarm`, every 30 s) makes the Mac itself ring and say the
+newest alert out loud while any loud alert is open, independent of Safari. It stops when the alert is
+acknowledged anywhere. Quiet hours 00:00-07:00. `alert-alarm.py mute [MIN]` / `unmute`. It plays at the Mac's
+current volume (×3); it never changes system volume.
