@@ -11,8 +11,10 @@ stays with the AI supervisor (the Super-co-pilot), which reads digest.md and the
   supervisor.py resume [PROJECT]               resume it
 
 One cycle: refresh the scoreboards, write digest.json + digest.md, wake owners by rule (answered,
-no-status, blocked-due, keep-moving; first match wins), rewrite register.json, keep state.json and
-append one line to cycles.log, all under SUPERVISOR_DIR (default ~/.ccc-navigator/supervisor).
+no-status, blocked-due, keep-moving; first match wins), raise loud alerts for the few decisions that
+need Uri now (P1, at/past deadline, or blocking an owner on Uri past its date; at most one per decision),
+rewrite register.json, keep state.json and append one line to cycles.log, all under SUPERVISOR_DIR
+(default ~/.ccc-navigator/supervisor).
 Skips 00:00-07:00 local and while paused. A failing owner never stops the others; the cycle always
 exits 0 after logging the error.
 
@@ -50,6 +52,8 @@ LOG_CHARS = 240         # digest.md cuts longer log lines (digest.json keeps the
 CYCLES_TAIL = 20        # cycles.log lines in `status --json` / GET /api/supervisor
 URI_ACTORS = ("you", "uri", "")
 REASONS = ("answered", "no-status", "blocked-due", "keep-moving")
+ALERT_REARM = 12 * 3600 # an acked loud alert may come back this long after its ack (same rule as navigator alerts.py)
+ALERT_Q_CHARS = 90      # question text in an alert title
 
 
 def sup_dir():
@@ -80,11 +84,12 @@ def get(p):
         return json.load(r)
 
 
-def nav(*args):
-    """Run nav.py as the supervisor -> (exit code, first 200 chars of its output)."""
+def nav(*args, full=False):
+    """Run nav.py as the supervisor -> (exit code, first 200 chars of its output; all of it with full)."""
     r = subprocess.run([sys.executable, NAV] + list(args), capture_output=True, text=True, timeout=90,
                        env=dict(os.environ, NAV_ACTOR="supervisor"))
-    return r.returncode, (r.stdout or r.stderr or "").strip()[:200].replace("\n", " ")
+    out = (r.stdout or r.stderr or "").strip()
+    return r.returncode, out if full else out[:200].replace("\n", " ")
 
 
 def write_json(p, obj):
@@ -391,6 +396,97 @@ def do_wake(entry, reason, ps, now, dry, note=""):
     return True, out
 
 
+# ---------------------------------------------------------------- loud alerts (docs/supervisor.md, "Loud alerts")
+
+def alert_reasons(d, owners, now):
+    """Why Uri's open decision d must pull his attention now ([] = it must not).
+    owners: the cycle's digest entries (each with project, status, paused)."""
+    out = []
+    try:
+        if int(d.get("priority") or 3) == 1:
+            out.append("P1")
+    except (TypeError, ValueError):
+        pass
+    dl = str(d.get("deadline") or "")
+    if dl and dl <= today(now):
+        out.append("due today" if dl == today(now) else "overdue since " + dl)
+    did = str(d.get("id") or "")
+    for o in owners:
+        st = o.get("status") or {}
+        b = st.get("blocked") if isinstance(st.get("blocked"), dict) else {}
+        if (st.get("state") == "blocked" and str(b.get("unblocker") or "").strip().lower() == "uri"
+                and blocked_by(o) and blocked_by(o) <= today(now) and did in [str(x) for x in st.get("needs_uri") or []]):
+            out.append("blocks " + o["project"])
+    return out
+
+
+def alerts_due(open_list, owners, now):
+    """[{id, reasons, title, body}] for each open decision that needs a loud alert, at most one per decision.
+    A decision that a paused project waits on is left alone."""
+    held = {str(x) for o in owners if o.get("paused") for x in (o.get("status") or {}).get("needs_uri") or []}
+    due, seen = [], set()
+    for d in open_list:
+        did = str(d.get("id") or "")
+        if not did or did in seen or did in held:
+            continue
+        why = alert_reasons(d, owners, now)
+        if not why:
+            continue
+        seen.add(did)
+        q = " ".join(str(d.get("question") or did).split())
+        opts = " / ".join(str(x) for x in d.get("options") or [])
+        body = "Why now: %s.%s%s" % ("; ".join(why), (" Options: %s." % opts) if opts else "",
+                                     (" Lane: %s." % d["lane"]) if d.get("lane") else "")
+        due.append({"id": did, "reasons": why, "body": body,
+                    "title": "Decision for you: " + (q if len(q) <= ALERT_Q_CHARS else q[:ALERT_Q_CHARS - 1] + "…")})
+    return due
+
+
+def alert_skip(key, view, now):
+    """Why an alert with this key must not be raised again now (open, or acked < 12 h ago), or None."""
+    if any(a.get("key") == key for a in view.get("open") or []):
+        return "alert already open"
+    acks = [float(a["acked_at"]) for a in view.get("acked") or [] if a.get("key") == key and a.get("acked_at")]
+    if acks and now - max(acks) < ALERT_REARM:
+        return "acked %.1f h ago" % ((now - max(acks)) / 3600)
+    return None
+
+
+def raise_alerts(open_list, owners, now, dry):
+    """Step 3b: raise the due alerts through `nav.py alert raise` (the Navigator dedupes on the key too).
+    -> [{decision, reasons, raised, skip?}]"""
+    due = alerts_due(open_list, owners, now)
+    if not due:
+        return []
+    try:
+        view = get("/api/alerts")
+    except Exception:           # an older Navigator or a hiccup: its own dedupe still holds
+        view = {}
+    out = []
+    for a in due:
+        key = "decision:" + a["id"]
+        rec = {"decision": a["id"], "reasons": a["reasons"], "raised": False}
+        skip = alert_skip(key, view, now)
+        if not skip and not dry:
+            code, res = nav("alert", "raise", "--title", a["title"], "--body", a["body"], "--decision", a["id"],
+                            "--key", key, full=True)
+            raw = res
+            try:
+                res = json.loads(raw)
+            except ValueError:
+                res = {}
+            if code:
+                skip = "raise failed (exit %d) %s" % (code, " ".join(raw.split())[:200])
+            elif isinstance(res, dict) and res.get("raised") is False:
+                skip = "navigator: %s" % (res.get("reason") or "not raised")
+        if skip:
+            rec["skip"] = skip
+        else:
+            rec["raised"] = True
+        out.append(rec)
+    return out
+
+
 # ---------------------------------------------------------------- register / digest
 
 def register_row(entry, ps, now, paused):
@@ -438,6 +534,12 @@ def digest_md(d, now):
     held = ["%s (%s: %s)" % (x["project"], x["reason"], x["skip"]) for x in d["skips"] if x["reason"]]
     if held:
         out.append("Due but not woken: " + "; ".join(held) + ".")
+    al = d.get("alerts") or []
+    if al:
+        out.append("Loud alerts: " + "; ".join("%s (%s)%s" % (
+            a["decision"], "; ".join(a["reasons"]),
+            (" would raise" if d["dry_run"] else " raised") if a["raised"] else " held: " + a.get("skip", ""))
+            for a in al) + ". Never raise these yourself.")
     for e in d["errors"]:
         out.append("ERROR %s: %s" % (e["project"], e["error"]))
     out.append("Never re-do these wakes; act on the flags in register.json.")
@@ -526,6 +628,7 @@ def cycle(dry_run=False, now=None):
                 if skip:
                     skips.append({"project": slug, "reason": reason, "skip": skip})
                 entry["wake"] = {"reason": reason, "skip": skip, "dry_run": dry}
+                entry["paused"] = paused
                 entry["register"] = register_row(entry, ps, now, paused)
                 rows.append(entry["register"])
                 owners.append(entry)
@@ -534,10 +637,15 @@ def cycle(dry_run=False, now=None):
                 errors.append({"project": slug, "error": "%s: %s" % (type(e).__name__, e)})
                 rows.append({"project": slug, "project_key": pkey, "owner_key": (info or {}).get("key"),
                              "error": str(e), "flags": ["error"]})
+        try:
+            alerts = raise_alerts(open_list, owners, now, dry)
+        except Exception as e:      # alerts must never stop the digest and register
+            alerts = []
+            errors.append({"project": "(alerts)", "error": "%s: %s" % (type(e).__name__, e)})
         digest = {"generated_at": iso(now), "ts": now, "dry_run": dry,
                   "decisions_overall": {"open": len(open_list),
                                         "oldest_days": round((now - min(asked)) / 86400, 1) if asked else None},
-                  "owners": owners, "wakes": wakes, "skips": skips, "errors": errors}
+                  "owners": owners, "wakes": wakes, "skips": skips, "alerts": alerts, "errors": errors}
         write_json(path("digest.json"), digest)
         owner.write_atomic(path("digest.md"), digest_md(digest, now))
         write_json(path("register.json"), {"generated_at": iso(now), "ts": now, "dry_run": dry, "rows": rows})
@@ -553,10 +661,13 @@ def cycle(dry_run=False, now=None):
                     cur_projects[slug] = ps
                 cur["last_cycle"] = iso(now)
                 write_json(path("state.json"), cur)
-        line = "cycle%s: %d owners; %s %s; skips %s%s" % (
+        line = "cycle%s: %d owners; %s %s; skips %s%s%s" % (
             tag, len(rows), "would wake" if dry else "woke",
             ", ".join("%s (%s)" % (w["project"], w["reason"]) for w in wakes) or "none",
             "; ".join("%s: %s" % (s["project"], s["skip"]) for s in skips) or "none",
+            ("; %s %s" % ("would alert" if dry else "alerts", ", ".join(
+                "%s (%s)" % (a["decision"], "; ".join(a["reasons"])) for a in alerts if a["raised"])))
+            if any(a["raised"] for a in alerts) else "",
             "; errors " + "; ".join("%s: %s" % (e["project"], e["error"]) for e in errors) if errors else "")
         log_cycle(line, now)
     except Exception as e:      # launchd has no one to show a traceback to

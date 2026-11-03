@@ -458,9 +458,46 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .foot{padding:4px 12px;gap:0}
   .foot .frow,.foot .btn{min-height:30px}
 }
+/* Loud alerts (docs/supervisor.md, "Loud alerts"): a red bar fixed above everything while one is open.
+   Its height is fixed per screen size and the page moves down by exactly that, once, so the list never jumps. */
+:root{--alert-h:0px;--alert:oklch(0.56 0.21 27);--alert-hi:oklch(0.64 0.22 27)}
+body.has-alert{--alert-h:46px;padding-top:var(--alert-h)}
+body.has-alert #drawer{top:var(--alert-h)}
+#alertBar{position:fixed;top:0;left:0;right:0;max-width:100vw;z-index:150;height:var(--alert-h);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--alert);color:#fff;font-weight:700;box-shadow:0 2px 14px oklch(0.4 0.2 27/45%);animation:abpulse 2s ease-in-out infinite}
+#alertBar[hidden]{display:none}
+#alertBar .ab-i{flex:none;width:22px;height:22px;border-radius:50%;background:#fff;color:var(--alert);display:flex;align-items:center;justify-content:center;font:800 14px var(--display)}
+#alertBar .ab-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
+#alertBar .ab-n{font-weight:600;opacity:.85;margin-inline-start:8px;font-size:12px}
+#alertBar .ab-b{display:flex;gap:6px;flex:none;align-items:center}
+#alertBar button{background:oklch(1 0 0/14%);border:1px solid oklch(1 0 0/40%);color:#fff;border-radius:999px;padding:4px 12px;font:700 12.5px var(--sans);cursor:pointer;white-space:nowrap;min-height:30px}
+#alertBar button:hover{background:oklch(1 0 0/26%)}
+#alertBar button.ab-main{background:#fff;color:oklch(0.42 0.19 27);border-color:#fff}
+#alertBar button.ab-snd{background:oklch(0.85 0.17 86);color:oklch(0.25 0.05 80);border-color:transparent}
+#alertBar button[hidden]{display:none}
+#alertBar button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@keyframes abpulse{0%,100%{background:var(--alert)}50%{background:var(--alert-hi)}}
+@media(prefers-reduced-motion:reduce){#alertBar{animation:none}}
+.dcard.flash{box-shadow:0 0 0 3px var(--alert-hi);transition:box-shadow .3s}
+@media (max-width: 760px){
+  body.has-alert{--alert-h:calc(78px + env(safe-area-inset-top))}
+  body.has-alert #side,body.has-alert #main{height:calc(100dvh - var(--alert-h));padding-top:0}
+  #alertBar{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;align-content:center;row-gap:6px;column-gap:8px;padding:env(safe-area-inset-top) 12px 0}
+  #alertBar .ab-b{grid-column:1 / -1}
+  #alertBar .ab-b button{flex:1 1 auto;min-height:32px;padding:4px 8px}
+}
 </style>
 </head>
 <body>
+<div id="alertBar" role="alert" aria-live="assertive" hidden>
+  <span class="ab-i" aria-hidden="true">!</span>
+  <span class="ab-t" id="abText"><span id="abTitle" dir="auto"></span><span class="ab-n" id="abCount"></span></span>
+  <span class="ab-b">
+    <button type="button" class="ab-snd" id="abSound" hidden>Turn on alert sound</button>
+    <button type="button" class="ab-main" id="abOpen">Open</button>
+    <button type="button" id="abAck">I'm on it</button>
+    <button type="button" id="abMute" hidden>Mute 1 h</button>
+  </span>
+</div>
 <nav id="side" aria-label="Sessions">
   <div class="top">
     <div class="row1">
@@ -617,9 +654,11 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       const r = await fetch('/api/tree?window=' + encodeURIComponent(ui.focus ? 'all' : ui.win) + (ui.showMine || ui.focus ? '&hidden=1' : ''));
       tree = await r.json();
       await loadDecisions();
+      await loadAlerts();
       await loadSupervisor();
       fetchServerView();
       render();
+      renderAlerts();
     } catch (e) {
       $('#status').innerHTML = '<span class="bad">Navigator server unreachable</span>';
     } finally { inflight = false; }
@@ -794,6 +833,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const r = await fetch('/api/decisions/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, choice, note }) }).then(x => x.json()).catch(() => ({}));
     if (!r.ok) return toast('Not saved: ' + ((r.error && r.error.message) || 'server unreachable'));
     toast('Answered: ' + (r.answer.choice === 'other' ? r.answer.note.slice(0, 60) : r.answer.choice) + (r.delivery === 'sent' ? ' · sent to the agent' : r.delivery && r.delivery !== 'recorded' ? ' · ' + r.delivery : ''), { label: 'Undo', fn: () => reopenDecision(id) });
+    if (r.alerts_acked && r.alerts_acked.length) dropAlerts(r.alerts_acked);   // the server acked its alerts: quiet now
     await loadDecisions(); renderChips(); renderDetail(true);
   }
   async function reopenDecision(id) {
@@ -806,6 +846,137 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
   }
+
+  // ---- loud alerts (docs/supervisor.md, "Loud alerts"): red bar, chime every 20 s, flashing tab title and one
+  // system notification per alert, until Uri acks it ("I'm on it") or opens the decision it links to.
+  // Read with the normal refresh (GET /api/alerts); no timer runs while nothing is open.
+  let alertsData = { open: [], acked: [] };
+  const alertsGone = new Set();   // acked here: hidden at once, even if a read that started before the ack returns it
+  const CHIME_MS = 20000, BASE_TITLE = document.title;
+  const alarm = { ctx: null, timer: null, flash: false, lastChime: 0, top: null, asked: false };
+  const muteUntil = () => Number(store.get('alertMuteUntil', 0)) || 0;   // per device, localStorage only (store has try/catch)
+  const muted = () => muteUntil() > Date.now();
+  const openAlerts = () => alertsData.open.filter(a => !alertsGone.has(a.id));
+  async function loadAlerts() {
+    try {
+      const r = await fetch('/api/alerts', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d || !Array.isArray(d.open)) return;
+      for (const id of [...alertsGone]) if (!d.open.some(a => a.id === id)) alertsGone.delete(id);   // the server has it too
+      alertsData = { open: d.open, acked: Array.isArray(d.acked) ? d.acked : [] };
+    } catch (e) { /* keep what we have */ }
+  }
+  function dropAlerts(ids) { for (const id of ids) alertsGone.add(id); renderAlerts(); }
+  async function ackAlert(id) {
+    dropAlerts([id]);   // local first: the bar, sound and title stop now; other devices follow on their next refresh
+    const r = await fetch('/api/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(x => x.json()).catch(() => null);
+    if (!r || !r.ok) { alertsGone.delete(id); toast('Could not reach the Navigator: the alert is still open'); renderAlerts(); }
+  }
+  async function openAlert(a) {
+    const l = a && a.link;
+    if (!l) return;
+    if (l.kind === 'decision') {
+      ackAlert(a.id);    // opening the decision counts as attending to it
+      if (!decs.open.some(d => d.id === l.ref)) await loadDecisions();
+      openInbox();
+      const card = document.querySelector(`.dcard[data-dec="${CSS.escape(l.ref)}"]`);
+      if (!card) return toast('That decision is no longer open');
+      const det = card.closest('details'); if (det) det.open = true;
+      card.classList.add('flash'); card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setTimeout(() => card.classList.remove('flash'), 2500);
+    } else if (l.kind === 'session') openChatSession(l.ref, 'Alert');
+    else if (l.kind === 'url' && /^https?:\/\//i.test(l.ref)) window.open(l.ref, '_blank', 'noopener');
+  }
+  // sound: two short tones from Web Audio, no files. Safari starts the AudioContext only inside a user gesture.
+  function audioCtx() {
+    if (alarm.ctx) return alarm.ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { alarm.ctx = new AC(); } catch (e) { return null; }
+    alarm.ctx.onstatechange = () => renderAlerts();
+    return alarm.ctx;
+  }
+  const soundReady = () => !!(alarm.ctx && alarm.ctx.state === 'running');
+  function unlockAudio() {
+    const c = audioCtx(); if (!c || c.state === 'running') return;
+    c.resume().then(renderAlerts).catch(() => {});
+    try { const src = c.createBufferSource(); src.buffer = c.createBuffer(1, 1, 22050); src.connect(c.destination); src.start(0); } catch (e) {}   // iOS: a silent sound inside the gesture
+  }
+  function chime() {
+    if (!soundReady()) return false;
+    const c = alarm.ctx, t0 = c.currentTime + 0.03;
+    [[880, 0], [1318.5, 0.24]].forEach(([hz, at]) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine'; o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, t0 + at);
+      g.gain.exponentialRampToValueAtTime(0.4, t0 + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.2);
+      o.connect(g); g.connect(c.destination);
+      o.start(t0 + at); o.stop(t0 + at + 0.22);
+    });
+    return true;
+  }
+  function notifyAlerts() {   // one system notification per alert id, per device
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const done = store.get('alertNotified', []);
+    for (const a of openAlerts()) {
+      if (done.includes(a.id)) continue;
+      done.push(a.id);
+      try {
+        const n = new Notification('Navigator needs you', { body: a.title + (a.body ? '\n' + a.body : ''), tag: 'nav-alert-' + a.id, requireInteraction: true });
+        n.onclick = () => { try { window.focus(); } catch (e) {} n.close(); openAlert(a); };
+      } catch (e) {}
+    }
+    store.set('alertNotified', done.slice(-50));
+  }
+  function askNotify() {   // ask on the first click after an alert exists (browsers allow the prompt only in a gesture)
+    if (alarm.asked || !openAlerts().length || !('Notification' in window) || Notification.permission !== 'default') return;
+    alarm.asked = true;
+    try { const p = Notification.requestPermission(); if (p && p.then) p.then(notifyAlerts).catch(() => {}); } catch (e) {}
+  }
+  function alarmTick() {
+    alarm.timer = null;
+    const open = openAlerts();
+    if (!open.length) return stopAlarm();
+    alarm.flash = !alarm.flash;
+    document.title = alarm.flash ? '(!) ' + open[0].title : BASE_TITLE;
+    if (!muted() && Date.now() - alarm.lastChime >= CHIME_MS && chime()) alarm.lastChime = Date.now();
+    alarm.timer = setTimeout(alarmTick, 1000);
+  }
+  function stopAlarm() {
+    clearTimeout(alarm.timer); alarm.timer = null; alarm.flash = false; alarm.top = null;
+    document.title = BASE_TITLE;
+  }
+  function renderAlerts() {
+    const bar = $('#alertBar'); if (!bar) return;
+    const open = openAlerts(), on = open.length > 0;
+    document.body.classList.toggle('has-alert', on);
+    bar.hidden = !on;
+    if (!on) return stopAlarm();
+    const a = open[0];
+    if (alarm.top !== a.id) { alarm.top = a.id; alarm.lastChime = 0; }   // a new alert on top chimes at once
+    bar.dataset.id = a.id;
+    $('#abTitle').textContent = a.title;
+    $('#abCount').textContent = open.length > 1 ? '+' + (open.length - 1) + ' more' : '';
+    $('#abText').title = a.title + (a.body ? '\n' + a.body : '');
+    $('#abOpen').hidden = !a.link;
+    $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : 'Open';
+    $('#abSound').hidden = soundReady() || muted() || !(window.AudioContext || window.webkitAudioContext);
+    $('#abMute').hidden = !soundReady() && !muted();
+    $('#abMute').textContent = muted() ? 'Unmute' : 'Mute 1 h';
+    notifyAlerts();
+    if (!alarm.timer) alarmTick();
+  }
+  $('#alertBar').addEventListener('click', e => {
+    const a = openAlerts()[0]; if (!a) return;
+    if (e.target.closest('#abAck')) return ackAlert(a.id);
+    if (e.target.closest('#abOpen')) return openAlert(a);
+    if (e.target.closest('#abSound')) { unlockAudio(); const c = alarm.ctx; if (c) c.resume().then(() => { if (chime()) alarm.lastChime = Date.now(); renderAlerts(); }).catch(() => {}); return; }
+    if (e.target.closest('#abMute')) { store.set('alertMuteUntil', muted() ? 0 : Date.now() + 3600 * 1000); renderAlerts(); }
+  });
+  // any click or tap on the page unlocks the sound and, once an alert exists, asks for notifications
+  for (const ev of ['click', 'touchend', 'keydown']) document.addEventListener(ev, () => { unlockAudio(); askNotify(); }, true);
 
   // a session counts as starred when it, its group or its project is starred
   const needsYou = s => !ui.muteNeeds && s.state === 'needs-you';
@@ -2139,7 +2310,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   // adopt server view on load
   fetchServerView();
   refresh(true);
-  setInterval(() => { if (!document.hidden) refresh(false); }, 10000);
+  // same 10 s cycle; while the tab is in the background only the small alerts read runs, so an alert still
+  // flashes the tab title, chimes and notifies when Uri is looking at another tab
+  setInterval(() => { if (!document.hidden) refresh(false); else loadAlerts().then(renderAlerts); }, 10000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(false); });
 })();
 </script>

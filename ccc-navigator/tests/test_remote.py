@@ -251,6 +251,34 @@ class GateTests(unittest.TestCase):
             st, _, out = self.req("GET", "/api/supervisor", cookie=cookie)
             self.assertEqual((st, json.loads(out)["paused"]), (200, True))
 
+    def test_remote_alerts_need_pairing_and_our_origin(self):
+        import alerts
+        import changes
+        with tempfile.TemporaryDirectory() as d:
+            store = alerts.Alerts(Path(d) / "alerts.json")
+            app = navigator.Handler.app
+            with mock.patch.object(app, "alerts", store, create=True), \
+                    mock.patch.object(app, "changes", changes.ChangeLog(Path(d) / "changes.jsonl"), create=True):
+                raise_ = {"title": "Decide pricing", "link": {"kind": "decision", "ref": "d1"}}
+                self.assertEqual(self.req("GET", "/api/alerts")[0], 401)
+                self.assertEqual(self.req("POST", "/api/alerts/raise", body=raise_)[0], 401)
+                self.assertEqual(self.req("POST", "/api/alerts/ack", body={"all": True})[0], 401)
+                self.assertFalse((Path(d) / "alerts.json").exists())
+                cookie, _ = self.pair()
+                for path, body in (("/api/alerts/raise", raise_), ("/api/alerts/ack", {"all": True})):
+                    self.assertEqual(self.req("POST", path, cookie=cookie, body=body,
+                                              origin="https://evil.example")[0], 403, path)
+                    self.assertEqual(self.req("POST", path, cookie=cookie, body=body)[0], 403, path)   # no Origin
+                self.assertFalse((Path(d) / "alerts.json").exists())
+                st, _, out = self.req("POST", "/api/alerts/raise", cookie=cookie, body=raise_, origin="https://" + HOST)
+                self.assertEqual(st, 200)
+                aid = json.loads(out)["alert"]["id"]
+                st, _, out = self.req("GET", "/api/alerts", cookie=cookie)
+                self.assertEqual((st, [a["id"] for a in json.loads(out)["open"]]), (200, [aid]))
+                st, _, out = self.req("POST", "/api/alerts/ack", cookie=cookie, body={"id": aid}, origin="https://" + HOST)
+                self.assertEqual((st, json.loads(out)["acked"]), (200, [aid]))
+                self.assertEqual(store.list()["acked"][0]["acked_by"], "you")    # the phone is Uri
+
     def test_pairing_endpoints_are_local_only(self):
         cookie, _ = self.pair()
         for method, path in (("POST", "/api/remote/pair"), ("GET", "/api/remote/sessions"),

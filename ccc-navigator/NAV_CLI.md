@@ -379,6 +379,31 @@ Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edit
 answered ones). Every ask, answer and reopen is in `~/.ccc-navigator/changes.jsonl` with its actor
 (`$NAV_ACTOR` for the CLI, `you` for the UI and the phone).
 
+## Loud alerts: when something truly needs Uri now
+
+While an alert is open, every open Navigator page shows a red bar above everything (phone too), chimes every
+20 s, flashes the tab title `(!) <title>` and sends one system notification per alert, until Uri presses
+**I'm on it** (ack) or **Open decision** (opens it in Decisions and acks). Answering the linked decision acks it
+too. Only the supervisor cycle raises alerts on its own (rules: docs/supervisor.md, "Loud alerts"); owners never
+do. The CLI is for Uri and for testing:
+
+```bash
+python3 nav.py alerts --table                       # open alerts, then the last 20 acked
+python3 nav.py alerts                               # same as JSON: {open, acked}
+python3 nav.py alert raise --title "Decide CDL pricing" --body "P1, due today" --decision cdl-pricing-1a2b3
+python3 nav.py alert raise --title "Look at this chat" --session claude:<uuid>
+python3 nav.py alert raise --title "CI is red on main" --url https://github.com/... --key ci-main
+python3 nav.py alert ack al-1a2b3c4d                # one alert
+python3 nav.py alert ack --all                      # every open alert
+python3 nav.py --url http://127.0.0.1:8099 alert raise --title T   # navigator address goes before the command here
+```
+
+Same as `GET /api/alerts`, `POST /api/alerts/raise {title, body?, link?: {kind: "decision"|"session"|"url", ref},
+key?}` and `POST /api/alerts/ack {id}` or `{all: true}` (phone: paired and same origin). `key` dedupes (default:
+the link, e.g. `decision:<id>`, else the title): a raise while that key is open returns the open alert with
+`raised: false`; an acked key can raise again only 12 h after its ack. Stored in `~/.ccc-navigator/alerts.json`
+(env `CCC_NAV_ALERTS`); every raise and ack is in `changes.jsonl` (`alert.raise`, `alert.ack`) with its actor.
+
 ## Triage (live status of every session)
 
 `triage.py` labels every visible session from local rules only (nothing leaves
