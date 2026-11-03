@@ -514,6 +514,40 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     await refresh(true);
   }
 
+  async function act(name, body) {
+    try {
+      const r = await fetch('/nav/v1/actions/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = (data && (data.error && data.error.message)) || (data && data.message) || 'Request failed';
+        toast(msg);
+        return data;
+      }
+      if (data && data.change != null) {
+        toast(data.message || 'Done', { label: 'Undo', fn: async () => {
+          try {
+            const ur = await fetch('/nav/v1/actions/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ change: data.change }) });
+            const ud = await ur.json().catch(() => ({}));
+            if (!ur.ok) {
+              const umsg = (ud && (ud.error && ud.error.message)) || (ud && ud.message) || 'Could not undo';
+              toast(umsg);
+              return;
+            }
+            toast('Undone');
+            refresh(true);
+          } catch (e) {
+            toast('Could not undo');
+          }
+        }});
+      }
+      await refresh(true);
+      return data;
+    } catch (e) {
+      toast('Request failed');
+      throw e;
+    }
+  }
+
   async function refresh(force) {
     if (inflight && !force) return;
     inflight = true;
@@ -1099,7 +1133,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     nick.addEventListener('blur', saveNick);
     wireGroupPicker(s, repo);
     const newg = $('#newg');
-    const add = () => { const n = newg.value.trim(); if (n) post('/api/assign', { key: s.key, repo: repo.key, group: n }); };
+    const add = () => { const n = newg.value.trim(); if (n) act('session.move-group', { key: s.key, repo: repo.key, group: n }); };
     $('#addg').addEventListener('click', add);
     newg.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
     const rng = $('#rng'), rmg = $('#rmg');
@@ -1140,7 +1174,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
       btn.setAttribute('aria-expanded', on ? 'true' : 'false');
       if (on) { input.value = ''; paint(); input.focus(); }
     };
-    const choose = (name) => { setOpen(false); post('/api/assign', { key: s.key, repo: repo.key, group: name }); };
+    const choose = (name) => { setOpen(false); act('session.move-group', { key: s.key, repo: repo.key, group: name }); };
 
     btn.addEventListener('click', () => setOpen(pop.hidden));
     input.addEventListener('input', paint);
@@ -1324,7 +1358,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   function projectPicker(anchor, s, here) {
     closeMenu(); menuAnchor = anchor; if (anchor.isConnected) anchor.classList.add('on');
     menuEl.innerHTML = '<div class="hd">Move “' + esc(label(s)) + '” to project</div>';
-    const go = (repo, msg) => { closeMenu(); fetch('/api/move-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys: [s.key], repo }) }).then(x => x.json()).then(r => { toast(r.ok ? msg : 'Could not move'); refresh(true); }).catch(() => toast('Could not move')); };
+    const go = (repo, msg) => { closeMenu(); act('session.move-project', { key: s.key, repo }).then(r => { if (r && r.ok) toast(msg); else toast('Could not move'); }).catch(() => toast('Could not move')); };
     const add = (text, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; if (cls) b.className = cls; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menuEl.appendChild(b); };
     for (const r of [...tree.repos].sort((a, b) => a.name.localeCompare(b.name))) if (r.key !== here.key) add(((tree.icons || {})['r:' + r.key] ? tree.icons['r:' + r.key] + ' ' : '') + r.name, () => go(r.key, 'Moved to ' + r.name));
     if (s.moved) add('Put back in its folder’s project', () => go('', 'Back in its folder’s project'), 'danger');
@@ -1341,7 +1375,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         <div class="dlg-b"><button type="button" class="dlg-x">Close</button><button type="button" class="dlg-ok" data-add>Add note</button></div>`;
       box.querySelector('.dlg-x').addEventListener('click', () => close(null));
       box.querySelector('[data-add]').addEventListener('click', () => { close(null); addNote(s); });
-      box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { close(null); post('/api/note', { key: s.key, remove: +b.dataset.rm }); }));
+      box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { close(null); act('session.note-remove', { key: s.key, remove: +b.dataset.rm }); }));
     });
   }
   /* Each Claude desktop sidebar group files its sessions under one project (or shows as its own). */
@@ -1367,7 +1401,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   }
   function addNote(s) {
     askText({ title: 'Note on “' + label(s) + '”', multiline: true, ok: 'Add note', hint: 'Enter saves, Shift+Enter adds a line' })
-      .then(t => { if (t && t.trim()) post('/api/note', { key: s.key, text: t.trim() }); });
+      .then(t => { if (t && t.trim()) act('session.note', { key: s.key, text: t.trim() }); });
   }
 
   function describeChange(ch) {
@@ -1475,14 +1509,14 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
         ...(s.batch ? [] : [{ label: 'Move to project…', fn: () => projectPicker(anchor, s, here) }]),
         ...(s.engine === 'claude' && !s.batch ? [{ label: tree.copilot && tree.copilot.key === s.key ? 'Stop being my co-pilot' : 'Make this my co-pilot', fn: () => post('/api/copilot', { key: tree.copilot && tree.copilot.key === s.key ? '' : s.key }) }] : []),
         { label: 'Move to group…', fn: () => { select(s.key, true); ui.pane = 'details'; store.set('pane', 'details'); renderDetail(true); setTimeout(() => { const b = $('#gselBtn'); if (b) b.click(); }, 30); } },
-        { label: s.pinned ? 'Unstar' : 'Star', fn: () => post('/api/pin', { key: s.key, pinned: !s.pinned }) },
+        { label: s.pinned ? 'Unstar' : 'Star', fn: () => act('session.star', { key: s.key, pinned: !s.pinned }) },
         '-',
         { label: 'Add note…', fn: () => addNote(s) },
         ...(s.notes ? [{ label: `Notes (${s.notes})…`, fn: () => showNotes(s) }] : []),
         { hd: 'Mark as' + (s.triage ? ' · now: ' + s.triage + (s.triage_by === 'you' ? ' (you)' : '') : '') },
-        ...(s.state === 'needs-you' ? [{ label: 'Not waiting on me', fn: () => post('/api/triage', { key: s.key, label: 'dismissed', by: 'you' }) }] : []),
-        ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => post('/api/triage', { entries: { [s.key]: { label: l, by: 'you' } } }) })),
-        ...(s.triage_by === 'you' ? [{ label: 'Let the sorter decide', fn: () => post('/api/triage', { entries: { [s.key]: { label: '', by: 'you' } } }) }] : []),
+        ...(s.state === 'needs-you' ? [{ label: 'Not waiting on me', fn: () => act('session.dismiss', { key: s.key }) }] : []),
+        ...['needs-you', 'blocked', 'done'].filter(l => !(s.triage === l && s.triage_by === 'you')).map(l => ({ label: l.replace('-', ' '), fn: () => act('session.mark', { key: s.key, label: l }) })),
+        ...(s.triage_by === 'you' ? [{ label: 'Let the sorter decide', fn: () => act('session.mark', { key: s.key, label: '' }) }] : []),
         '-',
         { label: s.hidden ? 'Unhide' : 'Hide', fn: () => hideKeys([s.key], !s.hidden) },
         '-',
@@ -1585,7 +1619,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     const dots = e.target.closest('[data-menu]');
     if (dots) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === dots) return closeMenu(); return openMenu(dots, menuFor(dots)); }
     const stp = e.target.closest('[data-star]');
-    if (stp) { e.stopPropagation(); return post('/api/pin', { key: stp.dataset.star, pinned: stp.dataset.on !== '1' }); }
+    if (stp) { e.stopPropagation(); return act('session.star', { key: stp.dataset.star, pinned: stp.dataset.on !== '1' }); }
     const eye = e.target.closest('[data-hide]');
     if (eye) { e.stopPropagation(); return hideKeys([eye.dataset.hide], eye.dataset.hidden !== '1'); }
     const s = e.target.closest('.s');
@@ -1715,7 +1749,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
     }
     const h = e.target.closest('[data-drop-repo]'); if (!h || !dragKey) return;
     e.preventDefault(); h.classList.remove('drop');
-    if (h.dataset.dropRepo === dragRepo) post('/api/assign', { key: dragKey, repo: dragRepo, group: h.dataset.dropGroup });
+    if (h.dataset.dropRepo === dragRepo) act('session.move-group', { key: dragKey, repo: dragRepo, group: h.dataset.dropGroup });
     dragKey = null; dragType=null;
   });
   $('#list').addEventListener('dragend', () => { dragKey = null; dragRepo=null; dragType=null; dragRepoKey=null; dragGroupName=null; clearDragMarkers(); });
