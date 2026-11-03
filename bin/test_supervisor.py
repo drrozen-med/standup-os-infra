@@ -230,11 +230,18 @@ class NeverWake(Base):
         self.assertIn("alpha: working now", self.cycles()[-1])
 
     def test_waiting_on_uri_without_new_answer(self):
-        self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["d1"]), idle_min=200,
+        self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["d1"]), idle_min=100,
                        problem="no status this turn")
         self.run_cycle()
         self.assertEqual(self.runs.sends(), [])
         self.assertIn("waiting on Uri", self.cycles()[-1])
+
+    def test_waiting_on_uri_long_idle_keeps_moving_on_the_rest(self):
+        self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["d1"]), idle_min=130)
+        self.run_cycle()
+        self.assertEqual(len(self.runs.sends()), 1)
+        self.assertIn("[Supervisor wake: keep-moving]", self.runs.sends()[0][-1])
+        self.assertIn("does not stop the rest of your backlog", self.runs.sends()[0][-1])
 
     def test_woken_in_last_30_minutes(self):
         self.add_owner(P1, K1, status(), idle_min=40)
