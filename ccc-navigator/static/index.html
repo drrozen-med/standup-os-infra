@@ -1123,13 +1123,13 @@ body.has-alert #drawer{top:var(--alert-h)}
           b.type = 'button'; b.className = 'bbtn'; b.setAttribute('data-open-in', tg.id);
           b.textContent = '\u2197 ' + tg.label;
           b.title = tg.url ? 'Open this session in ' + tg.label
-            : 'Launch ' + tg.label + '. It cannot jump to one workspace' + (tg.note ? ', look for: ' + tg.note : '');
+            : 'Open ' + tg.label + ' on the terminal that runs this session' + (tg.note ? ' (workspace: ' + tg.note + ')' : '');
           b.onclick = async () => {
             if (tg.url) { if (/^https?:/.test(tg.url)) window.open(tg.url, '_blank', 'noopener'); else location.href = tg.url; return; }
             b.disabled = true; let res = null;
-            try { res = await (await fetch('/api/open-in', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: tg.id }) })).json(); } catch (e) {}
+            try { res = await (await fetch('/api/open-in', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: tg.id, path: hit && hit.s.orca_path || '', engine: hit && hit.s.engine || '', hint: hit && (hit.s.why || hit.s.needs_reason || '') || '' }) })).json(); } catch (e) {}
             b.disabled = false;
-            toast(res && res.ok ? tg.label + ' is open' + (tg.note ? ', look for: ' + tg.note : '') : ((res && res.error) || 'Could not open ' + tg.label));
+            toast(res && res.ok ? (res.how === 'terminal' ? 'Orca: switched to this session' + (res.note ? ' (' + res.note + ')' : '') : (res.note || tg.label + ' is open')) : ((res && res.error) || 'Could not open ' + tg.label));
           };
           row.appendChild(b);
         }
