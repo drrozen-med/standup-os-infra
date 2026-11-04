@@ -1112,6 +1112,27 @@ body.has-alert #drawer{top:var(--alert-h)}
       orgBtn.disabled = true; setTimeout(() => { orgBtn.disabled = false; }, 4000);
       toast('Asked the co-pilot to organize');
     };
+    // "Open in <app>": the same session in the Claude app, Codex or Orca (for the built-in browser and the like)
+    const hit = findSel(), orcaWs = hit && hit.s.key === key ? (hit.s.orca_workspace || '') : '';
+    fetch('/api/open-in?session=' + encodeURIComponent(key) + '&orca=' + encodeURIComponent(orcaWs))
+      .then(r => r.ok ? r.json() : { targets: [] }).catch(() => ({ targets: [] })).then(({ targets }) => {
+        const row = $('#briefLine'); if (!row || ui.selected !== key || row.querySelector('[data-open-in]')) return;
+        for (const tg of targets || []) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'bbtn'; b.setAttribute('data-open-in', tg.id);
+          b.textContent = '\u2197 ' + tg.label;
+          b.title = tg.url ? 'Open this session in ' + tg.label
+            : 'Launch ' + tg.label + '. It cannot jump to one workspace' + (tg.note ? ', look for: ' + tg.note : '');
+          b.onclick = async () => {
+            if (tg.url) { if (/^https?:/.test(tg.url)) window.open(tg.url, '_blank', 'noopener'); else location.href = tg.url; return; }
+            b.disabled = true; let res = null;
+            try { res = await (await fetch('/api/open-in', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: tg.id }) })).json(); } catch (e) {}
+            b.disabled = false;
+            toast(res && res.ok ? tg.label + ' is open' + (tg.note ? ', look for: ' + tg.note : '') : ((res && res.error) || 'Could not open ' + tg.label));
+          };
+          row.appendChild(b);
+        }
+      });
     cur.querySelector('[data-brief-name]').onclick = async (ev) => {
       const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Thinking…';
       let res = null;
