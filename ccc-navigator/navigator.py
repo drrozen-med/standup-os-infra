@@ -681,6 +681,42 @@ def desktop_links(sid, root=DESKTOP_DIR):
     return out
 
 
+CODEX_THREAD_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
+ORCA_BIN = "/usr/local/bin/orca"
+
+
+def open_in_targets(key, orca_workspace=None, remote=False):
+    """Apps on this Mac that can show a session: [{id, label, url?, note?}].
+    url is a deep link (claude:// and codex:// open the exact session). Orca has no deep link, so it is
+    launch-only and carries the workspace name as a note. Away from the Mac only the claude.ai link is useful."""
+    engine, _, sid = str(key or "").partition(":")
+    out = []
+    if engine == "claude" and sid:
+        links = desktop_links(sid)
+        if remote:
+            if links.get("url"):
+                out.append({"id": "claude", "label": "Claude", "url": links["url"]})
+        elif links.get("mac_url"):
+            out.append({"id": "claude", "label": "Claude", "url": links["mac_url"]})
+    elif engine == "codex" and not remote and CODEX_THREAD_RE.match(sid):
+        out.append({"id": "codex", "label": "Codex", "url": "codex://threads/" + sid})
+    if orca_workspace and not remote:
+        out.append({"id": "orca", "label": "Orca", "note": str(orca_workspace)[:80]})
+    return out
+
+
+def open_orca(binary=ORCA_BIN):
+    """Launch Orca (or bring it forward). It cannot be pointed at one worktree from outside. -> {ok, error?}"""
+    exe = binary if os.path.exists(binary) else shutil.which("orca")
+    if not exe:
+        return {"ok": False, "error": "Orca is not installed on this Mac"}
+    try:
+        r = subprocess.run([exe, "open"], capture_output=True, text=True, timeout=25)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": "Could not start Orca: " + str(e)[:80]}
+    return {"ok": r.returncode == 0, "error": None if r.returncode == 0 else (r.stderr or "Orca did not start").strip()[:120]}
+
+
 def desktop_groups(root=DESKTOP_DIR, config=DESKTOP_CONFIG):
     """Sidebar groups from the Claude desktop app: CLI session id -> group name. Read-only."""
     try:
@@ -2505,7 +2541,7 @@ class Handler(BaseHTTPRequestHandler):
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
                 "/api/alerts/raise", "/api/alerts/ack", "/api/alerts/mute",
-                "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
+                "/api/ask/answer", "/api/brief/refresh", "/api/hook", "/api/open-in"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
 
@@ -2718,6 +2754,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"projects": briefs.all_projects()})
             except (ValueError, briefs.sqlite3.Error) as e:
                 return self._send(400, {"error": str(e)})
+        if u.path == "/api/open-in":
+            q = urllib.parse.parse_qs(u.query)
+            one = lambda k: (q.get(k) or [""])[0]
+            return self._send(200, {"targets": open_in_targets(one("session"), one("orca") or None, self._rem)})
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
@@ -2888,6 +2928,13 @@ class Handler(BaseHTTPRequestHandler):
             if self._rem:
                 return self._send(403, {"error": "only from the Mac itself"})
             return self._send(200, self.app.hook(body))
+        elif p == "/api/open-in":
+            if self._rem:
+                return self._send(403, {"error": "only from the Mac itself"})
+            if str(body.get("id") or "") != "orca":
+                return self._send(400, {"error": "only Orca is launched here; Claude and Codex open through their own links"})
+            res = open_orca()
+            return self._send(200 if res.get("ok") else 502, res)
         elif p == "/api/brief/refresh":
             return self._send(200, self.app.brief_refresh(str(body.get("key") or ""), bool(body.get("rename"))))
         elif p == "/api/rename":
