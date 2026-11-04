@@ -93,6 +93,7 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .seg button{border:0;border-radius:6px;padding:4px 9px;font-size:11.5px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted)}
 .seg button[aria-pressed=true]{background:var(--primary);color:var(--primary-fg);box-shadow:0 1px 4px var(--primary-soft)}
 .seg button:not([aria-pressed=true]):hover{color:var(--text);background:var(--hover)}
+.searchrow{display:flex;align-items:center;gap:8px}.searchrow .search{flex:1;min-width:0}#viewHost:empty{display:none}
 .search{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0 10px;height:34px}
 .search:focus-within{border-color:var(--primary-hi);box-shadow:0 0 0 3px var(--primary-soft)}
 .search input{flex:1;background:transparent;border:0;outline:none;color:var(--text)}
@@ -100,11 +101,11 @@ button,.dots,.eye{transition:background .12s,color .12s,border-color .12s,opacit
 .status{font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .status .bad{color:var(--accent)}
 
-#pinned{display:flex;flex-direction:column;gap:2px;padding:2px 8px 6px;border-bottom:1px solid var(--line)}
-.pin-row{display:flex;align-items:center;gap:8px;width:100%;text-align:start;background:transparent;border:0;border-radius:8px;padding:9px 10px;color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;min-height:36px}
+#pinned{display:flex;flex-direction:row;flex-wrap:wrap;gap:5px;padding:7px 12px;border-bottom:1px solid var(--line)}
+.pin-row{display:flex;align-items:center;gap:5px;flex:0 0 auto;min-width:0;text-align:start;background:transparent;border:1px solid var(--line2);border-radius:999px;padding:3px 9px;color:var(--text);font-size:12px;font-weight:600;cursor:pointer;min-height:28px}
 .pin-row:hover{background:var(--line2)}.pin-row:focus-visible{outline:2px solid var(--primary-hi);outline-offset:-2px}
 .pin-row[aria-current="true"]{background:var(--primary-soft)}
-.pin-row .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pin-row .ps{margin-inline-start:auto;font-size:11.5px;font-weight:400;color:var(--dim);white-space:nowrap}
+.pin-row .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pin-row .ps{display:none}   /* the second line lives in the tooltip: one row of pills saves the height */
 .pin-row .n{background:var(--accent);color:var(--bg);border-radius:999px;font-size:11px;padding:0 7px;line-height:18px}
 .pin-row.dec:not(.has) .pn{color:var(--muted)}
 #list{flex:1;overflow-y:auto;padding:4px 0 12px;min-height:0}
@@ -220,8 +221,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dopt:hover{background:var(--primary-soft);border-color:var(--primary-hi)}.dopt.other{color:var(--muted)}
 .dsrc{font-size:11px;color:var(--dim)}
 /* Supervisor status board (docs/supervisor.md, "UI: the status board") */
-.pin-row.sup{flex-wrap:wrap;row-gap:0}
-.pin-row.sup .ps{flex:1 0 100%;margin:0;overflow:hidden;text-overflow:ellipsis}
+.pin-row.sup{flex-wrap:nowrap}
 .detail.sup{max-width:1000px;gap:14px;container:supb/inline-size}
 .sup h2{font:700 18px var(--display);margin:0}
 .sup-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -434,6 +434,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .brand::before{display:none}
   .brand .ovbtn,.ovline{display:none}
   .status{display:none}.status:has(.bad){display:flex}
+  .searchrow{display:contents}#viewHost{display:none}
   .search{display:none}
   .top.searching .search{display:flex}
   .top.searching .chips{display:none}
@@ -505,12 +506,12 @@ body.has-alert #drawer{top:var(--alert-h)}
       <div class="tools"><button type="button" class="iconbtn" id="todayBtn" title="Today, project by project" aria-label="Today, project by project"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M7 14h4M7 17h8"/></svg></button><button type="button" class="iconbtn" id="muteNeeds" aria-pressed="false"></button><button type="button" class="iconbtn" id="theme" title="Theme: auto / light / dark" aria-label="Toggle theme"></button><button type="button" class="iconbtn" id="foldAll" title="Collapse all / expand all" aria-label="Collapse all or expand all"></button><div class="seg" id="win" role="group" aria-label="Time window"></div></div>
     </div>
     <div class="ovline" id="ovLine"></div>
-    <label class="search">
+    <div class="searchrow"><label class="search">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <span class="sr">Search sessions</span>
       <input id="q" type="text" dir="auto" placeholder="Search nickname, title, repo, group…" autocomplete="off">
       <span class="kbd" aria-hidden="true">/</span>
-    </label>
+    </label><span id="viewHost"></span></div>
     <div class="status" id="status"></div>
     <div class="chips" id="chips"></div>
   </div>
@@ -1028,11 +1029,11 @@ body.has-alert #drawer{top:var(--alert-h)}
     const cp = tree.copilot, hit = cp && flatSessions().find(x => x.s.key === cp.key);
     const n = decs.open.length;
     const cpName = (hit && (hit.s.nick || hit.s.original)) || cp && cp.name || 'Co-pilot';
-    box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0">
-        <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>${esc(cpName)}</bdi></span><span class="ps">Ask me anything</span></button>` : '')
-      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
-      + (sup ? (sm => `<button type="button" class="pin-row sup ${sm.n ? 'has' : ''}" id="supRow" aria-label="Supervisor, ${esc(sm.txt)}" aria-current="${!!ui.sup}" tabindex="0"><span class="pn">Supervisor</span>${sm.n ? `<span class="n">${sm.n}</span>` : ''}<span class="ps" title="${esc(sm.txt)}">${esc(sm.txt)}</span></button>`)(supSummary()) : '')
-      + `<a class="pin-row" href="/ride" style="text-decoration:none;color:inherit"><span class="pn">Ride mode</span><span class="ps">hear it all, answer by voice</span></a>`;
+    box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0" title="${esc(cpName)}: ask me anything">
+        <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>Co-pilot</bdi></span><span class="ps">Ask me anything</span></button>` : '')
+      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0" title="Decisions: ${n ? n + ' waiting for you' : 'nothing waiting'}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
+      + (sup ? (sm => `<button type="button" class="pin-row sup ${sm.n ? 'has' : ''}" id="supRow" aria-label="Supervisor, ${esc(sm.txt)}" aria-current="${!!ui.sup}" tabindex="0" title="Supervisor: ${esc(sm.txt)}"><span class="pn">Supervisor</span>${sm.n ? `<span class="n">${sm.n}</span>` : ''}<span class="ps">${esc(sm.txt)}</span></button>`)(supSummary()) : '')
+      + `<a class="pin-row" href="/ride" title="Ride mode: hear it all, answer by voice" style="text-decoration:none;color:inherit"><span class="pn">Ride</span></a>`;
   }
   // Project owner (docs/owners.md): the summary line under the project name, and the 🧠 button that opens the owner chat.
   function ownerLine(ow) {
@@ -1156,6 +1157,8 @@ body.has-alert #drawer{top:var(--alert-h)}
       : '<p class="hint">No account yet today. The small model writes one every 2 hours from the running log.</p>');
   }
 
+  const phoneWidth = () => matchMedia('(max-width: 760px)').matches;   // same breakpoint as the phone layout below
+  const VIEW_BTN = '<button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
   function renderChips() {
     let st = 0, working = 0, nd = 0;
     for (const r of tree.repos) for (const g of r.groups) for (const s of g.items) {
@@ -1166,7 +1169,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     const c = (k, label, n, extra) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${!!ui.f[k]}">${extra || ''}<span class="lbl">${label}</span><span class="n">${n}</span></button>`;
     applyView();
     renderPinned();
-    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + (ui.muteNeeds ? '' : c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>')) + '<button type="button" class="chip srch" id="srchBtn" aria-label="Search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button><button type="button" class="chip view" id="viewBtn" aria-haspopup="true">View ▾</button>';
+    $('#chips').innerHTML = c('star', 'Starred', st, '<span class="star">★</span>') + c('live', 'Working', working, '<span class="dot working"></span>') + (ui.muteNeeds ? '' : c('needs', 'Needs you', nd, '<span class="dot needs-you"></span>')) + '<button type="button" class="chip srch" id="srchBtn" aria-label="Search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>' + (phoneWidth() ? VIEW_BTN : '');
+    const host = $('#viewHost'); if (host) host.innerHTML = phoneWidth() ? '' : VIEW_BTN;
   }
   function renderWin() {
     $('#win').innerHTML = WINS.map(([k, l]) => `<button type="button" data-win="${k}" aria-pressed="${ui.win === k}">${l}</button>`).join('');
@@ -1690,6 +1694,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     const sideEl = $('#side'), topEl = sideEl.querySelector('.top'), listEl = $('#list'), q = $('#q');
     const closeSearch = () => { if (!q.value) topEl.classList.remove('searching'); };
     $('#chips').addEventListener('click', e => { if (e.target.closest('#srchBtn')) { topEl.classList.add('searching'); q.focus(); } });
+    matchMedia('(max-width: 760px)').addEventListener('change', () => { if (tree) renderChips(); });   // View moves between the search row and the chips row
     q.addEventListener('blur', closeSearch);
     let last = 0, quietUntil = 0;
     listEl.addEventListener('scroll', () => {
