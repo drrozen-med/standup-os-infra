@@ -705,16 +705,58 @@ def open_in_targets(key, orca_workspace=None, remote=False):
     return out
 
 
-def open_orca(binary=ORCA_BIN):
-    """Launch Orca (or bring it forward). It cannot be pointed at one worktree from outside. -> {ok, error?}"""
+def _orca_run(args, binary=ORCA_BIN, timeout=25):
     exe = binary if os.path.exists(binary) else shutil.which("orca")
     if not exe:
-        return {"ok": False, "error": "Orca is not installed on this Mac"}
+        return None, "Orca is not installed on this Mac"
     try:
-        r = subprocess.run([exe, "open"], capture_output=True, text=True, timeout=25)
+        r = subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return {"ok": False, "error": "Could not start Orca: " + str(e)[:80]}
-    return {"ok": r.returncode == 0, "error": None if r.returncode == 0 else (r.stderr or "Orca did not start").strip()[:120]}
+        return None, "Could not run Orca: " + str(e)[:80]
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout or "Orca refused").strip()[:120]
+    return r.stdout, None
+
+
+def pick_orca_terminal(terminals, engine="", hint=""):
+    """Which of a worktree's terminals runs this session: same agent first, then the one whose screen shares
+    the most long words with what the Navigator shows for the session, then the most recently active."""
+    terms = [t for t in terminals or [] if t.get("handle") and not t.get("orphaned")]
+    same = [t for t in terms if engine and t.get("agentIdentity") == engine]
+    pool = same or [t for t in terms if t.get("agentIdentity")] or terms
+    words = {w for w in re.findall(r"\w{5,}", (hint or "").lower())}
+
+    def score(t):
+        seen = set(re.findall(r"\w{5,}", str(t.get("preview") or "").lower()))
+        return (len(words & seen), int(t.get("lastOutputAt") or 0))
+    return max(pool, key=score) if pool else None
+
+
+def open_orca(path=None, engine="", hint="", binary=ORCA_BIN):
+    """Bring Orca forward and, when the session's worktree is known, switch to the terminal that runs it.
+    -> {ok, how: terminal|app, note?, error?}"""
+    try:
+        subprocess.run(["open", "-a", "Orca"], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if path:
+        out, err = _orca_run(["terminal", "list", "--worktree", "path:" + str(path), "--json"], binary)
+        if not err:
+            try:
+                data = json.loads(out)
+                res = data.get("result", data)
+                terms = res.get("terminals") if isinstance(res, dict) else res
+            except (ValueError, AttributeError):
+                terms = None
+            term = pick_orca_terminal(terms, engine, hint)
+            if term:
+                _, err = _orca_run(["terminal", "switch", "--terminal", term["handle"], "--json"], binary)
+                if not err:
+                    return {"ok": True, "how": "terminal", "note": str(term.get("title") or "")[:60]}
+    out, err = _orca_run(["open"], binary)
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": True, "how": "app", "note": "Orca is open, but its terminal for this session was not found"}
 
 
 def desktop_groups(root=DESKTOP_DIR, config=DESKTOP_CONFIG):
@@ -2933,7 +2975,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(403, {"error": "only from the Mac itself"})
             if str(body.get("id") or "") != "orca":
                 return self._send(400, {"error": "only Orca is launched here; Claude and Codex open through their own links"})
-            res = open_orca()
+            res = open_orca(str(body.get("path") or "") or None, str(body.get("engine") or ""), str(body.get("hint") or "")[:400])
             return self._send(200 if res.get("ok") else 502, res)
         elif p == "/api/brief/refresh":
             return self._send(200, self.app.brief_refresh(str(body.get("key") or ""), bool(body.get("rename"))))
