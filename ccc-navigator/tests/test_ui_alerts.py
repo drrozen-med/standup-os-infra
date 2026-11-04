@@ -72,11 +72,14 @@ class AlertUiTests(unittest.TestCase):
         self.assertIn("$('#abSound').hidden = soundReady() ||", fn("renderAlerts"))
         self.assertNotRegex(HTML, r"\.(mp3|wav|ogg)['\"].*chime")
 
-    def test_mute_one_hour_in_localstorage_only(self):
-        self.assertIn("store.set('alertMuteUntil', muted() ? 0 : Date.now() + 3600 * 1000)", HTML)
-        self.assertIn("store.get('alertMuteUntil', 0)", HTML)
-        # store wraps localStorage in try/catch
-        self.assertRegex(HTML, r"get\(k, d\) \{ try \{ const v = localStorage\.getItem")
+    def test_mute_one_hour_is_shared_with_the_mac_voice(self):
+        # the mute lives on the server (it also silences bin/alert-alarm.py), not in this browser
+        self.assertIn("fetch('/api/alerts/mute'", HTML)
+        self.assertIn("const minutes = muted() ? 0 : 60;", HTML)
+        self.assertIn("(Number(alertsData.mute_until) || 0) * 1000", HTML)
+        self.assertNotIn("alertMuteUntil", HTML)
+        # the button shows even when this page has no sound: the Mac speaks anyway
+        self.assertIn("$('#abMute').hidden = false;", fn("renderAlerts"))
         self.assertIn("if (!muted() && ", fn("alarmTick"))
 
     def test_title_flash_every_second_and_restored(self):

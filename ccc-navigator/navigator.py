@@ -1773,9 +1773,43 @@ def supervisor_run(body, actor, nav_url):
 
 # ---------------------------------------------------------------- loud alerts (alerts.py, docs/supervisor.md)
 
+ALARM_STATE = os.environ.get("ALERT_ALARM_STATE", os.path.expanduser("~/.ccc-navigator/alarm.json"))
+
+
+def alarm_mute_until():
+    """When the alarm is muted until (epoch s, 0 = not muted). Shared with bin/alert-alarm.py, the Mac voice."""
+    try:
+        with open(ALARM_STATE) as f:
+            return float(json.load(f).get("mute_until") or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
+def alarm_mute(minutes):
+    """POST /api/alerts/mute {minutes}: mute the page chime and the Mac voice on every device; 0 unmutes."""
+    try:
+        minutes = max(0, min(24 * 60, int(minutes)))
+    except (TypeError, ValueError):
+        minutes = 60
+    try:
+        with open(ALARM_STATE) as f:
+            st = json.load(f)
+        if not isinstance(st, dict):
+            st = {}
+    except (OSError, ValueError):
+        st = {}
+    st["mute_until"] = time.time() + minutes * 60 if minutes else 0
+    os.makedirs(os.path.dirname(ALARM_STATE), exist_ok=True)
+    tmp = ALARM_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, ALARM_STATE)
+    return {"ok": True, "mute_until": st["mute_until"]}
+
+
 def alerts_view(app):
-    """GET /api/alerts: {open: newest first, acked: last 20}."""
-    return dict(app.alerts.list(), ok=True)
+    """GET /api/alerts: {open: newest first, acked: last 20, mute_until}."""
+    return dict(app.alerts.list(), ok=True, mute_until=alarm_mute_until())
 
 
 def alert_raise(app, body, actor):
@@ -2470,7 +2504,7 @@ class Handler(BaseHTTPRequestHandler):
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
-                "/api/alerts/raise", "/api/alerts/ack",
+                "/api/alerts/raise", "/api/alerts/ack", "/api/alerts/mute",
                 "/api/ask/answer", "/api/brief/refresh", "/api/hook"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
            "trailers", "transfer-encoding", "upgrade"}
@@ -2920,6 +2954,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "decision": d})
             except (decisions.DecisionError, changes.ChangeError) as e:
                 return self._send(400, {"ok": False, "error": {"code": getattr(e, 'code', 'error'), "message": str(e)}})
+        elif p == "/api/alerts/mute":
+            return self._send(200, alarm_mute(body.get("minutes", 60)))
         elif p in ("/api/alerts/raise", "/api/alerts/ack"):
             try:
                 if p == "/api/alerts/raise":

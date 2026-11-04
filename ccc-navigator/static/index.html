@@ -850,11 +850,12 @@ body.has-alert #drawer{top:var(--alert-h)}
   // ---- loud alerts (docs/supervisor.md, "Loud alerts"): red bar, chime every 20 s, flashing tab title and one
   // system notification per alert, until Uri acks it ("I'm on it") or opens the decision it links to.
   // Read with the normal refresh (GET /api/alerts); no timer runs while nothing is open.
-  let alertsData = { open: [], acked: [] };
+  let alertsData = { open: [], acked: [], mute_until: 0 };
   const alertsGone = new Set();   // acked here: hidden at once, even if a read that started before the ack returns it
   const CHIME_MS = 20000, BASE_TITLE = document.title;
   const alarm = { ctx: null, timer: null, flash: false, lastChime: 0, top: null, asked: false };
-  const muteUntil = () => Number(store.get('alertMuteUntil', 0)) || 0;   // per device, localStorage only (store has try/catch)
+  // mute is shared by every device and the Mac voice (bin/alert-alarm.py): kept by the server, read with /api/alerts
+  const muteUntil = () => (Number(alertsData.mute_until) || 0) * 1000;
   const muted = () => muteUntil() > Date.now();
   const openAlerts = () => alertsData.open.filter(a => !alertsGone.has(a.id));
   async function loadAlerts() {
@@ -864,7 +865,7 @@ body.has-alert #drawer{top:var(--alert-h)}
       const d = await r.json();
       if (!d || !Array.isArray(d.open)) return;
       for (const id of [...alertsGone]) if (!d.open.some(a => a.id === id)) alertsGone.delete(id);   // the server has it too
-      alertsData = { open: d.open, acked: Array.isArray(d.acked) ? d.acked : [] };
+      alertsData = { open: d.open, acked: Array.isArray(d.acked) ? d.acked : [], mute_until: Number(d.mute_until) || 0 };
     } catch (e) { /* keep what we have */ }
   }
   function dropAlerts(ids) { for (const id of ids) alertsGone.add(id); renderAlerts(); }
@@ -963,7 +964,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     $('#abOpen').hidden = !a.link;
     $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : 'Open';
     $('#abSound').hidden = soundReady() || muted() || !(window.AudioContext || window.webkitAudioContext);
-    $('#abMute').hidden = !soundReady() && !muted();
+    $('#abMute').hidden = false;   // the Mac voice rings even when this page has no sound
     $('#abMute').textContent = muted() ? 'Unmute' : 'Mute 1 h';
     notifyAlerts();
     if (!alarm.timer) alarmTick();
@@ -973,7 +974,13 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (e.target.closest('#abAck')) return ackAlert(a.id);
     if (e.target.closest('#abOpen')) return openAlert(a);
     if (e.target.closest('#abSound')) { unlockAudio(); const c = alarm.ctx; if (c) c.resume().then(() => { if (chime()) alarm.lastChime = Date.now(); renderAlerts(); }).catch(() => {}); return; }
-    if (e.target.closest('#abMute')) { store.set('alertMuteUntil', muted() ? 0 : Date.now() + 3600 * 1000); renderAlerts(); }
+    if (e.target.closest('#abMute')) {
+      const minutes = muted() ? 0 : 60;
+      alertsData.mute_until = minutes ? Date.now() / 1000 + minutes * 60 : 0;   // show it at once
+      renderAlerts();
+      fetch('/api/alerts/mute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes }) })
+        .then(() => loadAlerts()).then(renderAlerts).catch(() => {});
+    }
   });
   // any click or tap on the page unlocks the sound and, once an alert exists, asks for notifications
   for (const ev of ['click', 'touchend', 'keydown']) document.addEventListener(ev, () => { unlockAudio(); askNotify(); }, true);

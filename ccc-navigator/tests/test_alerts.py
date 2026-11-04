@@ -276,3 +276,37 @@ class Cli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AlarmMute(unittest.TestCase):
+    """POST /api/alerts/mute writes the file the Mac voice (bin/alert-alarm.py) reads; GET /api/alerts reports it."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(navigator, "ALARM_STATE", str(Path(self.tmp.name) / "alarm.json"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_mute_then_unmute(self):
+        self.assertEqual(navigator.alarm_mute_until(), 0)
+        with mock.patch.object(navigator.time, "time", return_value=NOW):
+            r = navigator.alarm_mute(60)
+        self.assertEqual(r["mute_until"], NOW + H)
+        self.assertEqual(navigator.alarm_mute_until(), NOW + H)
+        self.assertEqual(json.loads(Path(navigator.ALARM_STATE).read_text())["mute_until"], NOW + H)
+        navigator.alarm_mute(0)
+        self.assertEqual(navigator.alarm_mute_until(), 0)
+
+    def test_bad_minutes_default_to_an_hour_and_cap_at_a_day(self):
+        with mock.patch.object(navigator.time, "time", return_value=NOW):
+            self.assertEqual(navigator.alarm_mute("x")["mute_until"], NOW + H)
+            self.assertEqual(navigator.alarm_mute(10**6)["mute_until"], NOW + 24 * H)
+
+    def test_mac_alarm_honours_the_same_file(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin"))
+        import importlib
+        with mock.patch.dict(os.environ, {"ALERT_ALARM_STATE": navigator.ALARM_STATE}):
+            aa = importlib.reload(importlib.import_module("alert-alarm"))
+            navigator.alarm_mute(60)
+            with mock.patch.object(aa.time, "localtime", return_value=aa.time.struct_time((2026, 1, 1, 12, 0, 0, 0, 1, -1))):
+                self.assertEqual(aa.check(), "muted")
