@@ -22,6 +22,7 @@ _loader = importlib.machinery.SourceFileLoader("copilot_checkin", os.path.join(H
 _spec = importlib.util.spec_from_loader("copilot_checkin", _loader)
 cc = importlib.util.module_from_spec(_spec)
 _loader.exec_module(cc)
+REAL_GET = cc.get          # the real get(), before the tests patch it
 
 NOON = dtmod.datetime(2026, 10, 31, 12, 0, 0)
 TODAY = NOON.strftime("%Y-%m-%d")
@@ -60,6 +61,16 @@ def user_event(minutes):
 HEALTHY = [reply("Check-in: nothing new.", 60)]
 API_ERROR = [reply("API Error (500 upstream)", 60)]
 NO_CREDITS = [reply("Sorry: you are out of usage credits right now.", 60)]
+FIVE_HOUR_LIMIT = [reply("You've hit your 5-hour limit \xb7 resets 10:10pm (Asia/Jerusalem)", 60)]
+
+
+def pi_reply(text, minutes):
+    """A Pi transcript event: Pi writes "timestamp" where CCC writes "ts"."""
+    return {"type": "assistant", "timestamp": ts_before(minutes), "blocks": [{"kind": "text", "text": text}]}
+
+
+def pi_user_event(minutes):
+    return {"type": "user_text", "timestamp": ts_before(minutes), "text": "check-in"}
 PAUSE_ANSWER = {"choice": "Pause check-ins", "note": "", "by": "you", "ts": 1793000000.0}
 CLOSED_BY_US = {"choice": "other", "note": "recovered automatically", "by": "copilot-checkin", "ts": 1793000000.0}
 
@@ -67,8 +78,9 @@ CLOSED_BY_US = {"choice": "other", "note": "recovered automatically", "by": "cop
 class FakeNav:
     """get() router for the three Navigator endpoints the script reads."""
 
-    def __init__(self, open_ids=(), answered=None, copilot="claude:s1", events=None):
+    def __init__(self, open_ids=(), answered=None, copilot="claude:s1", events=None, pi_events=None):
         self.open_ids, self.answered, self.copilot, self.events = list(open_ids), dict(answered or {}), copilot, list(events or [])
+        self.pi_events = list(pi_events or [])
         self.paths = []
 
     def __call__(self, path):
@@ -81,6 +93,8 @@ class FakeNav:
             return {"copilot": {"key": self.copilot} if self.copilot else {}}
         if path.startswith("/api/conversations/"):
             return {"events": self.events}
+        if path.startswith("/api/pi/transcript"):
+            return {"events": self.pi_events}
         raise AssertionError("unexpected navigator call: " + path)
 
 
@@ -255,6 +269,70 @@ class AlertTests(CheckinCase):
         self.run_main()
         self.assertEqual(len(self.runs.argvs("ask")), 2)
         self.assertIn("last_alert", self.state_json())
+
+
+class PiCopilotTests(CheckinCase):
+    """A Pi co-pilot is read from /api/pi/transcript (CCC does not index Pi sessions)."""
+
+    def test_pi_transcript_is_read(self):
+        self.nav.copilot = "pi:p1"
+        self.nav.pi_events = [pi_reply("Check-in: nothing new.", 60)]
+        self.run_main()
+        self.assertTrue(self.last_line().startswith("sent to pi:p1"))
+        self.assertIn("/api/pi/transcript?sid=p1", self.nav.paths)
+        self.assertNotIn("/api/conversations/p1", self.nav.paths)
+
+    def test_pi_timestamp_counts_as_activity(self):
+        self.nav.copilot = "pi:p1"
+        self.nav.pi_events = [pi_reply("Check-in: nothing new.", 60), pi_user_event(5)]
+        self.run_main()
+        self.assertEqual(self.last_line(), "skip: co-pilot active 5 min ago")
+        self.assertEqual(self.runs.argvs("send"), [])
+
+    def test_pi_usage_limit_is_a_failure(self):
+        self.nav.copilot = "pi:p1"
+        self.nav.pi_events = FIVE_HOUR_LIMIT
+        self.run_main()
+        self.assertEqual(self.last_line(), "skip: last reply was an error 60 min ago")
+        self.assertEqual(len(self.runs.argvs("ask")), 1)          # the copilot-down alert went out
+        self.assertIn("hit your 5-hour limit", self.runs.argvs("ask")[0][6])
+
+
+class BrokenReadTests(CheckinCase):
+    """A slow or failing transcript read must not skip the cycle (the tree rebuild takes ~35 s cold)."""
+
+    def test_transcript_failure_still_sends(self):
+        def boom(path, *a, **kw):
+            if path.startswith("/api/pi/transcript"):
+                raise TimeoutError("timed out")
+            return self.nav(path)
+        with mock.patch.object(cc, "get", boom):
+            self.nav.copilot = "pi:p1"
+            self.run_main()
+        self.assertTrue(self.last_line().startswith("sent to pi:p1"))
+        self.assertEqual(len(self.runs.argvs("send")), 1)
+
+    def test_timeout_is_generous(self):
+        import inspect
+        default = inspect.signature(REAL_GET).parameters["timeout"].default
+        self.assertGreaterEqual(default, 60)
+
+
+class UsageErrorTests(CheckinCase):
+    """A model that is out of capacity counts as a failed reply (backoff + one alert)."""
+
+    def test_five_hour_limit_is_an_error(self):
+        self.nav.events = FIVE_HOUR_LIMIT
+        self.run_main()
+        self.assertEqual(self.last_line(), "skip: last reply was an error 60 min ago")
+        self.assertEqual(len(self.runs.argvs("ask")), 1)
+        self.assertIn("hit your 5-hour limit", self.runs.argvs("ask")[0][6])
+
+    def test_ordinary_report_is_not_an_error(self):
+        self.nav.events = [reply("Check-in: 6 of 8 at target. The 5-hour limit note is in the log.", 60)]
+        self.run_main()
+        self.assertTrue(self.last_line().startswith("sent to "))
+        self.assertEqual(self.runs.argvs("ask"), [])
 
 
 class PauseTests(CheckinCase):

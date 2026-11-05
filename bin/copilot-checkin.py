@@ -29,6 +29,7 @@ import socket
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 NAV_URL = os.environ.get("CCC_NAV_URL", "http://127.0.0.1:8095")
@@ -42,6 +43,11 @@ ALERT_ID = "copilot-down"            # decision that tells Uri check-ins are fai
 ALERT_MIN = 720         # minutes between copilot-down alerts
 PAUSE_CHOICE = "Pause check-ins"     # his answer that stops check-ins
 MAX_PER_DAY = 70        # sent check-ins per local calendar day
+# A reply that says the model is out of capacity counts as a failed check-in, so the
+# script backs off and tells Uri instead of sending into a session that cannot answer.
+USAGE_ERRORS = ("hit your 5-hour limit", "usage limit reached", "rate limit exceeded",
+                 "too many requests", "quota exceeded", "credit balance is too low",
+                 "insufficient credits", "out of usage credits")
 NET_URL = "https://api.anthropic.com"
 NET_TIMEOUT = 5         # seconds to wait for the network check
 WAKE_MIN = 45           # previous log line older than this means the Mac slept through slots
@@ -70,8 +76,10 @@ def log(msg):
         f.write("%s %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), msg))
 
 
-def get(path):
-    with urllib.request.urlopen(NAV_URL + path, timeout=20) as r:
+def get(path, timeout=60):
+    """GET a Navigator endpoint. The tree rebuild can take ~35 s on a cold cache, so the
+    default timeout is generous: a timed-out read must not skip a whole check-in cycle."""
+    with urllib.request.urlopen(NAV_URL + path, timeout=timeout) as r:
         return json.load(r)
 
 
@@ -106,21 +114,45 @@ def decisions():
             {str(x.get("id") or ""): (x.get("answer") or {}) for x in d.get("answered") or []})
 
 
+def is_usage_error(txt):
+    """True when a reply says the model cannot answer right now (API error, usage/credit limit)."""
+    t = " ".join((txt or "").split()).lower()
+    if not t:
+        return False
+    if t.startswith("api error"):
+        return True
+    return any(m in t for m in USAGE_ERRORS)
+
+
 def last_activity(key):
-    """(UTC datetime of the newest transcript event, whether the newest reply was an API/limit error, that reply's text)."""
-    sid = key.split(":", 1)[1]
-    ev = get("/api/conversations/" + sid).get("events") or []
+    """(UTC datetime of the newest transcript event, whether the newest reply was an API/limit error, that reply's text).
+
+    A Pi co-pilot is read from the Navigator's own transcript endpoint: CCC does not
+    index Pi sessions, so /api/conversations/ is empty for them. Pi events carry
+    "timestamp" where CCC events carry "ts" - both are accepted.
+    """
+    engine, _, sid = str(key or "").partition(":")
+    try:
+        if engine == "pi":
+            ev = get("/api/pi/transcript?sid=" + urllib.parse.quote(sid)).get("events") or []
+        else:
+            ev = get("/api/conversations/" + urllib.parse.quote(sid)).get("events") or []
+    except Exception:
+        return None, False, ""      # a slow or broken read must not skip the cycle
     when = None
     for e in reversed(ev):
-        ts = e.get("ts")
+        ts = e.get("ts") or e.get("timestamp")
         if ts:
-            when = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            break
+            try:
+                when = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                break
+            except ValueError:
+                continue
     failed, txt = False, ""
     for e in reversed(ev):
         if e.get("type") == "assistant":
             txt = " ".join(b.get("text") or "" for b in e.get("blocks") or [] if b.get("kind") == "text")
-            failed = txt.startswith("API Error") or "out of usage credits" in txt
+            failed = is_usage_error(txt)
             break
     return when, failed, txt
 
