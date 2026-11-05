@@ -115,5 +115,31 @@ class OpenInUi(unittest.TestCase):
         self.assertTrue(m, "POST /api/open-in must be Mac-only")
 
 
+class DecisionOpeners(unittest.TestCase):
+    def app(self, owners=None, copilot=""):
+        a = navigator.App.__new__(navigator.App)
+        a.state = mock.Mock()
+        a.state.snapshot.return_value = {"owners": owners or {}, "copilot": copilot}
+        return a
+
+    def test_asked_with_a_session(self):
+        self.assertEqual(self.app().decision_session({"session": "codex:abc", "source": "cdl-bridge-owner"}), "codex:abc")
+
+    def test_project_owner_is_found_by_its_source(self):
+        a = self.app(owners={"/Users/u/projects/cdl-bridge": "claude:own1", "/Users/u/projects/boardsBridge": "claude:own2"})
+        self.assertEqual(a.decision_session({"session": "", "source": "cdl-bridge-owner"}), "claude:own1")
+        self.assertEqual(a.decision_session({"asked_by": "boardsbridge-owner"}), "claude:own2")   # case does not matter
+        self.assertEqual(a.decision_session({"source": "shlav-bet-owner"}), "")
+
+    def test_copilot_and_unknown_sources(self):
+        a = self.app(copilot="claude:pilot")
+        self.assertEqual(a.decision_session({"source": "copilot"}), "claude:pilot")
+        self.assertEqual(a.decision_session({"source": "daily check 11-05"}), "")
+
+    def test_cards_carry_the_buttons_row(self):
+        self.assertIn('data-dopen="${esc(d.open_session)}"', HTML)
+        self.assertIn("fillDecisionOpeners();", HTML)
+
+
 if __name__ == "__main__":
     unittest.main()

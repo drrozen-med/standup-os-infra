@@ -2069,6 +2069,20 @@ class App:
                 logged = True
         return logged
 
+    def decision_session(self, d):
+        """The session a decision came from, so its card can open it: the key it was asked with, else the
+        co-pilot (source "copilot") or a project owner (source "<project>-owner"). "" when unknown."""
+        key = str(d.get("session") or "")
+        if key:
+            return key
+        src = str(d.get("source") or d.get("asked_by") or "")
+        snap = self.state.snapshot()
+        if src == "copilot":
+            return snap["copilot"] or ""
+        if src.endswith("-owner"):
+            return next((k for repo, k in (snap.get("owners") or {}).items() if owner_slug(repo).lower() == src[:-6].lower()), "")
+        return ""
+
     def owner(self, repo):
         """The tree's `owner` field for one project (None when it has no owner)."""
         key = self.state.snapshot()["owners"].get(repo)
@@ -2762,7 +2776,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/pi/run":
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/decisions":
-            return self._send(200, dict(self.app.inbox.list(), ok=True))
+            out = self.app.inbox.list()
+            for d in out.get("open") or []:
+                d["open_session"] = self.app.decision_session(d)
+            return self._send(200, dict(out, ok=True))
         if u.path == "/api/supervisor":
             return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/alerts":
