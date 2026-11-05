@@ -33,10 +33,24 @@ class OpenInTargets(unittest.TestCase):
         self.assertEqual(out, [{"id": "orca", "label": "Orca", "note": "vera-wt-ci"}])
         self.assertNotIn("url", out[0])
 
-    def test_claude_session_in_orca_gets_both(self):
+    def test_only_the_app_the_session_runs_in(self):
         with mock.patch.object(navigator, "desktop_links", return_value={"mac_url": "claude://claude.ai/epitaxy/local_abc12345"}):
             ids = [t["id"] for t in navigator.open_in_targets("claude:1", orca_workspace="x")]
-        self.assertEqual(ids, ["claude", "orca"])
+        self.assertEqual(ids, ["claude"])                      # started in the Claude app, even inside an Orca folder
+        with mock.patch.object(navigator, "desktop_links", return_value={}):
+            ids = [t["id"] for t in navigator.open_in_targets("claude:1", orca_workspace="x")]
+        self.assertEqual(ids, ["orca"])                        # a CLI session in an Orca terminal
+
+    def test_codex_app_thread_vs_codex_cli(self):
+        import tempfile
+        sid = "01a16ef4-bfc1-79d0-a86b-131df7bd9b7c"
+        with tempfile.TemporaryDirectory() as d:
+            app, cli = Path(d) / "a.jsonl", Path(d) / "c.jsonl"
+            app.write_text(json.dumps({"type": "session_meta", "payload": {"originator": "Codex Desktop"}}) + "\n")
+            cli.write_text(json.dumps({"type": "session_meta", "payload": {"originator": "codex_exec"}}) + "\n")
+            self.assertEqual([t["id"] for t in navigator.open_in_targets("codex:" + sid, "x", transcript=str(app))], ["codex"])
+            self.assertEqual([t["id"] for t in navigator.open_in_targets("codex:" + sid, "x", transcript=str(cli))], ["orca"])
+            self.assertEqual(navigator.open_in_targets("codex:" + sid, None, transcript=str(cli)), [])
 
     def test_away_from_the_mac_only_the_web_link_is_offered(self):
         links = {"mac_url": "claude://claude.ai/epitaxy/local_abc12345", "url": "https://claude.ai/code/session_X"}
