@@ -2750,6 +2750,18 @@ class Handler(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if u.path == "/api/remote/sessions":
             return self._remote_api(u.path, None)
+        if u.path == "/sw.js":   # offline service worker: must live at the root to cover the whole app
+            got = static_asset("sw.js")
+            if not got:
+                return self._send(404, {"error": "not found"})
+            self.send_response(200)
+            self.send_header("Content-Type", got[1])
+            self.send_header("Content-Length", str(len(got[0])))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Service-Worker-Allowed", "/")
+            self.end_headers()
+            self.wfile.write(got[0])
+            return
         if u.path.startswith("/__nav/"):
             name = u.path.rsplit("/", 1)[-1]
             if name.endswith(".mp3") and static_asset(name):
