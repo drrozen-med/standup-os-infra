@@ -87,13 +87,8 @@ self.addEventListener('fetch', (event) => {
     }));
     return;
   }
-  if (url.pathname.startsWith('/__nav/')) {                // static files: saved copy first, refresh behind it
-    event.respondWith((async () => {
-      const cached = await fromCache(SHELL_CACHE, req);
-      const refresh = fetch(req).then((res) => { if (res.ok) event.waitUntil(save(SHELL_CACHE, req, res.clone())); return res; });
-      if (cached) { event.waitUntil(refresh.catch(() => {})); return cached; }
-      return refresh;
-    })());
+  if (url.pathname.startsWith('/__nav/')) {                // static files: fresh first so a new version shows at once
+    event.respondWith(networkFirst(event, SHELL_CACHE, req, req));
     return;
   }
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/nav/v1/')) {
