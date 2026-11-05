@@ -651,6 +651,8 @@ class StaticAssets(unittest.TestCase):
         self.assertIn("if (questions.length > 1 || questions.some(", js)
         # one single-choice question answers on click
         self.assertIn("if (questions.length === 1) { answerAsk(", js)
+        # an answered card does not pop back while the session catches up
+        self.assertIn("answered.sig === askSig", js)
         # a long card scrolls and keeps Send in reach
         self.assertIn("bottom.className = 'dopts ask-send';", js)
         # a poll with the same question keeps the picks

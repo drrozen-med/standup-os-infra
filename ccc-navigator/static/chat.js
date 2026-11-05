@@ -441,6 +441,7 @@
       if (!data || !data.source) { hideAskCard(); return; }
       if (engine === 'codex') { hideAskCard(); return; }
       var askSig = JSON.stringify(data);
+      if (answered && answered.sig === askSig && Date.now() - answered.at < 90000) { hideAskCard(); return; }   // just answered: the session has not caught up yet
       if (askState && askState.sig === askSig) return;   // same question on a poll: keep Uri's picks and typing
       askCard.innerHTML = '';
       askCard.className = 'ask-card dcard';
@@ -585,7 +586,9 @@
       hideAskCard();
     }
 
+    var answered = null;
     function answerAsk(source, label, message, answers) {
+      var sentSig = askState && askState.sig;
       var text = message || label || null;
       if (answers) text = null;
       fetch('/api/ask/answer', {
@@ -599,6 +602,7 @@
           return d;
         });
       }).then(function () {
+        if (sentSig) answered = { sig: sentSig, at: Date.now() };
         hideAskCard();
         var sent = text || (answers ? (function(){ var parts=[]; (answers||[]).forEach(function(a){ if(a.text) parts.push(a.text); }); return parts.join(', '); })() : (label||''));
         var p = { id: ++seq, text: sent, state: 'sent', sentAt: Date.now() };
