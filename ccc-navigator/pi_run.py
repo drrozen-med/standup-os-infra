@@ -96,6 +96,11 @@ def send(pi_dir, sid, text):
     binary = pi_bin()
     if not binary:
         return {"ok": False, "error": "the pi command was not found (set PI_BIN)"}
+    with _lock:
+        for old, v in _runs.items():
+            if v["sid"] == sid and v["proc"].poll() is None:
+                # Two Pi processes on one session file interleave their turns.
+                return {"ok": False, "error": "a Pi run for this session is already in progress"}
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     run_id = "%s-%d" % (sid[:8], int(time.time() * 1000))
     log = RUN_DIR / (run_id + ".log")

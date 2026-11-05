@@ -65,6 +65,21 @@ class PiRunTests(unittest.TestCase):
     def test_unknown_run(self):
         self.assertFalse(pi_run.status("nope")["ok"])
 
+    def test_a_second_run_for_the_same_session_is_refused(self):
+        slow = Path(self.tmp.name) / "slow-pi"
+        slow.write_text('#!/bin/sh\nsleep 30\n')
+        slow.chmod(slow.stat().st_mode | stat.S_IEXEC)
+        os.environ["PI_BIN"] = str(slow)
+        first = pi_run.send(self.sessions, SID, "hello there")
+        self.assertTrue(first["ok"], first)
+        second = pi_run.send(self.sessions, SID, "and again")
+        self.assertFalse(second["ok"])
+        self.assertIn("already in progress", second["error"])
+        try:
+            os.kill(first["pid"], 9)
+        except OSError:
+            pass
+
 
 if __name__ == "__main__":
     unittest.main()
