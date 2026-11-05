@@ -440,6 +440,8 @@
       if (!askCard) return;
       if (!data || !data.source) { hideAskCard(); return; }
       if (engine === 'codex') { hideAskCard(); return; }
+      var askSig = JSON.stringify(data);
+      if (askState && askState.sig === askSig) return;   // same question on a poll: keep Uri's picks and typing
       askCard.innerHTML = '';
       askCard.className = 'ask-card dcard';
       if (data.source === 'wrap') {
@@ -471,7 +473,7 @@
         opts.appendChild(other);
         askCard.appendChild(opts);
         askCard.style.display = 'flex';
-        askState = { source: data.source };
+        askState = { source: data.source, sig: askSig };
         return;
       }
       if (data.source === 'menu' || data.source === 'relay') {
@@ -519,6 +521,7 @@
                 else { selections[qi].push(o.label); ob.style.outline = '2px solid var(--primary)'; }
               } else {
                 selections[qi] = o.label;
+                if (questions.length === 1) { answerAsk(data.source, null, null, [{ index: 0, text: o.label }]); return; }
                 // reset others
                 var btns = opts.querySelectorAll('.dopt');
                 btns.forEach(function (x) { x.style.outline = 'none'; });
@@ -533,18 +536,21 @@
         askCard.appendChild(qwrap);
         var bottom = document.createElement('div');
         bottom.className = 'dopts';
-        if (questions.some(function (q){ return q.multiSelect; })) {
+        // one single-choice question sends on click; anything else needs a Send after the picks
+        if (questions.length > 1 || questions.some(function (q){ return q.multiSelect; })) {
           var sendm = document.createElement('button');
           sendm.type = 'button';
           sendm.className = 'dopt';
-          sendm.textContent = 'Send';
+          sendm.style.fontWeight = '700';
+          sendm.textContent = questions.length > 1 ? 'Send answers' : 'Send';
           sendm.addEventListener('click', function () {
             var ans = [];
             questions.forEach(function (qq, qi) {
+              var qn = qq.header || qq.question || '';
               if (qq.multiSelect) {
-                ans.push({ index: qi, text: (selections[qi] || []).join(', ') });
+                ans.push({ index: qi, text: (selections[qi] || []).join(', '), q: qn });
               } else if (selections[qi]) {
-                ans.push({ index: qi, text: selections[qi] });
+                ans.push({ index: qi, text: selections[qi], q: qn });
               }
             });
             answerAsk(data.source, null, null, ans);
@@ -573,7 +579,7 @@
         bottom.appendChild(other);
         askCard.appendChild(bottom);
         askCard.style.display = 'flex';
-        askState = { source: data.source, questions: questions };
+        askState = { source: data.source, questions: questions, sig: askSig };
         return;
       }
       hideAskCard();

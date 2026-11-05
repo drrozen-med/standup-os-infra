@@ -3160,8 +3160,9 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(a, dict):
                             t = a.get('text') or a.get('label')
                             if t:
-                                parts.append(str(t))
-                    text = ', '.join(parts)
+                                q = str(a.get('q') or '').strip() if len(answers) > 1 else ''
+                                parts.append("%s: %s" % (q, t) if q else str(t))
+                    text = '; '.join(parts)   # several questions: "Disk: Delete all 6; Mac CI: Install here"
                 if text is None:
                     text = ''
                 resd = self.app.deliver(key, str(text))
