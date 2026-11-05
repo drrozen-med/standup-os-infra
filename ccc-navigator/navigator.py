@@ -52,6 +52,10 @@ import voice
 HERE = Path(__file__).resolve().parent
 HOME = str(Path.home())
 WINDOWS = {"now": 3600, "1d": 86400, "7d": 7 * 86400, "all": None}
+# The co-pilot choices Uri can flip between from the menu: Pi on his MiniMax
+# subscription, or Pi on a free model.
+COPILOT_MODELS = (("minimax/MiniMax-M3", "Pi · MiniMax M3 (subscription)"),
+                  ("opencode-go/iceman-contributor-free", "Pi · opencode-go (free)"))
 UNGROUPED = ""
 HIDE_LOG_MAX = 30
 # Auto-resurface lifts a tombstone whose subject is live again. Kill switch in
@@ -201,6 +205,9 @@ class State:
         with self.lock:
             before = self.data["copilot"]
             self.data["copilot"] = (key or "").strip()[:200]
+            engine = self.data["copilot"].split(":", 1)[0].lower()
+            if engine:                       # remember the last co-pilot per engine, so the menu can offer both
+                self.data.setdefault("copilot_by_engine", {})[engine] = self.data["copilot"]
             self._save()
         return before
 
@@ -2234,7 +2241,47 @@ class App:
             links = desktop_links(key[7:])
             out.update(links)
             out["name"] = links.get("title") or out["name"]     # the desktop title is the one Uri sees
+        elif key.startswith("pi:"):
+            self.state.set_copilot(key)                          # backfill copilot_by_engine
+            out["model"] = self.copilot_model(key)
+        out["options"] = self.copilot_options()
         return out
+
+    def copilot_model(self, key):
+        """The model a Pi co-pilot resumes with, as 'provider/model'."""
+        if not str(key or "").startswith("pi:"):
+            return None
+        pair = pi_run.session_model(self.args.pi_dir, key.split(":", 1)[1])
+        return ("%s/%s" % pair) if pair and pair[0] and pair[1] else None
+
+    def copilot_options(self):
+        """The quick-switch choices Uri can pick from the menu: Pi on a given model, or Claude Code."""
+        snap = self.state.snapshot()
+        pi_key = (snap.get("copilot_by_engine") or {}).get("pi") or (snap.get("copilot") if str(snap.get("copilot") or "").startswith("pi:") else "")
+        out = []
+        if pi_key:
+            for model, label in COPILOT_MODELS:
+                if self.pi_model_available(model):
+                    out.append({"key": pi_key, "engine": "pi", "model": model, "label": label})
+        claude_key = (snap.get("copilot_by_engine") or {}).get("claude")
+        if claude_key:
+            out.append({"key": claude_key, "engine": "claude", "model": "",
+                        "label": "Claude Code · %s" % (self.state.snapshot()["nicknames"].get(claude_key) or "last session")})
+        return out
+
+    @staticmethod
+    def pi_model_available(model):
+        """True when Pi has that provider/model configured (models.json)."""
+        provider, _, mid = str(model or "").partition("/")
+        if not provider or not mid:
+            return False
+        try:
+            cfg = json.loads(Path(os.path.expanduser("~/.pi/agent/models.json")).read_text())
+        except (OSError, ValueError):
+            return False
+        models = ((cfg.get("providers") or {}).get(provider) or {}).get("models") or {}
+        names = list(models.keys()) if isinstance(models, dict) else [m.get("id") for m in models]
+        return mid in names
 
     def desktop_group_list(self):
         """Every Claude desktop sidebar group with its session count and the project it files under."""
@@ -3102,12 +3149,23 @@ class Handler(BaseHTTPRequestHandler):
                                     "repo": str(body.get("repo") or "")})
         elif p == "/api/copilot":
             key = str(body.get("key") or "").strip()
+            model = str(body.get("model") or "").strip()
             if key and not re.match(r"^[a-z][a-z0-9_-]*:\S+$", key):
                 return self._send(400, {"ok": False, "error": "key must be <engine>:<id>"})
+            if model and not re.match(r"^[A-Za-z0-9_.-]+/\S+$", model):
+                return self._send(400, {"ok": False, "error": "model must be <provider>/<id>"})
             before = st.set_copilot(key)
-            cid = self.app.changes.record(self._actor(), "copilot.set", {"key": key},
-                                          {"copilot": {"key": before or None}}, {"copilot": {"key": key or None}})
-            return self._send(200, {"ok": True, "copilot": self.app.copilot(), "change": cid})
+            switched = None
+            if model and key.startswith("pi:"):
+                provider, _, mid = model.partition("/")
+                switched = pi_run.set_model(self.app.args.pi_dir, key.split(":", 1)[1], provider, mid)
+                if not switched.get("ok"):
+                    return self._send(400, {"ok": False, "error": switched.get("error"),
+                                            "copilot": self.app.copilot()})
+            cid = self.app.changes.record(self._actor(), "copilot.set", {"key": key, "model": model or None},
+                                          {"copilot": {"key": before or None}},
+                                          {"copilot": {"key": key or None, "model": model or None}})
+            return self._send(200, {"ok": True, "copilot": self.app.copilot(), "model": switched, "change": cid})
         elif p == "/api/owner":
             try:
                 res = actions.dispatch(self, "project.owner", {"repo": body.get("repo"), "key": body.get("key") or ""})
