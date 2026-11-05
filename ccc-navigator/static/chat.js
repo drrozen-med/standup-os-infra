@@ -535,7 +535,7 @@
         });
         askCard.appendChild(qwrap);
         var bottom = document.createElement('div');
-        bottom.className = 'dopts';
+        bottom.className = 'dopts ask-send';
         // one single-choice question sends on click; anything else needs a Send after the picks
         if (questions.length > 1 || questions.some(function (q){ return q.multiSelect; })) {
           var sendm = document.createElement('button');
