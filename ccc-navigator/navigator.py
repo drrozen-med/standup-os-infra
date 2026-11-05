@@ -685,24 +685,34 @@ CODEX_THREAD_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 ORCA_BIN = "/usr/local/bin/orca"
 
 
-def open_in_targets(key, orca_workspace=None, remote=False):
-    """Apps on this Mac that can show a session: [{id, label, url?, note?}].
-    url is a deep link (claude:// and codex:// open the exact session). Orca has no deep link, so it is
-    launch-only and carries the workspace name as a note. Away from the Mac only the claude.ai link is useful."""
+def codex_originator(path):
+    """Who started a Codex thread, from its rollout's first line: "Codex Desktop" (the app) or a CLI name."""
+    try:
+        with open(Path(path).expanduser(), encoding="utf-8", errors="replace") as fh:
+            m = re.search(r'"originator"\s*:\s*"([^"]*)"', fh.read(8192))
+        return m.group(1) if m else ""
+    except (OSError, TypeError):
+        return ""
+
+
+def open_in_targets(key, orca_workspace=None, remote=False, transcript=None):
+    """The one app a session runs in, as [{id, label, url?, note?}] (empty when none can show it).
+    A Claude session the Claude app knows opens there; a Codex thread the Codex app started opens there
+    (codex:// deep link); anything else in an Orca worktree was run from an Orca terminal, so Orca (no deep
+    link: launch-only, the workspace name as a note). Away from the Mac only the claude.ai link is useful."""
     engine, _, sid = str(key or "").partition(":")
-    out = []
     if engine == "claude" and sid:
         links = desktop_links(sid)
-        if remote:
-            if links.get("url"):
-                out.append({"id": "claude", "label": "Claude", "url": links["url"]})
-        elif links.get("mac_url"):
-            out.append({"id": "claude", "label": "Claude", "url": links["mac_url"]})
-    elif engine == "codex" and not remote and CODEX_THREAD_RE.match(sid):
-        out.append({"id": "codex", "label": "Codex", "url": "codex://threads/" + sid})
+        if links.get("mac_url") or links.get("url"):
+            link = links.get("url") if remote else links.get("mac_url")
+            return [{"id": "claude", "label": "Claude", "url": link}] if link else []
+    if engine == "codex" and CODEX_THREAD_RE.match(sid) and not remote:
+        made_by = codex_originator(transcript) if transcript else ""
+        if "desktop" in made_by.lower() or (not made_by and not orca_workspace):
+            return [{"id": "codex", "label": "Codex", "url": "codex://threads/" + sid}]
     if orca_workspace and not remote:
-        out.append({"id": "orca", "label": "Orca", "note": str(orca_workspace)[:80]})
-    return out
+        return [{"id": "orca", "label": "Orca", "note": str(orca_workspace)[:80]}]
+    return []
 
 
 def _orca_run(args, binary=ORCA_BIN, timeout=25):
@@ -2828,7 +2838,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/open-in":
             q = urllib.parse.parse_qs(u.query)
             one = lambda k: (q.get(k) or [""])[0]
-            return self._send(200, {"targets": open_in_targets(one("session"), one("orca") or None, self._rem)})
+            _, transcript, _, _ = self.app._find_row_and_transcript(one("session"))
+            return self._send(200, {"targets": open_in_targets(one("session"), one("orca") or None, self._rem, transcript)})
         if u.path == "/api/notes":
             key = (urllib.parse.parse_qs(u.query).get("key") or [""])[0]
             notes = self.app.state.snapshot()["notes"]
