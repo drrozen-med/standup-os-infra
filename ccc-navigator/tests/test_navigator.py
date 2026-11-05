@@ -645,6 +645,15 @@ class StaticAssets(unittest.TestCase):
         self.assertIn(b"NavChat", js[0])
         self.assertEqual(js[1], "application/javascript; charset=utf-8")
 
+    def test_question_card_can_be_answered(self):
+        js = navigator.static_asset("chat.js")[0].decode()
+        # several questions get a Send button (2026-11-05: picks did nothing without one)
+        self.assertIn("if (questions.length > 1 || questions.some(", js)
+        # one single-choice question answers on click
+        self.assertIn("if (questions.length === 1) { answerAsk(", js)
+        # a poll with the same question keeps the picks
+        self.assertIn("if (askState && askState.sig === askSig) return;", js)
+
     def test_unknown_name_is_refused(self):
         self.assertIsNone(navigator.static_asset("nope.css"))
         self.assertIsNone(navigator.static_asset(""))
