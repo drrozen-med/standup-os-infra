@@ -619,6 +619,24 @@ body.has-alert #drawer{top:var(--alert-h)}
     await refresh(true);
   }
 
+  async function setCopilot(key, model) {
+    // Switch (or clear) Uri's co-pilot, optionally on a specific model. Reports the server's reason on failure.
+    const body = { key: key || '' };
+    if (model) body.model = model;
+    try {
+      const r = await fetch('/api/copilot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { toast((data && data.error) || 'Could not switch the co-pilot'); return false; }
+      if (data && data.model && data.model.pending) toast('Co-pilot model switches when the current turn finishes');
+      else toast(key ? 'Co-pilot switched' : 'Co-pilot cleared');
+      await refresh(true);
+      return true;
+    } catch (e) {
+      toast('Could not switch the co-pilot: ' + (e && e.message || e));
+      return false;
+    }
+  }
+
   async function act(name, body) {
     try {
       const r = await fetch('/nav/v1/actions/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -1300,13 +1318,19 @@ body.has-alert #drawer{top:var(--alert-h)}
   function openCopilotDialog() {
     const cp = tree && tree.copilot;
     const curName = cp ? ((cp && flatSessions().find(x => x.s.key === cp.key)) ? ((flatSessions().find(x => x.s.key === cp.key).s.nick || flatSessions().find(x => x.s.key === cp.key).s.original)) : (cp.name || cp.key)) : 'None';
+    const cpOpts = (cp && cp.options) || [];
     dialog((box, close) => {
       box.innerHTML = `<div class="dlg-t">Co-pilot session</div>
-        <div class="dlg-h">Current: ${esc(curName)}</div>
+        <div class="dlg-h">Current: ${esc(curName)}${cp && cp.model ? ' · ' + esc(cp.model) : ''}</div>
+        ${cpOpts.length ? `<div class="dlg-h" style="margin-bottom:4px">Quick switch</div>
+        <div id="cpQuick" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">${cpOpts.map(o => `<button type="button" class="it" data-cp-key="${esc(o.key)}" data-cp-model="${esc(o.model || '')}" style="text-align:left">${esc(o.label)}</button>`).join('')}</div>` : ''}
         <input type="text" id="cpFilter" class="dlg-in" placeholder="Filter sessions">
         <div id="cpList" class="cp-list" style="max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:4px;margin:8px 0"></div>
         <button type="button" class="it" id="cpStop">Stop using a Co-pilot</button>
         <div class="dlg-b"><button type="button" class="dlg-x">Cancel</button></div>`;
+      box.querySelectorAll('#cpQuick [data-cp-key]').forEach(b => b.addEventListener('click', async () => {
+        if (await setCopilot(b.dataset.cpKey, b.dataset.cpModel)) close(null);
+      }));
       const listEl = box.querySelector('#cpList');
       const filterEl = box.querySelector('#cpFilter');
       const render = () => {
@@ -2314,6 +2338,11 @@ body.has-alert #drawer{top:var(--alert-h)}
     $('#updDot').hidden = !fresh;
     const at = upd.checked ? new Date(upd.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'not yet';
     const mine = tree ? (tree.user_hidden || 0) : 0;
+    const cp = tree && tree.copilot;
+    const cpOpts = (cp && cp.options) || [];
+    const cpNow = cp ? ((cp.name || cp.key) + (cp.model ? ' · ' + cp.model : '')) : 'None';
+    const cpSwitches = (cpOpts.length ? cpOpts.map(o => `<button type="button" class="it cp-sw" data-cp-key="${esc(o.key)}" data-cp-model="${esc(o.model || '')}">${esc(o.label)}</button>`).join('') : '') +
+      (cp ? '<button type="button" class="it cp-sw" data-cp-key="">Stop being my co-pilot</button>' : '');
     d.innerHTML = `<h3>Navigator</h3>
       <div class="dv">Version ${esc(APP_VERSION)}${fresh ? ' · <b>' + esc(upd.latest) + ' is ready</b>' : ''}<br>Last checked ${esc(at)} · checks every 15 min</div>
       ${fresh ? '<button type="button" class="it hl" data-dr="reload">Update now</button>' : ''}
@@ -2321,7 +2350,10 @@ body.has-alert #drawer{top:var(--alert-h)}
       <button type="button" class="it" data-dr="mine">${ui.showMine ? 'Hide what I hid' : 'Show what I hid'}<span>${mine}</span></button>
       <button type="button" class="it" data-dr="bg">${ui.showHidden ? 'Hide background runs list' : 'Show background runs list'}</button>
       <button type="button" class="it" data-dr="dgroups">Claude desktop groups…</button>
-      <button type="button" class="it" data-dr="copilot">Co-pilot session…</button>
+      <div class="rht">Co-pilot</div>
+      <div class="dv" id="cpNow">Now: ${esc(cpNow)}</div>
+      <div id="cpSwitches" style="display:flex;flex-direction:column;gap:4px;margin:6px 0">${cpSwitches}</div>
+      <button type="button" class="it" data-dr="copilot">Other co-pilot sessions…</button>
       <button type="button" class="it" data-dr="changes">Recent changes…</button>
       <div class="rh"><div class="rht">Recently hidden</div><div id="hideLog" class="dv">Loading…</div></div>
       <div class="hint">Hid something by mistake? Tap <b>Show what I hid</b>: hidden items come back dimmed. Tap the eye on one to unhide it. Right after hiding, the <b>Undo</b> at the bottom also works.</div>`;
@@ -2338,6 +2370,8 @@ body.has-alert #drawer{top:var(--alert-h)}
   $('#drawerScrim').addEventListener('click', () => openDrawer(false));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('drawer-open')) openDrawer(false); });
   $('#drawer').addEventListener('click', e => {
+    const sw = e.target.closest('[data-cp-key]');
+    if (sw) { const ok = setCopilot(sw.dataset.cpKey, sw.dataset.cpModel); return ok.then(okd => { if (okd) openDrawer(false); }); }
     const u = e.target.closest('[data-undo]'); if (u) { u.disabled = true; return undoHide(u.dataset.undo).then(loadHideLog); }
     const b = e.target.closest('[data-dr]'); if (!b) return;
     const a = b.dataset.dr;

@@ -508,6 +508,7 @@ def build_parser():
     cpx = cp.add_mutually_exclusive_group()
     cpx.add_argument("--set", metavar="KEY", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
     cpx.add_argument("--clear", action="store_true", help="remove the Co-pilot button")
+    cp.add_argument("--model", metavar="PROVIDER/ID", help="with --set: the model a Pi co-pilot runs on, e.g. minimax/MiniMax-M3")
 
     ow = subparsers.add_parser("owner", help="project owners: set, clear or list each project's AI owner session")
     ow_sub = ow.add_subparsers(dest="owner_cmd", required=True)
@@ -1107,7 +1108,12 @@ def cmd_copilot(args, client):
         key = args.set or ""
         if key.startswith("local_"):          # Claude desktop id -> CLI session key
             key = desktop_to_key(key)
-        res = client.post("/api/copilot", {"key": key})
+        body = {"key": key}
+        if getattr(args, "model", None):
+            body["model"] = args.model
+        res = client.post("/api/copilot", body)
+        if res.get("ok") is False:
+            raise UsageError(res.get("error") or "could not set the co-pilot")
         print_json(res.get("copilot"))
     else:
         print_json(client.tree().get("copilot"))
