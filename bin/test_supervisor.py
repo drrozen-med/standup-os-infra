@@ -459,7 +459,7 @@ class Register(Base):
         owner.append_log("alpha", "owner", "x" * 400)
         self.run_cycle()
         md = self.text("digest.md")
-        self.assertIn("## alpha [working] idle 40 min ago", md)
+        self.assertIn("## alpha [claude/working] idle 40 min ago", md)
         self.assertIn("Woke this cycle: alpha (keep-moving).", md)
         self.assertIn("...", md)                    # long log lines are cut in the md
         line = self.cycles()[-1]
@@ -725,6 +725,174 @@ class Manual(Base):
         self.assertEqual(argv[:4], [sys.executable, sup.NAV, "send", K1])
         self.assertTrue(sup.NAV.endswith(os.path.join("ccc-navigator", "nav.py")))
         self.assertEqual(kw["env"]["NAV_ACTOR"], "supervisor")
+
+
+
+class Engines(Base):
+    """ENGINE-SPEC: Outsourcerer engine (opencode/devin) vs claude."""
+
+    def setUp(self):
+        super().setUp()
+        self.osrc = "/fake/outsourcerer.sh"
+        self.job_states = {}    # job_id -> status string
+        self.canceled = []
+        self._p_find = mock.patch.object(sup, "find_outsourcerer", return_value=self.osrc)
+        self._p_find.start(); self.addCleanup(self._p_find.stop)
+        self._p_js = mock.patch.object(sup, "job_status", side_effect=lambda jid, *a, **k: self.job_states.get(jid))
+        self._p_js.start(); self.addCleanup(self._p_js.stop)
+        self._p_cancel = mock.patch.object(sup, "cancel_job", side_effect=self._fake_cancel)
+        self._p_cancel.start(); self.addCleanup(self._p_cancel.stop)
+        # make briefs cheap/deterministic
+        self._p_brief = mock.patch.object(sup, "brief_text", side_effect=lambda sl: "BRIEF:%s" % sl)
+        self._p_brief.start(); self.addCleanup(self._p_brief.stop)
+        self.runs.stdout = "job-abc123\n[outsourcerer] launched"
+
+    def _fake_cancel(self, jid, *a, **k):
+        self.canceled.append(jid)
+        self.job_states[jid] = "canceled"
+        return 0, "canceled"
+
+    def set_engine(self, slug, eng):
+        d = os.path.join(self.owners_dir, slug)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "engine"), "w") as f:
+            f.write(eng + "\n")
+
+    def launches(self):
+        # engine launches go straight to subprocess.run (not via nav.py send path argv[2]=="send")
+        return [a for a, _ in self.runs.calls if self.osrc in a]
+
+    def test_opencode_launch_command_and_job_tracking(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        self.run_cycle()
+        self.assertEqual(self.sent_to(), [])  # no nav send
+        ls = self.launches()
+        self.assertEqual(len(ls), 1)
+        argv = ls[0]
+        self.assertEqual(argv[0], self.osrc)
+        self.assertEqual(argv[1:7], ["--provider", "opencode", "bg", "edit", "-m", "opencode-go/iceman-contributor-free"])
+        prompt = argv[7]
+        self.assertIn("BRIEF:alpha", prompt)
+        self.assertIn("[Supervisor wake: keep-moving]", prompt)
+        self.assertIn(sup.ENGINE_CONSTRAINT, prompt)
+        # cwd is the project folder when it exists; env has OSRC_REQUIRE_INTERACTIVE=0
+        _, kw = [c for c in self.runs.calls if self.osrc in c[0]][0]
+        self.assertEqual(kw["env"]["OSRC_REQUIRE_INTERACTIVE"], "0")
+        st = sup.load_state()["projects"]["alpha"]
+        self.assertEqual(st["job_id"], "job-abc123")
+        self.assertEqual(st["engine"], "opencode")
+        self.assertIn("started_at", st)
+        self.assertEqual(self.reg()["engine"], "opencode")
+        self.assertEqual(self.reg()["job"]["id"], "job-abc123")
+        self.assertIn("woke owner (opencode, job job-abc123): keep-moving", self.log_md())
+
+    def test_devin_launch_command(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "devin")
+        self.run_cycle()
+        ls = self.launches()
+        self.assertEqual(len(ls), 1)
+        argv = ls[0]
+        self.assertEqual(argv[1:5], ["--provider", "devin", "bg", "-m"])
+        self.assertEqual(argv[5], "swe-2-high")
+        self.assertIn("BRIEF:alpha", argv[6])
+        self.assertEqual(sup.load_state()["projects"]["alpha"]["engine"], "devin")
+
+    def test_busy_while_job_running_then_free_after(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        self.run_cycle()
+        self.assertEqual(len(self.launches()), 1)
+        self.job_states["job-abc123"] = "running"
+        self.run_cycle(NOON + 40 * MIN)
+        self.assertEqual(len(self.launches()), 1)  # no second launch
+        self.assertIn("job running", self.cycles()[-1])
+        self.assertTrue(self.reg()["working_now"])
+        self.job_states["job-abc123"] = "done"
+        # status changed? still idle/wakeable by rules; owner may need wake depending on state
+        self.run_cycle(NOON + 80 * MIN)
+        # job done means not running; it may wake again (keep-moving still due) -> launches again
+        self.assertGreaterEqual(len(self.launches()), 2)
+
+    def test_hung_job_cancelled(self):
+        self.add_owner(P1, K1, status(), idle_min=10)
+        self.set_engine("alpha", "opencode")
+        # seed a running job started 100 minutes ago
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"job_id": "job-hung", "started_at": NOON - 100 * MIN,
+                                               "engine": "opencode"}}})
+        self.job_states["job-hung"] = "running"
+        self.run_cycle()
+        self.assertEqual(self.canceled, ["job-hung"])
+        ps = sup.load_state()["projects"]["alpha"]
+        self.assertNotIn("job_id", ps)
+        self.assertEqual(ps.get("last_job", {}).get("ended"), "hung-canceled")
+
+    def test_launch_failure_counting_and_alert_on_third(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        self.runs.code = 1
+        self.runs.stdout = ""
+        self.runs.stderr = "" if False else ""
+        # FakeRun always returns stdout/stderr attrs we set? it uses self.stdout
+        self.runs.stdout = "boom"
+        self.run_cycle()
+        self.assertIn("Outsourcerer launch failed (1/3)", self.cycles()[-2] if "cycle" in self.cycles()[-1] else " ".join(self.cycles()))
+        self.assertIn("[supervisor] Outsourcerer launch failed (1/3)", self.log_md())
+        self.assertEqual(self.runs.raises(), [])
+        self.run_cycle(NOON + 40 * MIN)
+        self.assertEqual(self.runs.raises(), [])
+        self.run_cycle(NOON + 80 * MIN)
+        # 3rd consecutive -> loud alert
+        raised = self.runs.raises()
+        self.assertTrue(any("supervisor-launch-fail:alpha" in " ".join(a) for a in raised),
+                        "expected launch-fail alert, got %s" % (raised,))
+        self.assertEqual(sup.load_state()["projects"]["alpha"]["launch_failures"], 3)
+
+    def test_launch_success_resets_failure_count(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"launch_failures": 2, "last_wake": {"ts": 0}}}})
+        self.runs.stdout = "job-ok1"
+        self.run_cycle()
+        self.assertEqual(sup.load_state()["projects"]["alpha"]["launch_failures"], 0)
+
+    def test_claude_engine_unchanged_nav_send(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "claude")
+        self.run_cycle()
+        self.assertEqual(self.sent_to(), [K1])
+        self.assertEqual(self.launches(), [])
+
+    def test_supervisor_engine_env_override(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "claude")  # file says claude
+        with mock.patch.dict(os.environ, {"SUPERVISOR_ENGINE": "devin"}):
+            self.assertEqual(sup.engine_of("alpha"), "devin")
+            self.run_cycle()
+        self.assertEqual(len(self.launches()), 1)
+        self.assertIn("--provider", self.launches()[0])
+        self.assertEqual(self.launches()[0][self.launches()[0].index("--provider") + 1], "devin")
+
+    def test_engine_cli_set_and_all(self):
+        os.makedirs(os.path.join(self.owners_dir, "alpha"), exist_ok=True)
+        os.makedirs(os.path.join(self.owners_dir, "beta"), exist_ok=True)
+        with mock.patch.object(sup, "resolve_project", return_value=(P1, {"key": K1})), \
+             mock.patch.object(sup, "get", self.nav):
+            res = sup.engine_cmd("alpha", "opencode")
+        self.assertTrue(res["ok"])
+        with open(os.path.join(self.owners_dir, "alpha", "engine")) as f:
+            self.assertEqual(f.read().strip(), "opencode")
+        res = sup.engine_cmd("all", "devin")
+        self.assertTrue(res["ok"])
+        self.assertGreaterEqual(res["count"], 2)
+        for sl in ("alpha", "beta"):
+            with open(os.path.join(self.owners_dir, sl, "engine")) as f:
+                self.assertEqual(f.read().strip(), "devin")
 
 
 if __name__ == "__main__":

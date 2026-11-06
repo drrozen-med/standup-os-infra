@@ -29,6 +29,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -58,6 +59,21 @@ ALERT_Q_CHARS = 90      # question text in an alert title
 ALERT_P1_AGE = 24 * 3600   # a P1 decision gets loud only after it has waited this long (owners mark many things P1)
 ALERT_MAX_NEW = 1       # new loud alerts raised per cycle, so the first live cycle is not a wall of chimes
 
+ENGINES = ("claude", "opencode", "devin")
+ENGINE_DEFAULT = "claude"
+HUNG_MIN = 90           # a non-claude job running longer than this is treated as hung and cancelled
+LAUNCH_FAIL_ALERT = 3   # consecutive Outsourcerer launch failures before one loud alert
+OSRC_CACHE_GLOB = os.path.expanduser("~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh")
+ENGINE_CONSTRAINT = (
+    "Never edit, commit in, or switch branches of the main checkout; work in your own git worktree. "
+    "You are one turn: do the work, then run owner.py status set, then stop. "
+    "Use only Outsourcerer-delegable tools; never spend money; messages to real people are Uri's."
+)
+ENGINE_CMD = {
+    "opencode": ["--provider", "opencode", "bg", "edit", "-m", "opencode-go/iceman-contributor-free"],
+    "devin": ["--provider", "devin", "bg", "-m", "swe-2-high"],
+}
+
 
 def sup_dir():
     return os.environ.get("SUPERVISOR_DIR") or os.path.expanduser("~/.ccc-navigator/supervisor")
@@ -78,6 +94,114 @@ def actor():
 
 def dry_env():
     return os.environ.get("SUPERVISOR_DRY_RUN", "") not in ("", "0")
+
+
+
+# ---------------------------------------------------------------- engines (Outsourcerer; spec ENGINE-SPEC.md)
+
+def engine_of(slug):
+    """Per-owner engine: SUPERVISOR_ENGINE overrides all (tests), else owners/<slug>/engine, else claude."""
+    override = os.environ.get("SUPERVISOR_ENGINE", "").strip()
+    if override:
+        return override if override in ENGINES else ENGINE_DEFAULT
+    try:
+        with open(os.path.join(owner.folder(slug), "engine")) as f:
+            eng = f.read().strip().split()[0]
+        return eng if eng in ENGINES else ENGINE_DEFAULT
+    except (OSError, IndexError):
+        return ENGINE_DEFAULT
+
+
+def set_engine_value(slug, eng):
+    """Write owners/<slug>/engine (one line). eng in ENGINES."""
+    if eng not in ENGINES:
+        raise ValueError("engine must be one of: %s" % ", ".join(ENGINES))
+    d = owner.folder(slug)
+    os.makedirs(d, exist_ok=True)
+    owner.write_atomic(os.path.join(d, "engine"), eng + "\n")
+    return eng
+
+
+def find_outsourcerer():
+    """Latest outsourcerer.sh from the plugin cache glob, or None."""
+    import glob
+    hits = sorted(glob.glob(OSRC_CACHE_GLOB))
+    return hits[-1] if hits else None
+
+
+def osrc_run(args, full=False, timeout=120):
+    """Run outsourcerer.sh with args -> (rc, output)."""
+    sh = find_outsourcerer()
+    if not sh:
+        return 127, "outsourcerer.sh not found (%s)" % OSRC_CACHE_GLOB
+    try:
+        r = subprocess.run([sh] + list(args), capture_output=True, text=True, timeout=timeout,
+                           env=dict(os.environ, OSRC_REQUIRE_INTERACTIVE="0"))
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, str(e)
+    out = (r.stdout or r.stderr or "").strip()
+    return r.returncode, out if full else out[:400].replace("\n", " ")
+
+
+def job_status(job_id, osrc=None):
+    """Outsourcerer job status string, or None. Prefers `status --json <id>`."""
+    if not job_id:
+        return None
+    if osrc is None:
+        sh = find_outsourcerer()
+        if not sh:
+            return None
+        runner = lambda a: osrc_run(a, full=True)
+    else:
+        runner = osrc
+    rc, out = runner(["status", "--json", str(job_id)])
+    if rc == 0 and out:
+        try:
+            j = json.loads(out)
+            if isinstance(j, dict):
+                st = j.get("status") or j.get("state") or (j.get("job") or {}).get("status")
+                if st:
+                    return str(st)
+        except ValueError:
+            pass
+    rc, out = runner(["status", str(job_id)])
+    if rc != 0 or not out:
+        return None
+    # table/line form: look for a known terminal/running token
+    low = out.lower()
+    for tok in ("permission-blocked", "done?", "done", "running", "queued", "pending", "blocked",
+                "failed", "timeout", "wedged", "canceled", "cancelled", "interrupted"):
+        if tok in low.split() or re.search(r"\b" + re.escape(tok) + r"\b", low):
+            return "canceled" if tok == "cancelled" else tok
+    return out.split()[1] if len(out.split()) > 1 else low[:40]
+
+
+JOB_TERMINAL = {"done", "done?", "failed", "blocked", "timeout", "wedged", "canceled",
+                "cancelled", "permission-blocked", "interrupted"}
+
+
+def job_running(job_id, osrc=None):
+    st = job_status(job_id, osrc)
+    if st is None:
+        return False
+    return st not in JOB_TERMINAL
+
+
+def cancel_job(job_id, osrc=None):
+    if not job_id:
+        return 1, "no job id"
+    if osrc is None:
+        return osrc_run(["cancel", str(job_id)])
+    return osrc(["cancel", str(job_id)])
+
+
+def brief_text(slug):
+    """owner.py brief output for the slug (best effort)."""
+    try:
+        return owner.brief(slug)
+    except Exception as e:
+        return "(owner brief unavailable: %s)" % e
+
 
 
 # ---------------------------------------------------------------- io (mocked in tests)
@@ -254,19 +378,44 @@ def process_running(key):
 
 # ---------------------------------------------------------------- one owner
 
-def observe(pkey, info, tree, answers, open_map, board_rows, ps, now):
+def observe(pkey, info, tree, answers, open_map, board_rows, ps, now, dry=False, osrc=None):
     """Digest entry for one owner; updates ps (its row in state.json) with the observation:
-    idle_checkins, seen_updated_at, last_shipped."""
+    idle_checkins, seen_updated_at, last_shipped, and (opencode/devin) hung-job cancellation."""
     slug = owner.slug_of(pkey)
     key = (info or {}).get("key") or ""
+    eng = engine_of(slug)
     status = owner.read_json(os.path.join(owner.folder(slug), "status.json"))
     status = status if isinstance(status, dict) else None
     upd = (status or {}).get("updated_at")
     upd_ts = epoch(upd)
     live = live_of(find_item(tree, key), now)
-    if (live["found"] and not live["working_now"] and (live["idle_min"] or 0) < BUSY_MAX_IDLE_MIN
-            and process_running(key)):
-        live["working_now"] = True          # mid-turn: a process holds the session, never wake it now
+    job = {"job_id": ps.get("job_id"), "started_at": ps.get("started_at"), "engine": ps.get("engine") or eng,
+           "running": False, "hung": False, "status": None}
+    if eng in ("opencode", "devin") and job["job_id"]:
+        if osrc is None:
+            osrc = osrc_run
+        job["status"] = job_status(job["job_id"], osrc)
+        job["running"] = job_running(job["job_id"], osrc) if job["status"] is not None else False
+        # re-check with running logic: if status says running-ish, trust it
+        if job["status"] and job["status"] not in JOB_TERMINAL:
+            job["running"] = True
+        started = job.get("started_at")
+        if job["running"] and isinstance(started, (int, float)) and (now - started) >= HUNG_MIN * 60:
+            job["hung"] = True
+            if not dry:
+                cancel_job(job["job_id"], osrc)
+                job["running"] = False
+                job["status"] = "canceled"
+                ps.pop("job_id", None)
+                ps.pop("started_at", None)
+                ps["last_job"] = {"job_id": job["job_id"], "engine": eng, "ended": "hung-canceled", "when": iso(now)}
+    if eng == "claude":
+        if (live["found"] and not live["working_now"] and (live["idle_min"] or 0) < BUSY_MAX_IDLE_MIN
+                and process_running(key)):
+            live["working_now"] = True          # mid-turn: a process holds the session, never wake it now
+    else:
+        if job["running"]:
+            live["working_now"] = True
 
     # idle check-ins: consecutive cycles with nothing new in status (held while the session is mid-turn)
     first = "seen_updated_at" not in ps
@@ -297,7 +446,7 @@ def observe(pkey, info, tree, answers, open_map, board_rows, ps, now):
     if sb is None:
         sb = owner.read_json(os.path.join(owner.folder(slug), "scoreboard.json")) or {}
     return {
-        "project": slug, "project_key": pkey, "owner_key": key, "live": live,
+        "project": slug, "project_key": pkey, "owner_key": key, "engine": eng, "job": job, "live": live,
         "status": None if not status else {k: status.get(k) for k in
                                            ("state", "summary", "doing", "next", "shipped", "needs_uri",
                                             "blocked", "updated_at")},
@@ -361,10 +510,17 @@ def skip_reason(entry, reason, ps, now, paused):
     """Why a due wake must not happen (the never-wake rules), or None."""
     if paused:
         return "paused"
-    if not entry["owner_key"]:
-        return "no owner session"
-    if not entry["live"]["found"]:
-        return "owner session not in the Navigator"
+    eng = entry.get("engine") or engine_of(entry["project"])
+    if eng == "claude":
+        if not entry["owner_key"]:
+            return "no owner session"
+        if not entry["live"]["found"]:
+            return "owner session not in the Navigator"
+    else:
+        if (entry.get("job") or {}).get("running") or ps.get("job_id"):
+            # one job per owner at a time (a live running job blocks; a stale id is cleared by observe)
+            if (entry.get("job") or {}).get("running"):
+                return "job running (%s)" % ((entry.get("job") or {}).get("job_id") or ps.get("job_id"))
     if entry["live"]["working_now"]:
         return "working now"
     if (entry["status"] or {}).get("state") == "waiting-on-uri" and reason not in ("answered", "keep-moving"):
@@ -410,8 +566,115 @@ def wake_text(entry, reason, ps, now, note=""):
     return "%s\nWhen done: %s. End with owner.py status set" % (body, cmd)
 
 
+def project_cwd(entry):
+    """Best-effort cwd for an Outsourcerer wake: ~/projects/<slug>, else project key, else cwd."""
+    slug = entry.get("project") or ""
+    home = os.path.expanduser("~/projects/%s" % slug)
+    if os.path.isdir(home):
+        return home
+    pk = entry.get("project_key") or ""
+    if pk and os.path.isdir(pk):
+        return pk
+    return os.getcwd()
+
+
+def engine_prompt(entry, reason, ps, now, note=""):
+    slug = entry["project"]
+    return "%s\n\n%s\n\n%s\n" % (brief_text(slug), wake_text(entry, reason, ps, now, note), ENGINE_CONSTRAINT)
+
+
+def parse_job_id(text):
+    """Extract an Outsourcerer job id from bg output (first plausible token/line)."""
+    if not text:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("[") or line.startswith(">>>"):
+            continue
+        # common forms: a bare id, or "job <id>", or json
+        if line.startswith("{"):
+            try:
+                j = json.loads(line)
+                if isinstance(j, dict):
+                    v = j.get("id") or j.get("job_id") or j.get("job")
+                    if v:
+                        return str(v)
+            except ValueError:
+                pass
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,}", line):
+            return line
+        m = re.search(r"\bjob\s+([A-Za-z0-9][A-Za-z0-9._:-]{2,})\b", line, re.I)
+        if m:
+            return m.group(1)
+    # last resort: first token-like id anywhere
+    m = re.search(r"\b([0-9a-f]{8,}|job[_-][A-Za-z0-9._-]{3,}|[A-Za-z0-9]+-[A-Za-z0-9._-]{3,})\b", text)
+    return m.group(1) if m else None
+
+
+def note_launch_failure(entry, ps, now, err):
+    """Record a launch failure; on the 3rd consecutive, raise one loud alert."""
+    slug = entry["project"]
+    n = int(ps.get("launch_failures") or 0) + 1
+    ps["launch_failures"] = n
+    msg = "Outsourcerer launch failed (%d/%d) for %s: %s" % (n, LAUNCH_FAIL_ALERT, slug, err)
+    try:
+        log_cycle(msg, now)
+    except OSError:
+        pass
+    try:
+        owner.append_log(slug, "supervisor", "Outsourcerer launch failed (%d/%d): %s" % (n, LAUNCH_FAIL_ALERT, err))
+    except (OSError, ValueError):
+        pass
+    if n >= LAUNCH_FAIL_ALERT:
+        try:
+            nav("alert", "raise", "--title", "Supervisor: %s Outsourcerer launch failing" % slug,
+                "--body", "%s (consecutive failures)" % msg,
+                "--key", "supervisor-launch-fail:%s" % slug, full=True)
+        except Exception:
+            pass
+    return msg
+
+
 def do_wake(entry, reason, ps, now, dry, note=""):
-    """Send one wake (unless dry) and record it in ps and log.md. -> (sent ok, short output)."""
+    """Send/launch one wake (unless dry) and record it in ps and log.md. -> (sent ok, short output)."""
+    eng = entry.get("engine") or engine_of(entry["project"])
+    if eng in ("opencode", "devin"):
+        prompt = engine_prompt(entry, reason, ps, now, note)
+        if dry:
+            return True, "dry run (%s)" % eng
+        sh = find_outsourcerer()
+        if not sh:
+            return False, note_launch_failure(entry, ps, now, "outsourcerer.sh not found")
+        args = list(ENGINE_CMD[eng]) + [prompt]
+        try:
+            r = subprocess.run([sh] + args, capture_output=True, text=True, timeout=180,
+                               cwd=project_cwd(entry),
+                               env=dict(os.environ, OSRC_REQUIRE_INTERACTIVE="0"))
+        except (OSError, subprocess.SubprocessError) as e:
+            return False, note_launch_failure(entry, ps, now, str(e))
+        out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+        if r.returncode != 0:
+            return False, note_launch_failure(entry, ps, now, "exit %d %s" % (r.returncode, out[:300].replace("\n", " ")))
+        job_id = parse_job_id(r.stdout or out)
+        if not job_id:
+            return False, note_launch_failure(entry, ps, now, "no job id in output: %s" % out[:200].replace("\n", " "))
+        ps["launch_failures"] = 0
+        ps["job_id"] = job_id
+        ps["started_at"] = now
+        ps["engine"] = eng
+        if reason == "answered":
+            sent = dict(ps.get("answered_sent") or {})
+            for d in new_answers(entry, ps):
+                sent[d["id"]] = (d["answer"] or {}).get("ts")
+            ps["answered_sent"] = sent
+        ps["last_wake"] = {"reason": reason, "when": iso(now), "ts": now}
+        ps["wakes"] = {"day": today(now), "count": wakes_today(ps, now) + 1}
+        try:
+            owner.append_log(entry["project"], "supervisor", "woke owner (%s, job %s): %s" % (eng, job_id, reason))
+        except (OSError, ValueError) as e:
+            return True, "launched %s; log.md failed: %s" % (job_id, e)
+        return True, "job %s" % job_id
+    # claude: existing nav-send behavior
     text = wake_text(entry, reason, ps, now, note)
     if dry:
         return True, "dry run"
@@ -551,14 +814,23 @@ def register_row(entry, ps, now, paused):
     if any(d.get("deadline") and str(d["deadline"]) < today(now) for d in open_decs):
         flags.append("decision-overdue")
     lw = ps.get("last_wake")
+    job = entry.get("job") or {}
+    job_id = ps.get("job_id") or (job.get("job_id") if job.get("running") else None)
+    job_state = "running" if job.get("running") else ("hung-canceled" if job.get("hung") else (ps.get("last_job") or {}).get("ended"))
+    if not job_state and job_id:
+        job_state = "launched"
     return {
         "project": entry["project"], "project_key": entry["project_key"], "owner_key": entry["owner_key"],
+        "engine": entry.get("engine") or engine_of(entry["project"]),
+        "job": {"id": job_id, "state": job_state, "started_at": ps.get("started_at"),
+                "status": job.get("status")},
         "state": st.get("state"), "summary": st.get("summary"), "updated_at": st.get("updated_at"),
         "stale": entry["stale"], "problem": entry["problem"],
         "last_shipped": ship, "days_since_shipped": round((now - ship_ts) / 86400, 1) if ship_ts else None,
         "decisions_open": len(open_decs), "oldest_decision_days": oldest,
         "idle_checkins": int(ps.get("idle_checkins") or 0), "wakes_today": wakes_today(ps, now),
         "last_wake": {"reason": lw.get("reason"), "when": lw.get("when")} if lw else None,
+        "launch_failures": int(ps.get("launch_failures") or 0),
         "flags": flags, "paused": paused,
         "working_now": entry["live"]["working_now"], "idle_min": entry["live"]["idle_min"],
     }
@@ -590,7 +862,10 @@ def digest_md(d, now):
         live = ("working now" if lv["working_now"] else "idle %s" % ago(now - lv["idle_min"] * 60, now)
                 if lv["idle_min"] is not None else "session not found")
         out.append("")
-        out.append("## %s [%s] %s" % (o["project"], st.get("state") or "no status", live))
+        eng = o.get("engine") or (o.get("register") or {}).get("engine") or "claude"
+        job = (o.get("register") or {}).get("job") or {}
+        jbit = (" job %s (%s)" % (job.get("id"), job.get("state"))) if job.get("id") or job.get("state") else ""
+        out.append("## %s [%s/%s] %s%s" % (o["project"], eng, st.get("state") or "no status", live, jbit))
         out.append("Owner %s. Status %s%s." % (o["owner_key"], st.get("updated_at") or "never",
                                               (" (%s)" % o["problem"]) if o["problem"] else ""))
         if st:
@@ -655,7 +930,7 @@ def cycle(dry_run=False, now=None):
             slug = owner.slug_of(pkey)
             try:
                 ps = json.loads(json.dumps(projects.get(slug) or {}))   # private copy
-                entry = observe(pkey, info, tree, answers, open_map, board_rows, ps, now)
+                entry = observe(pkey, info, tree, answers, open_map, board_rows, ps, now, dry=dry)
                 paused = slug in paused_projects
                 reason = wake_reason(entry, ps, now)
                 skip = skip_reason(entry, reason, ps, now, paused) if reason else "nothing due"
@@ -745,10 +1020,15 @@ def wake_cmd(project, note="", now=None):
         st = load_state()
         ps = json.loads(json.dumps((st.get("projects") or {}).get(slug) or {}))
         entry = observe(pkey, info, tree, load_answers(dec), {str(x.get("id")): x for x in dec.get("open") or []},
-                        {}, dict(ps), now)       # observation is not persisted: only the cycle counts check-ins
+                        {}, dict(ps), now, dry=dry)       # observation is not persisted: only the cycle counts check-ins
         paused = bool(st.get("paused")) or slug in (st.get("paused_projects") or [])
-        skip = cap_reason(ps, now, paused) or (None if entry["owner_key"] else "no owner session")
-        res = {"ok": False, "project": slug, "reason": "manual", "dry_run": dry}
+        eng = entry.get("engine") or engine_of(slug)
+        skip = cap_reason(ps, now, paused)
+        if not skip and eng == "claude" and not entry["owner_key"]:
+            skip = "no owner session"
+        if not skip and eng != "claude" and (entry.get("job") or {}).get("running"):
+            skip = "job running (%s)" % ((entry.get("job") or {}).get("job_id") or "")
+        res = {"ok": False, "project": slug, "reason": "manual", "dry_run": dry, "engine": eng}
         if skip:
             res["skip"] = skip
         else:
@@ -801,14 +1081,41 @@ def status_table(v):
             out.append("%-18s ERROR %s" % (r["project"], r["error"]))
             continue
         lw = r.get("last_wake") or {}
-        out.append("%-18s %-15s shipped %-5s dec %d%-7s idle %d wakes %d last %-12s %s%s" % (
-            r["project"], r.get("state") or "no status",
+        job = r.get("job") or {}
+        j = (" job:%s(%s)" % (job.get("id"), job.get("state"))) if job.get("id") or job.get("state") else ""
+        out.append("%-18s %-8s %-15s shipped %-5s dec %d%-7s idle %d wakes %d last %-12s%s %s%s" % (
+            r["project"], r.get("engine") or "claude", r.get("state") or "no status",
             "%sd" % r["days_since_shipped"] if r.get("days_since_shipped") is not None else "-",
             r["decisions_open"], " (%sd)" % r["oldest_decision_days"] if r.get("oldest_decision_days") is not None else "",
-            r["idle_checkins"], r["wakes_today"], lw.get("reason") or "-",
+            r["idle_checkins"], r["wakes_today"], lw.get("reason") or "-", j,
             ("[" + ", ".join(r["flags"]) + "] ") if r.get("flags") else "",
             "(paused) " if r.get("paused") else ""))
     return "\n".join(out)
+
+
+def engine_cmd(project, eng):
+    """Set the engine for one owner or 'all'. -> result dict."""
+    if eng not in ENGINES:
+        raise ValueError("engine must be one of: %s" % ", ".join(ENGINES))
+    if str(project).lower() == "all":
+        slugs = [o["slug"] for o in owner.list_owners()] if hasattr(owner, "list_owners") else []
+        if not slugs:
+            try:
+                slugs = [n for n in os.listdir(owner.root()) if os.path.isdir(os.path.join(owner.root(), n))]
+            except OSError:
+                slugs = []
+        for sl in sorted(set(slugs)):
+            set_engine_value(sl, eng)
+        log_cycle("engine all -> %s by %s" % (eng, actor()))
+        return {"ok": True, "project": "all", "engine": eng, "count": len(slugs)}
+    try:
+        pkey, _ = resolve_project(get("/api/tree?window=7d"), project)
+        slug = owner.slug_of(pkey)
+    except (OSError, ValueError):
+        slug = owner.slug_of(project)
+    set_engine_value(slug, eng)
+    log_cycle("engine %s -> %s by %s" % (slug, eng, actor()))
+    return {"ok": True, "project": slug, "engine": eng}
 
 
 def main(argv):
@@ -826,6 +1133,10 @@ def main(argv):
         x = sub.add_parser(name, help="%s supervision (all, or one project)" % name)
         x.add_argument("project", nargs="?")
         x.add_argument("--json", action="store_true")
+    e = sub.add_parser("engine", help="set an owner's engine (claude|opencode|devin)")
+    e.add_argument("project", help="project key/slug, or 'all'")
+    e.add_argument("engine", choices=ENGINES)
+    e.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     if a.cmd == "cycle":
         return cycle(a.dry_run)
@@ -834,13 +1145,18 @@ def main(argv):
         print(json.dumps(v, indent=1, ensure_ascii=False) if a.json else status_table(v))
         return 0
     try:
-        res = wake_cmd(a.project, a.reason) if a.cmd == "wake" else set_pause(a.project, a.cmd == "pause")
+        if a.cmd == "wake":
+            res = wake_cmd(a.project, a.reason)
+        elif a.cmd == "engine":
+            res = engine_cmd(a.project, a.engine)
+        else:
+            res = set_pause(a.project, a.cmd == "pause")
     except (ValueError, OSError) as e:
         res = {"ok": False, "error": str(e)}
     if a.json:
         print(json.dumps(res, ensure_ascii=False))
     else:
-        print(res.get("error") or res.get("skip") or ("%s: ok" % a.cmd if res.get("ok") else json.dumps(res)))
+        print(res.get("error") or res.get("skip") or res.get("output") or ("%s: ok" % a.cmd if res.get("ok") else json.dumps(res)))
     return 0 if res.get("ok") else 1
 
 

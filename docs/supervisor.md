@@ -23,20 +23,26 @@ One run, in order:
    | `no-status` | the owner's last turn ended without a status (problem "no status this turn") or it has no status. |
    | `blocked-due` | `state` is `blocked` and `blocked.by` is today or past. Ask it to try again or escalate. |
    | `keep-moving` | `state` is `working` or `picking-next` and the session has been idle 30+ minutes. |
-   Never wake when: the owner session is working now (activity in the last 3 minutes), `state` is
-   `waiting-on-uri` with nothing newly answered, the owner was woken in the last 30 minutes, it already had
-   24 wakes today, or supervision is paused (globally or for that project).
-   A wake sends one message through the Navigator (`nav.py send <owner key> <text>`, same path the
-   co-pilot check-in uses). The text starts with `[Supervisor wake: <reason>]`, says what to do, and ends
-   with "End with owner.py status set". Each wake appends `[supervisor] woke owner: <reason>` to the
-   project's `log.md`.
+   Never wake when: the owner is working now (claude: session activity in the last 3 minutes, or a tool
+   running; opencode/devin: its Outsourcerer job is running; a job over 90 min is treated as hung and
+   cancelled), `state` is `waiting-on-uri` with nothing newly answered, the owner was woken in the last
+   30 minutes, it already had 24 wakes today, or supervision is paused (globally or for that project).
+   One Outsourcerer job per owner at a time. A failed launch is logged (cycles.log + owner `log.md`) and
+   raises no alert unless 3 consecutive failures (then one loud alert).
+   How a wake runs depends on the owner's **engine** (`claude` default, or `opencode`/`devin`; see
+   "Engines"). A `claude` wake sends one message through the Navigator (`nav.py send <owner key> <text>`);
+   an `opencode`/`devin` wake launches one Outsourcerer job (one git worktree per job) with the owner brief
+   + wake text + engine constraints, and tracks `{job_id, started_at, engine}` in `state.json`. The text
+   starts with `[Supervisor wake: <reason>]`, says what to do, and ends with "End with owner.py status set".
+   Each wake appends `[supervisor] woke owner...` to the project's `log.md` (with engine/job for Outsourcerer).
    Then raise **loud alerts** for the few decisions that need Uri now (section "Loud alerts" below).
 4. **Register**: rewrite `~/.ccc-navigator/supervisor/register.json`, one row per project:
-   `project, owner_key, state, summary, updated_at, stale, problem, last_shipped (text + when),
-   days_since_shipped, decisions_open (count), oldest_decision_days, idle_checkins (consecutive cycles with
-   nothing new in status), wakes_today, last_wake (reason + when), flags` (e.g. `idle-2x`, `no-status`,
-   `blocked-past-due`, `decision-7d`). "Shipped" means a non-empty `shipped` list in a status write;
-   track the last one per project in `~/.ccc-navigator/supervisor/state.json`.
+   `project, owner_key, engine, job (id/state/started_at/status), state, summary, updated_at, stale,
+   problem, last_shipped (text + when), days_since_shipped, decisions_open (count), oldest_decision_days,
+   idle_checkins (consecutive cycles with nothing new in status), wakes_today, last_wake (reason + when),
+   launch_failures, flags` (e.g. `idle-2x`, `no-status`, `blocked-past-due`, `decision-7d`). "Shipped"
+   means a non-empty `shipped` list in a status write; track the last one per project in
+   `~/.ccc-navigator/supervisor/state.json` (also holds per-owner job/engine and wake bookkeeping).
    Append one line per cycle to `~/.ccc-navigator/supervisor/cycles.log`: time, wakes done, skips with reason.
 5. **Hand judgment to the AI supervisor**: the existing co-pilot check-in (`bin/copilot-checkin.py`)
    keeps its 15-minute schedule; its prompt changes to: read `digest.md` and the register first, act on
@@ -44,8 +50,26 @@ One run, in order:
    than their deadline: chase Uri once with a default), and never re-do what the cycle already did.
 
 Env: `SUPERVISOR_DIR` (default `~/.ccc-navigator/supervisor`), `OWNER_DIR`, `CCC_NAV_URL`,
-`SUPERVISOR_DRY_RUN=1` (decide and log wakes, send nothing). Everything is atomic-write; a failing owner
-never stops the others; the run always exits 0 after logging the error.
+`SUPERVISOR_DRY_RUN=1` (decide and log wakes, send nothing), `SUPERVISOR_ENGINE` (overrides the per-owner
+engine for all owners; tests). Everything is atomic-write; a failing owner never stops the others; the run
+always exits 0 after logging the error.
+
+
+## Engines
+
+Each owner runs on an engine, set in `~/.ccc-navigator/owners/<slug>/engine` (one line):
+`claude` (default if missing) sends wakes via Navigator `nav send`; `opencode` / `devin` launch an
+Outsourcerer job instead (`OSRC_REQUIRE_INTERACTIVE=0`, resolved from the latest plugin cache glob;
+opencode: `--provider opencode bg edit -m opencode-go/iceman-contributor-free`; devin:
+`--provider devin bg -m swe-2-high`), `cwd` = the project folder (`~/projects/<slug>` when present).
+The prompt is `owner.py brief <slug>` + the wake text + the engine constraint (own git worktree, one
+turn then `owner.py status set`, Outsourcerer-delegable tools only, no money, no messages to real
+people). `SUPERVISOR_ENGINE` overrides all owners. `supervisor.py engine <project|all> <engine>` sets it.
+
+Job state lives in `state.json` per owner (`job_id`, `started_at`, `engine`). Busy while
+`outsourcerer.sh status` shows the job running; a job over 90 min is cancelled as hung; one job per
+owner. Launch failures log to `cycles.log` and the owner's `log.md` as `[supervisor]`; 3 consecutive
+failures raise one loud alert. The register/digest/status show engine and job state.
 
 ## Loud alerts
 
@@ -76,8 +100,8 @@ stops the cycle.
 ## Control
 
 - `bin/supervisor.py cycle [--dry-run]`, `status` (register as a table), `wake <project> [--reason TEXT]`
-  (manual wake, same caps), `pause [<project>]`, `resume [<project>]`. Pause state lives in
-  `supervisor/state.json`.
+  (manual wake, same caps), `engine <project|all> <claude|opencode|devin>`, `pause [<project>]`,
+  `resume [<project>]`. Pause state lives in `supervisor/state.json`.
 - Navigator: `GET /api/supervisor` returns `{register, digest_at, paused, cycles_tail}`;
   `POST /api/supervisor` `{action: "pause"|"resume"|"wake", project?, reason?}` (remote/phone gate like other
   mutations). CLI: `nav supervisor [--table]`, `nav supervisor pause|resume [project]`,
