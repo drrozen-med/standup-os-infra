@@ -237,8 +237,23 @@ class NeverWake(Base):
         self.assertEqual(self.runs.sends(), [])
         self.assertIn("alpha: working now", self.cycles()[-1])
 
+    def test_session_busy_needs_a_child_process(self):
+        sid = "7cf2e511-78ff-4a3b-9f7e-dd87e2947b71"
+        idle = "100 1 /x/claude -p --resume %s --input-format stream-json\n" % sid
+        self.assertFalse(sup.session_busy(sid, idle))                      # persistent session waiting for input
+        shell_only = idle + "200 5 /bin/zsh -c echo %s\n" % sid           # an unrelated shell mentioning the id
+        self.assertFalse(sup.session_busy(sid, shell_only))
+        self.assertTrue(sup.session_busy(sid, idle + "300 100 npm ci\n"))   # a tool is running under it
+        self.assertFalse(sup.session_busy("deadbeef-0000", idle + "300 100 npm ci\n"))
+
+    def test_hung_tool_over_90_minutes_is_not_busy(self):
+        self.add_owner(P1, K1, status(state="working"), idle_min=100)
+        self.busy.add(K1)
+        self.run_cycle()
+        self.assertEqual(len(self.runs.sends()), 1)
+
     def test_running_process_counts_as_working_even_with_an_old_transcript(self):
-        self.add_owner(P1, K1, status(state="working"), idle_min=90)
+        self.add_owner(P1, K1, status(state="working"), idle_min=60)
         self.busy.add(K1)
         self.run_cycle()
         self.assertEqual(self.runs.sends(), [])

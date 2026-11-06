@@ -43,6 +43,7 @@ OWNER_PY = "~/projects/standup-os/bin/owner.py"
 QUIET = (0, 7)          # local hours [start, end): no cycle
 WORKING_MIN = 3         # activity this recent means the owner is working now: never wake
 IDLE_MIN = 30           # keep-moving: a working / picking-next owner idle this long
+BUSY_MAX_IDLE_MIN = 90   # a tool running longer than this with a silent transcript is treated as hung, not busy
 WAIT_IDLE_MIN = 120     # keep-moving: a waiting-on-uri owner idle this long (waiting on Uri never stops the rest of the backlog)
 GAP_MIN = 30            # never wake an owner woken this recently
 MAX_WAKES = 24          # per owner per local day
@@ -221,18 +222,34 @@ def live_of(item, now):
             "working_now": idle is not None and idle < WORKING_MIN}
 
 
+SHELLS = ("/bin/zsh", "/bin/bash", "zsh", "bash", "sh ")
+
+
+def session_busy(sid, ps_out):
+    """True when a process holding session `sid` has a child process, i.e. a tool is running right now.
+    ps_out: `ps -axo pid=,ppid=,command=`. A persistent idle session process (waiting for its next message)
+    has no children, so it does not count as busy; a turn waiting on npm, a test run or a sub-reviewer does."""
+    rows = []
+    for line in ps_out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    holders = {pid for pid, _, cmd in rows if sid in cmd and not cmd.startswith(SHELLS)}
+    return any(ppid in holders for _, ppid, _ in rows)
+
+
 def process_running(key):
-    """True when a process on this Mac is running the owner's session right now (claude/codex/devin with the
-    session id on its command line). A long turn waiting on a sub-process writes nothing to its transcript, so
-    the transcript age alone made it look idle and a wake started a second copy of the same session."""
+    """True when the owner's session is mid-turn on a long tool (see session_busy). A long turn waiting on a
+    sub-process writes nothing to its transcript, so the transcript age alone made it look idle and a wake
+    started a second copy of the same session."""
     sid = str(key or "").split(":", 1)[-1]
     if len(sid) < 8:
         return False
     try:
-        out = subprocess.run(["pgrep", "-f", "--", sid], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return False
-    return out.returncode == 0 and bool(out.stdout.strip())
+    return out.returncode == 0 and session_busy(sid, out.stdout)
 
 
 # ---------------------------------------------------------------- one owner
@@ -247,7 +264,8 @@ def observe(pkey, info, tree, answers, open_map, board_rows, ps, now):
     upd = (status or {}).get("updated_at")
     upd_ts = epoch(upd)
     live = live_of(find_item(tree, key), now)
-    if live["found"] and not live["working_now"] and process_running(key):
+    if (live["found"] and not live["working_now"] and (live["idle_min"] or 0) < BUSY_MAX_IDLE_MIN
+            and process_running(key)):
         live["working_now"] = True          # mid-turn: a process holds the session, never wake it now
 
     # idle check-ins: consecutive cycles with nothing new in status (held while the session is mid-turn)
