@@ -333,7 +333,7 @@ python3 nav.py send <session> "message" --wait 90    # deliver through CCC, wait
 ```
 
 `<session>` is a key (`claude:<id>`), a session id, or a unique id prefix. CCC
-refuses sessions whose folder it does not know (`repo_not_allowed`).
+refuses sessions whose folder it does not know (`repo_not_allowed`). A selected Codex co-pilot receives messages through the Codex queue; queued means accepted for delivery, not yet answered.
 
 **Pi sessions** work the same way. Pi has no remote input, so the navigator
 resumes the session file headlessly (`pi --session <file> -p "<text>"`); the

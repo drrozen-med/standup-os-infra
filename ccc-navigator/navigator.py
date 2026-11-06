@@ -32,6 +32,7 @@ import urllib.request
 import webbrowser
 import http.client
 import shutil
+import sqlite3
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -495,6 +496,42 @@ class State:
                     gorder.pop(repo, None)
             self.data["group_order"] = gorder
             self._save()
+
+
+def selected_codex_row(key, rows, db=None):
+    """Recover the selected Codex chat when CCC's cached list has not indexed it."""
+    engine, _, sid = str(key or "").partition(":")
+    if engine != "codex" or not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+        return None
+    if any(r.get("engine") == "codex" and r.get("session_id") == sid for r in rows):
+        return None
+    path = Path(db or Path.home() / ".codex" / "state_5.sqlite")
+    try:
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.5) as con:
+            row = con.execute("SELECT cwd, title, rollout_path, updated_at, archived FROM threads WHERE id = ?", (sid,)).fetchone()
+        if not row or row[4] or not Path(row[2]).is_file():
+            return None
+        return {"session_id": sid, "engine": "codex", "source": "codex", "session_cwd": row[0],
+                "folder_path": row[0], "display_name": row[1], "jsonl_path": row[2], "modified": row[3]}
+    except (sqlite3.Error, OSError, ValueError, TypeError):
+        return None
+
+
+def queue_codex_message(sid, text):
+    """Queue into Codex desktop's existing thread without resuming a competing process."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
+        return {"ok": False, "error": "Invalid session or empty message"}
+    cli = shutil.which("codex") or next((str(p) for p in (Path.home() / ".local/bin/codex", Path("/opt/homebrew/bin/codex")) if p.is_file() and os.access(p, os.X_OK)), None)
+    if not cli:
+        return {"ok": False, "error": "Codex CLI is unavailable"}
+    try:
+        result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
+                                capture_output=True, text=True, timeout=15)
+        if result.returncode:
+            return {"ok": False, "error": "Could not queue the message in Codex"}
+        return {"ok": True, "queued": True}
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": "Could not queue the message in Codex"}
 
 
 # ---------------------------------------------------------------- sources
@@ -2200,6 +2237,8 @@ class App:
 
     def _tree(self, window, show_hidden=False):
         rows, ccc_meta = self.ccc.rows()
+        extra = selected_codex_row(self.state.snapshot().get("copilot"), rows)
+        rows = rows + ([extra] if extra else [])
         prows, pi_meta = pi_sessions(self.args.pi_dir)
         orows, o_meta = sources.outsourcerer_jobs()
         vrows, v_meta = sources.vm251_agents()
@@ -2986,6 +3025,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 b = {}
             sid = str(b.get("session_id") or "") if isinstance(b, dict) else ""
+            if self.app.state.snapshot().get("copilot") == "codex:" + sid:
+                result = queue_codex_message(sid, str(b.get("text") or ""))
+                return self._send(200 if result["ok"] else 400, result)
             if self.app.moved(sid):
                 return self._send(409, self.app.moved_reply(sid, str(b.get("text") or "")))
             return self._proxy(raw)
