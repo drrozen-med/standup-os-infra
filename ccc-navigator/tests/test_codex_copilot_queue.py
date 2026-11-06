@@ -29,3 +29,18 @@ def test_queue_uses_existing_thread_without_resume():
         assert run.call_args.args[0] == ['/bin/codex', 'queue', '--thread', SID, '--message', 'hello']
         run.return_value.returncode = 1
         assert not navigator.queue_codex_message(SID, 'hello')['ok']
+
+
+def test_transcript_only_exposes_user_visible_messages(tmp_path):
+    import json
+    transcript = tmp_path / 'session.jsonl'
+    entries = [
+        {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'hello'}]}},
+        {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': '<environment_context>hidden'}]}},
+        {'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'phase': 'analysis', 'content': [{'type': 'output_text', 'text': 'private'}]}},
+        {'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'phase': 'final_answer', 'content': [{'type': 'output_text', 'text': 'Hi there'}]}},
+    ]
+    transcript.write_text('\n'.join(map(json.dumps, entries)))
+    with mock.patch.object(navigator, 'selected_codex_row', return_value={'jsonl_path': str(transcript)}):
+        result = navigator.codex_copilot_transcript('codex:' + SID)
+    assert result['events'] == [{'type': 'user_text', 'text': 'hello'}, {'type': 'assistant', 'blocks': [{'kind': 'text', 'text': 'Hi there'}]}]

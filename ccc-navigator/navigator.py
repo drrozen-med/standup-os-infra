@@ -517,6 +517,46 @@ def selected_codex_row(key, rows, db=None):
         return None
 
 
+def codex_copilot_transcript(key):
+    """Read the selected chat's user-visible text without depending on CCC."""
+    row = selected_codex_row(key, [])
+    if not row:
+        return None
+    events = []
+    try:
+        with open(row["jsonl_path"], encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if entry.get("type") != "response_item":
+                    continue
+                payload = entry.get("payload") or {}
+                if payload.get("type") != "message":
+                    continue
+                role = payload.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                if role == "assistant" and payload.get("phase") not in ("commentary", "final_answer"):
+                    continue
+                content = payload.get("content") or []
+                text = "\n".join(str(x.get("text") or "") for x in content
+                                   if isinstance(x, dict) and x.get("type") in ("input_text", "output_text"))
+                if role == "user" and text.startswith("# AGENTS.md instructions") and "</environment_context>" in text:
+                    text = text.split("</environment_context>", 1)[1].strip()
+                if not text.strip() or (role == "user" and text.lstrip().startswith((
+                        "<environment_context", "<user_instructions", "<codex_internal_context", "<external_"))):
+                    continue
+                if role == "user":
+                    events.append({"type": "user_text", "text": text})
+                else:
+                    events.append({"type": "assistant", "blocks": [{"kind": "text", "text": text}]})
+        return {"events": events}
+    except OSError:
+        return None
+
+
 def queue_codex_message(sid, text):
     """Queue into Codex desktop's existing thread without resuming a competing process."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
@@ -2828,6 +2868,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"entries": [e for e in reversed(log) if not e.get("undone")][:15]})
         if u.path == "/api/version":
             return self._send(200, {"version": app_version()})
+        if u.path.startswith("/api/conversations/"):
+            sid = urllib.parse.unquote(u.path[len("/api/conversations/"):])
+            key = "codex:" + sid
+            if self.app.state.snapshot().get("copilot") == key:
+                transcript = codex_copilot_transcript(key)
+                if transcript is not None:
+                    return self._send(200, transcript)
         if u.path == "/api/pi/transcript":
             q = urllib.parse.parse_qs(u.query)
             sid = (q.get("sid") or [""])[0]
