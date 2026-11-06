@@ -1995,7 +1995,7 @@ def cmd_send(args, client):
         res = client.post("/api/inject-input", {"session_id": sid, "text": text})
         if res.get("ok") is False:
             raise NavError("CCC refused the message: %s" % (res.get("error") or res))
-    out = {"sent": True, "sid": sid, "engine": engine, "title": title, "ccc": res}
+    out = {"sent": not bool(res.get("queued")), "queued": bool(res.get("queued")), "sid": sid, "engine": engine, "title": title, "ccc": res}
     if args.wait:
         deadline = time.time() + args.wait
         reply = None
