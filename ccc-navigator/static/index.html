@@ -1211,7 +1211,7 @@ body.has-alert #drawer{top:var(--alert-h)}
   function renderStatus() {
     const s = tree.sources || {};
     const parts = [];
-    parts.push(s.ccc && s.ccc.ok ? `CCC ${s.ccc.count} sessions · ${s.ccc.ms} ms` : (s.ccc && s.ccc.stale ? `<span class="bad">CCC offline · cached ${Math.round(s.ccc.age/60)}m ago</span>` : `<span class="bad">CCC not reachable at ${esc(s.ccc && s.ccc.base)}</span>`));
+    parts.push(s.ccc && s.ccc.ok ? `CCC ${s.ccc.count} sessions · ${s.ccc.ms} ms` : (s.ccc && s.ccc.stale ? `<span class="bad">Session service unavailable · cached ${Math.round(s.ccc.age/60)}m ago</span>` : `<span class="bad">CCC not reachable at ${esc(s.ccc && s.ccc.base)}</span>`));
     if (s.pi && s.pi.found) parts.push(`Pi ${s.pi.count}`);
     if (s.orca && s.orca.found) parts.push(s.orca.error ? `<span class="bad">Orca: ${esc(s.orca.error)}</span>` : `Orca ${s.orca.count} workspaces`);
     $('#status').innerHTML = parts.map(p => `<span>${p}</span>`).join('');

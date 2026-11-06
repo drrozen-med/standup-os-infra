@@ -7,7 +7,7 @@
   var REPLAYABLE = ['/api/decisions/answer', '/api/ask/answer'];
   var origFetch = window.fetch.bind(window);
   var state = { offline: false, cachedAt: 0, lastLive: Date.now(), flushing: false, note: '' };
-  var bar = null, probeTimer = null;
+  var bar = null, probeTimer = null, checkingConnection = null;
 
   function ls(op, k, v) { try { return op === 'get' ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch (e) { return null; } }
   function outbox() { try { return JSON.parse(ls('get', OUTBOX_KEY) || '[]'); } catch (e) { return []; } }
@@ -60,6 +60,18 @@
     else render();
   }
 
+  // A cached response can mean one slow request, not a lost connection.
+  function verifyConnection(cachedAt) {
+    if (checkingConnection) return checkingConnection;
+    var started = Date.now();
+    var timeout = new Promise(function (_, reject) { setTimeout(function () { reject(new Error('timeout')); }, 5000); });
+    checkingConnection = Promise.race([origFetch('/api/version', { cache: 'no-store' }), timeout])
+      .then(function (r) { if (r.ok) goOnline(); else if (state.lastLive <= started) goOffline(cachedAt); })
+      .catch(function () { if (state.lastLive <= started) goOffline(cachedAt); })
+      .then(function () { checkingConnection = null; });
+    return checkingConnection;
+  }
+
   // While offline, poke the real network (the SW never answers /api/version) until it answers.
   function startProbe() {
     if (probeTimer) return;
@@ -93,7 +105,7 @@
     var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
     return origFetch(input, init).then(function (res) {
       if (method === 'GET') {
-        if (res.headers.get('x-nav-from-cache')) goOffline(Number(res.headers.get('x-nav-cached-at')) || 0);
+        if (res.headers.get('x-nav-from-cache')) verifyConnection(Number(res.headers.get('x-nav-cached-at')) || 0);
         else if (res.status < 500 && state.offline && path !== '/api/version') goOnline();
         else if (res.status < 500) state.lastLive = Date.now();
         return res;
@@ -101,16 +113,16 @@
       // a write that the Mac (or the front door) answered with 5xx did not happen: treat like offline
       return res.status >= 500 && res.status !== 501 ? queueOrFail(path, init) : res;
     }, function (err) {
-      if (method === 'GET') { goOffline(); throw err; }
+      if (method === 'GET') { verifyConnection(); throw err; }
       return queueOrFail(path, init);
     });
   };
 
   function jsonRes(obj, status) { return new Response(JSON.stringify(obj), { status: status, headers: { 'content-type': 'application/json' } }); }
   function queueOrFail(path, init) {
-    goOffline();
+    verifyConnection();
     if (REPLAYABLE.indexOf(path) < 0) {
-      var msg = 'Offline: this needs the Mac. Try again when it reconnects.';
+      var msg = 'Could not reach Navigator. Please try again.';
       if (window.toast) try { window.toast(msg); } catch (e) {}
       return Promise.resolve(jsonRes({ ok: false, offline: true, error: msg }, 503));
     }
@@ -123,7 +135,7 @@
   }
 
   window.addEventListener('online', function () { origFetch('/api/version', { cache: 'no-store' }).then(function (r) { if (r.status < 500) goOnline(); }).catch(function () {}); });
-  window.addEventListener('offline', function () { goOffline(); });
+  window.addEventListener('offline', function () { verifyConnection(); });
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && state.offline) origFetch('/api/version', { cache: 'no-store' }).then(function (r) { if (r.status < 500) goOnline(); }).catch(function () {});
   });

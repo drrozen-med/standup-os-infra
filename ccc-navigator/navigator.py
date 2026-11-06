@@ -565,12 +565,16 @@ def queue_codex_message(sid, text):
     if not cli:
         return {"ok": False, "error": "Codex CLI is unavailable"}
     try:
+        env = os.environ.copy()
+        env["PATH"] = os.pathsep.join((str(Path.home() / ".local/bin"), "/opt/homebrew/bin", env.get("PATH", "")))
         result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
-                                capture_output=True, text=True, timeout=15)
+                                capture_output=True, text=True, timeout=90, env=env)
         if result.returncode:
             return {"ok": False, "error": "Could not queue the message in Codex"}
         return {"ok": True, "queued": True}
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Delivery is unconfirmed; check the chat before retrying"}
+    except OSError:
         return {"ok": False, "error": "Could not queue the message in Codex"}
 
 
