@@ -261,7 +261,7 @@
     var st = document.createElement('div');
     st.className = 'stamp pstate';
     if (p.state === 'sending') st.innerHTML = 'Sending&hellip;';
-    else if (p.state === 'sent') st.innerHTML = ICONS.tick + (p.queued ? ' Queued' : ' Sent');
+    else if (p.state === 'sent') st.innerHTML = ICONS.tick + (p.uncertain ? ' Check Orca' : p.orca ? ' Accepted by Orca' : p.queued ? ' Queued' : ' Sent');
     else st.innerHTML = '<span class="bad">Not sent</span>' + (p.err ? ' &middot; ' + esc(p.err) : '') +
       ' <button type="button" data-retry>Retry</button><button type="button" data-edit>Edit</button>';
     row.appendChild(st);
@@ -412,7 +412,7 @@
       });
     }
     function activity() {
-      var waiting = pending.filter(function (p) { return p.state === 'sent'; });
+      var waiting = pending.filter(function (p) { return p.state === 'sent' && !p.orca; });
       if (waiting.length) return { label: 'Thinking', since: waiting[0].at };
       var a = current ? activityOf(current, opts.live) : null;
       if (!a && piWatch) a = { label: 'Pi is working', since: Date.now() };
@@ -686,7 +686,7 @@
           });
         })
         .then(function (d) {
-          p.state = 'sent'; p.queued = !!d.queued; p.sentAt = Date.now();
+          p.state = 'sent'; p.queued = !!d.queued; p.orca = d.via === 'orca'; p.uncertain = !!d.uncertain; p.sentAt = Date.now();
           if (isPi && d.run) { box.placeholder = 'Pi is working on it...'; watchPiRun(d.run); }
           if (d && d.warning && opts.onError) opts.onError(d.warning);
           cache.delete(sid); lastSig = null; load();
