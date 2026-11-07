@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -58,7 +59,10 @@ def terminal_processes(path=DAEMON_LOG):
 
 
 def run(args, timeout=15):
-    p = subprocess.run(['orca', *args, '--json'], capture_output=True, text=True, timeout=timeout)
+    exe = '/usr/local/bin/orca' if os.path.exists('/usr/local/bin/orca') else shutil.which('orca')
+    if not exe:
+        raise RuntimeError('Orca is not installed or available')
+    p = subprocess.run([exe, *args, '--json'], capture_output=True, text=True, timeout=timeout)
     data = json.loads(p.stdout)
     if p.returncode or not data.get('ok'):
         raise RuntimeError(str(data.get('error') or 'Orca could not complete the request'))

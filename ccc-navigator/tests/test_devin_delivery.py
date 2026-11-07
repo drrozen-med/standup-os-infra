@@ -41,6 +41,12 @@ class DeliveryTests(unittest.TestCase):
         self.assertIn('Check Orca', result['warning'])
         self.assertEqual(sum(x[1] == 'send' for x in calls), 1)
 
+    def test_orca_works_without_shell_path(self):
+        response = Mock(returncode=0, stdout='{"ok": true, "result": {}}')
+        with patch.object(d.os.path, 'exists', return_value=True), patch.object(d.subprocess, 'run', return_value=response) as run:
+            self.assertEqual(d.run(['terminal', 'list']), {})
+        self.assertEqual(run.call_args.args[0][0], '/usr/local/bin/orca')
+
     def test_unlocked_session_uses_existing_route(self):
         with patch.object(d, 'lock_holder', return_value=None):
             self.assertIsNone(d.deliver('devincli-example', 'hello', '', []))
