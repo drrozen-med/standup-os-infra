@@ -39,6 +39,7 @@ from pathlib import Path
 
 import changes
 import decisions
+import devin_delivery
 import orca
 import pi_run
 import remote
@@ -2052,6 +2053,12 @@ class App:
             return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
         if self.moved(sid):
             return "moved"
+        if engine == "devin":
+            result = devin_delivery.deliver(sid, text, self.ccc.base, self.ccc.rows()[0])
+            if result is not None:
+                if result.get("uncertain"):
+                    return "delivery uncertain; check Orca before sending again"
+                return ("queued" if result.get("ok") else "failed: " + result.get("error", "delivery failed"))
         try:
             body = json.dumps({"session_id": sid, "text": text, "mode": "send"}).encode()
             base = urllib.parse.urlparse(self.ccc.base)
@@ -3081,6 +3088,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200 if result["ok"] else 400, result)
             if self.app.moved(sid):
                 return self._send(409, self.app.moved_reply(sid, str(b.get("text") or "")))
+            if sid.startswith("devincli-"):
+                result = devin_delivery.deliver(sid, str(b.get("text") or ""), self.app.ccc.base, self.app.ccc.rows()[0])
+                if result is not None:
+                    return self._send(200 if result.get("ok") else 409, result)
             return self._proxy(raw)
         if path.startswith("/api/voice/"):
             return self._voice_post(path)
