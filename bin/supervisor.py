@@ -143,8 +143,72 @@ def osrc_run(args, full=False, timeout=120):
     return r.returncode, out if full else out[:400].replace("\n", " ")
 
 
+# Status tokens: checked as whole tokens after normalizing punctuation around them.
+_JOB_STATUS_TOKENS = ("permission-blocked", "done?", "canceled", "cancelled", "interrupted",
+                      "running", "queued", "pending", "blocked", "failed", "timeout", "wedged", "done")
+_JOB_STATUS_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in _JOB_STATUS_TOKENS) + r")\b", re.I)
+
+# Canonical terminal set (includes aliases as they may appear in stored/parsed state).
+JOB_TERMINAL = {"done", "done?", "failed", "blocked", "timeout", "wedged", "canceled",
+                "cancelled", "permission-blocked", "interrupted"}
+
+
+def _norm_job_status(st):
+    if st is None:
+        return None
+    s = str(st).strip().lower()
+    if not s:
+        return None
+    if s == "cancelled":
+        return "canceled"
+    return s
+
+
+def parse_job_status_output(out, json_ok=False):
+    """Parse Outsourcerer status output reliably.
+
+    When json_ok is True, `out` is from `status --json` and may be a JSON object or
+    a JSON-encoded scalar/string; non-JSON is still scanned for a known status token.
+    Returns a normalized status string, or None when unknown/ambiguous.
+    """
+    if out is None:
+        return None
+    text = out if isinstance(out, str) else str(out)
+    text = text.strip()
+    if not text:
+        return None
+    if json_ok:
+        try:
+            j = json.loads(text)
+        except ValueError:
+            j = None
+        if isinstance(j, str):
+            st = _norm_job_status(j)
+            return st if st else None
+        if isinstance(j, dict):
+            st = j.get("status") or j.get("state")
+            if st is None and isinstance(j.get("job"), dict):
+                st = j["job"].get("status") or j["job"].get("state")
+            st = _norm_job_status(st)
+            if st:
+                return st
+            # JSON object but no status field: unknown, do not guess from prose.
+            return None
+        if j is not None:
+            # JSON array/number/etc: unknown.
+            return None
+    m = _JOB_STATUS_RE.search(text)
+    if m:
+        return _norm_job_status(m.group(1))
+    return None
+
+
 def job_status(job_id, osrc=None):
-    """Outsourcerer job status string, or None. Prefers `status --json <id>`."""
+    """Outsourcerer job status string, or None if unknown.
+
+    Issues exactly one status query per call (prefers `status --json <id>`). Unknown
+    or unparsable output fails closed to None so callers never treat it as launchable.
+    """
     if not job_id:
         return None
     if osrc is None:
@@ -154,45 +218,43 @@ def job_status(job_id, osrc=None):
         runner = lambda a: osrc_run(a, full=True)
     else:
         runner = osrc
-    rc, out = runner(["status", "--json", str(job_id)])
-    if rc == 0 and out:
-        try:
-            j = json.loads(out)
-            if isinstance(j, dict):
-                st = j.get("status") or j.get("state") or (j.get("job") or {}).get("status")
-                if st:
-                    return str(st)
-        except ValueError:
-            pass
-    rc, out = runner(["status", str(job_id)])
-    if rc != 0 or not out:
+    try:
+        rc, out = runner(["status", "--json", str(job_id)])
+    except Exception:
         return None
-    # table/line form: look for a known terminal/running token
-    low = out.lower()
-    for tok in ("permission-blocked", "done?", "done", "running", "queued", "pending", "blocked",
-                "failed", "timeout", "wedged", "canceled", "cancelled", "interrupted"):
-        if tok in low.split() or re.search(r"\b" + re.escape(tok) + r"\b", low):
-            return "canceled" if tok == "cancelled" else tok
-    return out.split()[1] if len(out.split()) > 1 else low[:40]
-
-
-JOB_TERMINAL = {"done", "done?", "failed", "blocked", "timeout", "wedged", "canceled",
-                "cancelled", "permission-blocked", "interrupted"}
+    # One query only: parse JSON output when the command ran; unknown => fail closed.
+    # (Do not fall back to a second text query.)
+    if rc != 0 and not (out and str(out).strip()):
+        return None
+    return parse_job_status_output(out, json_ok=True)
 
 
 def job_running(job_id, osrc=None):
     st = job_status(job_id, osrc)
     if st is None:
-        return False
+        return None          # unknown: fail closed (not "not running")
     return st not in JOB_TERMINAL
 
 
+def is_terminal_status(st):
+    n = _norm_job_status(st)
+    return bool(n) and n in JOB_TERMINAL
+
+
 def cancel_job(job_id, osrc=None):
+    """Cancel an Outsourcerer job. -> (ok, output). Never raises on runner errors."""
     if not job_id:
-        return 1, "no job id"
+        return False, "no job id"
     if osrc is None:
-        return osrc_run(["cancel", str(job_id)])
-    return osrc(["cancel", str(job_id)])
+        runner = lambda a: osrc_run(a)
+    else:
+        runner = osrc
+    try:
+        rc, out = runner(["cancel", str(job_id)])
+    except Exception as e:
+        return False, str(e)
+    ok = (rc == 0)
+    return ok, out
 
 
 def brief_text(slug):
@@ -390,31 +452,58 @@ def observe(pkey, info, tree, answers, open_map, board_rows, ps, now, dry=False,
     upd_ts = epoch(upd)
     live = live_of(find_item(tree, key), now)
     job = {"job_id": ps.get("job_id"), "started_at": ps.get("started_at"), "engine": ps.get("engine") or eng,
-           "running": False, "hung": False, "status": None}
+           "running": False, "hung": False, "status": None, "unknown": False, "terminal": False,
+           "cancel_failed": False}
     if eng in ("opencode", "devin") and job["job_id"]:
         if osrc is None:
             osrc = osrc_run
-        job["status"] = job_status(job["job_id"], osrc)
-        job["running"] = job_running(job["job_id"], osrc) if job["status"] is not None else False
-        # re-check with running logic: if status says running-ish, trust it
-        if job["status"] and job["status"] not in JOB_TERMINAL:
-            job["running"] = True
+        # Exactly one status query per observation.
+        st = job_status(job["job_id"], osrc)
+        job["status"] = st
+        if st is None:
+            # FAIL CLOSED: unknown status means we cannot prove it is safe to launch another job.
+            job["unknown"] = True
+            job["running"] = False
+            job["terminal"] = False
+        else:
+            nst = _norm_job_status(st)
+            job["status"] = nst
+            job["terminal"] = is_terminal_status(nst)
+            job["running"] = not job["terminal"]
         started = job.get("started_at")
         if job["running"] and isinstance(started, (int, float)) and (now - started) >= HUNG_MIN * 60:
             job["hung"] = True
             if not dry:
-                cancel_job(job["job_id"], osrc)
-                job["running"] = False
-                job["status"] = "canceled"
-                ps.pop("job_id", None)
-                ps.pop("started_at", None)
-                ps["last_job"] = {"job_id": job["job_id"], "engine": eng, "ended": "hung-canceled", "when": iso(now)}
+                ok, cerr = cancel_job(job["job_id"], osrc)
+                # Support mocks that return (rc, out).
+                if not isinstance(ok, bool):
+                    try:
+                        ok = (int(ok) == 0)
+                    except (TypeError, ValueError):
+                        ok = bool(ok)
+                if ok:
+                    ps["last_job"] = {"job_id": job["job_id"], "engine": eng, "ended": "hung-canceled", "when": iso(now)}
+                    ps.pop("job_id", None)
+                    ps.pop("started_at", None)
+                    job["running"] = False
+                    job["terminal"] = True
+                    job["status"] = "canceled"
+                else:
+                    # FAIL CLOSED: cancellation did not succeed; keep tracking the job and do not launch another.
+                    job["cancel_failed"] = True
+                    job["error"] = str(cerr or "cancel failed")
+        # A confirmed terminal job releases tracking (preserve last_job record).
+        if job["terminal"] and not job.get("cancel_failed") and ps.get("job_id") == job["job_id"]:
+            ps["last_job"] = {"job_id": job["job_id"], "engine": eng, "ended": job["status"] or "terminal", "when": iso(now)}
+            ps.pop("job_id", None)
+            ps.pop("started_at", None)
     if eng == "claude":
         if (live["found"] and not live["working_now"] and (live["idle_min"] or 0) < BUSY_MAX_IDLE_MIN
                 and process_running(key)):
             live["working_now"] = True          # mid-turn: a process holds the session, never wake it now
     else:
-        if job["running"]:
+        # Any tracked non-claude job that is not confirmed terminal blocks (fail closed).
+        if job["running"] or job.get("unknown") or job.get("cancel_failed") or (ps.get("job_id") and not job["terminal"]):
             live["working_now"] = True
 
     # idle check-ins: consecutive cycles with nothing new in status (held while the session is mid-turn)
@@ -517,10 +606,21 @@ def skip_reason(entry, reason, ps, now, paused):
         if not entry["live"]["found"]:
             return "owner session not in the Navigator"
     else:
-        if (entry.get("job") or {}).get("running") or ps.get("job_id"):
-            # one job per owner at a time (a live running job blocks; a stale id is cleared by observe)
-            if (entry.get("job") or {}).get("running"):
-                return "job running (%s)" % ((entry.get("job") or {}).get("job_id") or ps.get("job_id"))
+        job = entry.get("job") or {}
+        tracked = job.get("job_id") or ps.get("job_id")
+        # FAIL CLOSED: one job per owner. If a job is tracked and not confirmed terminal,
+        # or its status is unknown / cancellation failed, never launch another.
+        if tracked and not job.get("terminal"):
+            if job.get("unknown"):
+                return "job status unknown (%s)" % tracked
+            if job.get("cancel_failed"):
+                return "job cancel failed (%s)" % tracked
+            return "job running (%s)" % tracked
+        if tracked and job.get("terminal"):
+            pass
+        elif ps.get("job_id") and not job.get("terminal"):
+            # observation did not prove terminal; keep the durable id and block.
+            return "job status unknown (%s)" % ps.get("job_id")
     if entry["live"]["working_now"]:
         return "working now"
     if (entry["status"] or {}).get("state") == "waiting-on-uri" and reason not in ("answered", "keep-moving"):
@@ -566,16 +666,49 @@ def wake_text(entry, reason, ps, now, note=""):
     return "%s\nWhen done: %s. End with owner.py status set" % (body, cmd)
 
 
+def _is_safe_project_cwd(path):
+    """Reject supervisor repo/cwd as an accidental target; require an actual directory."""
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        real = os.path.realpath(path)
+        sup_here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+        sup_repo = os.path.realpath(os.path.join(sup_here, ".."))
+        proc = os.path.realpath(os.getcwd())
+        if real in (sup_here, sup_repo, proc):
+            # Allow only if it's explicitly a ~/projects/* style project dir (not the engine repo).
+            home_proj = os.path.realpath(os.path.expanduser("~/projects"))
+            if not (real == home_proj or real.startswith(home_proj + os.sep)):
+                return False
+    except Exception:
+        return False
+    return True
+
+
 def project_cwd(entry):
-    """Best-effort cwd for an Outsourcerer wake: ~/projects/<slug>, else project key, else cwd."""
+    """Resolve cwd for an Outsourcerer wake. FAIL CLOSED if unresolved.
+
+    -> (path, None) or (None, error). Never falls back to the supervisor process/repo cwd.
+    """
     slug = entry.get("project") or ""
-    home = os.path.expanduser("~/projects/%s" % slug)
-    if os.path.isdir(home):
-        return home
+    tried = []
+    candidates = []
+    if slug:
+        candidates.append(os.path.expanduser("~/projects/%s" % slug))
     pk = entry.get("project_key") or ""
-    if pk and os.path.isdir(pk):
-        return pk
-    return os.getcwd()
+    if pk:
+        candidates.append(pk)
+        # common: slug from project_key basename
+        base = os.path.basename(os.path.normpath(pk))
+        if base and base != slug:
+            candidates.append(os.path.expanduser("~/projects/%s" % base))
+    for c in candidates:
+        if c in tried:
+            continue
+        tried.append(c)
+        if _is_safe_project_cwd(c):
+            return c, None
+    return None, "project cwd unresolved for %s (tried: %s)" % (slug or pk or "?", ", ".join(tried) or "-")
 
 
 def engine_prompt(entry, reason, ps, now, note=""):
@@ -639,6 +772,9 @@ def do_wake(entry, reason, ps, now, dry, note=""):
     """Send/launch one wake (unless dry) and record it in ps and log.md. -> (sent ok, short output)."""
     eng = entry.get("engine") or engine_of(entry["project"])
     if eng in ("opencode", "devin"):
+        cwd, cwd_err = project_cwd(entry)
+        if cwd_err:
+            return False, note_launch_failure(entry, ps, now, cwd_err)
         prompt = engine_prompt(entry, reason, ps, now, note)
         if dry:
             return True, "dry run (%s)" % eng
@@ -648,7 +784,7 @@ def do_wake(entry, reason, ps, now, dry, note=""):
         args = list(ENGINE_CMD[eng]) + [prompt]
         try:
             r = subprocess.run([sh] + args, capture_output=True, text=True, timeout=180,
-                               cwd=project_cwd(entry),
+                               cwd=cwd,
                                env=dict(os.environ, OSRC_REQUIRE_INTERACTIVE="0"))
         except (OSError, subprocess.SubprocessError) as e:
             return False, note_launch_failure(entry, ps, now, str(e))
@@ -930,18 +1066,31 @@ def cycle(dry_run=False, now=None):
             slug = owner.slug_of(pkey)
             try:
                 ps = json.loads(json.dumps(projects.get(slug) or {}))   # private copy
-                entry = observe(pkey, info, tree, answers, open_map, board_rows, ps, now, dry=dry)
-                paused = slug in paused_projects
-                reason = wake_reason(entry, ps, now)
-                skip = skip_reason(entry, reason, ps, now, paused) if reason else "nothing due"
-                if reason and not skip:
-                    ok, out = do_wake(entry, reason, ps, now, dry)
-                    if ok:
-                        wakes.append({"project": slug, "reason": reason, "key": entry["owner_key"]})
-                    else:
-                        skip = out
-                if skip:
-                    skips.append({"project": slug, "reason": reason, "skip": skip})
+                # Serialize check-launch-durable-tracking across cycles and manual wakes.
+                # Lock, reload durable state (preserve raced job IDs/wakes), observe+decide,
+                # launch if due, persist this owner's state before releasing.
+                with state_lock():
+                    cur = load_state() if not dry else {"projects": projects, "paused_projects": list(paused_projects), "paused": st.get("paused")}
+                    latest = (cur.get("projects") or {}).get(slug) or {}
+                    paused_projects = set(cur.get("paused_projects") or paused_projects)
+                    ps = _merge_raced_durable(latest, ps)
+                    entry = observe(pkey, info, tree, answers, open_map, board_rows, ps, now, dry=dry)
+                    paused = slug in paused_projects or bool(cur.get("paused"))
+                    reason = wake_reason(entry, ps, now)
+                    skip = skip_reason(entry, reason, ps, now, paused) if reason else "nothing due"
+                    if reason and not skip:
+                        ok, out = do_wake(entry, reason, ps, now, dry)
+                        if ok:
+                            wakes.append({"project": slug, "reason": reason, "key": entry["owner_key"]})
+                        else:
+                            skip = out
+                    if skip:
+                        skips.append({"project": slug, "reason": reason, "skip": skip})
+                    if not dry:
+                        cur2 = load_state()
+                        latest2 = (cur2.get("projects") or {}).get(slug) or {}
+                        cur2.setdefault("projects", {})[slug] = _merge_raced_durable(latest2, ps)
+                        write_json(path("state.json"), cur2)
                 entry["wake"] = {"reason": reason, "skip": skip, "dry_run": dry}
                 entry["paused"] = paused
                 entry["register"] = register_row(entry, ps, now, paused)
@@ -965,15 +1114,8 @@ def cycle(dry_run=False, now=None):
         owner.write_atomic(path("digest.md"), digest_md(digest, now))
         write_json(path("register.json"), {"generated_at": iso(now), "ts": now, "dry_run": dry, "rows": rows})
         if not dry:
-            with state_lock():      # merge into the current file: a pause or a manual wake may have landed meanwhile
+            with state_lock():
                 cur = load_state()
-                cur_projects = cur.setdefault("projects", {})
-                for slug, ps in done.items():
-                    old = cur_projects.get(slug) or {}
-                    if (old.get("last_wake") or {}).get("ts", 0) > (ps.get("last_wake") or {}).get("ts", 0):
-                        for k in ("last_wake", "wakes", "answered_sent"):
-                            ps[k] = old.get(k)
-                    cur_projects[slug] = ps
                 cur["last_cycle"] = iso(now)
                 write_json(path("state.json"), cur)
         line = "cycle%s: %d owners; %s %s; skips %s%s%s" % (
@@ -1008,8 +1150,46 @@ def resolve_project(tree, needle):
         needle, ", ".join(sorted(owner.slug_of(k) for k in owners)) or "none"))
 
 
+_RACE_KEEP = ("job_id", "started_at", "last_wake", "wakes", "answered_sent", "launch_failures", "last_job")
+
+
+def _merge_raced_durable(latest, local):
+    """Preserve durable tracking written by a concurrent actor (job IDs/wakes must not be lost)."""
+    latest = dict(latest or {})
+    local = dict(local or {})
+    latest_wake = ((latest.get("last_wake") or {}).get("ts") or 0)
+    local_wake = ((local.get("last_wake") or {}).get("ts") or 0)
+    latest_job = latest.get("job_id")
+    local_job = local.get("job_id")
+    local_resolved_latest = bool(latest_job and (local.get("last_job") or {}).get("job_id") == latest_job)
+    local_cleared = (not local_job and local_resolved_latest)
+    # FAIL CLOSED for races: if durable state has an active job_id we did NOT resolve, keep it.
+    if latest_job and not local_resolved_latest and (not local_job or local_job != latest_job):
+        for k in _RACE_KEEP:
+            if k in latest:
+                local[k] = latest.get(k)
+        if latest.get("engine"):
+            local["engine"] = latest["engine"]
+        return local
+    # latest resolved the same job terminally and has newer wake info with no new job: keep latest
+    if latest_job and local_cleared and latest_wake > local_wake and not local_job:
+        for k in _RACE_KEEP:
+            if k in latest:
+                local[k] = latest.get(k)
+        if latest.get("engine"):
+            local["engine"] = latest["engine"]
+        return local
+    if latest_wake > local_wake and not latest_job:
+        for k in _RACE_KEEP:
+            if k in latest:
+                local[k] = latest.get(k)
+        if latest.get("engine"):
+            local["engine"] = latest["engine"]
+    return local
+
+
 def wake_cmd(project, note="", now=None):
-    """Manual wake: same caps (pause, 30 min, 24 a day). -> result dict."""
+    """Manual wake: same caps (pause, 30 min, 24 a day), serialized across check-launch-track."""
     now = now or time.time()
     dry = dry_env()
     tree = get("/api/tree?window=7d")
@@ -1020,14 +1200,24 @@ def wake_cmd(project, note="", now=None):
         st = load_state()
         ps = json.loads(json.dumps((st.get("projects") or {}).get(slug) or {}))
         entry = observe(pkey, info, tree, load_answers(dec), {str(x.get("id")): x for x in dec.get("open") or []},
-                        {}, dict(ps), now, dry=dry)       # observation is not persisted: only the cycle counts check-ins
+                        {}, ps, now, dry=dry)       # observation mutates ps; only wake tracking is persisted below
         paused = bool(st.get("paused")) or slug in (st.get("paused_projects") or [])
         eng = entry.get("engine") or engine_of(slug)
+        # Re-check durable tracking under lock: caps + fail-closed job checks (manual wake
+        # is not blocked by working_now/waiting-on-uri the way a cycle wake is).
         skip = cap_reason(ps, now, paused)
         if not skip and eng == "claude" and not entry["owner_key"]:
             skip = "no owner session"
-        if not skip and eng != "claude" and (entry.get("job") or {}).get("running"):
-            skip = "job running (%s)" % ((entry.get("job") or {}).get("job_id") or "")
+        if not skip and eng != "claude":
+            job = entry.get("job") or {}
+            tracked = job.get("job_id") or ps.get("job_id")
+            if tracked and not job.get("terminal"):
+                if job.get("unknown"):
+                    skip = "job status unknown (%s)" % tracked
+                elif job.get("cancel_failed"):
+                    skip = "job cancel failed (%s)" % tracked
+                else:
+                    skip = "job running (%s)" % tracked
         res = {"ok": False, "project": slug, "reason": "manual", "dry_run": dry, "engine": eng}
         if skip:
             res["skip"] = skip
@@ -1035,8 +1225,18 @@ def wake_cmd(project, note="", now=None):
             ok, out = do_wake(entry, "manual", ps, now, dry, note)
             res.update(ok=ok, output=out)
             if ok and not dry:
-                st.setdefault("projects", {})[slug] = ps
-                write_json(path("state.json"), st)
+                # Reload and merge to preserve any raced durable tracking (job IDs/wakes).
+                # Manual wake persists only durable tracking, not observation/check-in state.
+                cur = load_state()
+                latest = dict((cur.get("projects") or {}).get(slug) or {})
+                merged = _merge_raced_durable(latest, ps)
+                for obs in ("seen_updated_at", "idle_checkins", "last_shipped"):
+                    if obs in latest:
+                        merged[obs] = latest[obs]
+                    elif obs in merged and obs not in ps:
+                        pass
+                cur.setdefault("projects", {})[slug] = merged
+                write_json(path("state.json"), cur)
     log_cycle("manual wake %s by %s: %s%s" % (slug, actor(), "sent" if res["ok"] else res.get("skip") or res.get("output"),
                                               " (dry run)" if dry else ""), now)
     return res

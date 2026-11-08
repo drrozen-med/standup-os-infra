@@ -95,9 +95,13 @@ class Base(unittest.TestCase):
         d = self.tmp.name
         self.owners_dir, self.sup_dir = os.path.join(d, "owners"), os.path.join(d, "sup")
         self.answers = os.path.join(d, "answers.json")
+        self.proj_home = os.path.join(d, "home")
+        os.makedirs(os.path.join(self.proj_home, "projects", "alpha"), exist_ok=True)
+        os.makedirs(os.path.join(self.proj_home, "projects", "beta"), exist_ok=True)
         env = mock.patch.dict(os.environ, {"OWNER_DIR": self.owners_dir, "SUPERVISOR_DIR": self.sup_dir,
                                            "CCC_NAV_ANSWERS": self.answers,
-                                           "WATCHTOWER_GITHUB_JSON": os.path.join(d, "github.json")})
+                                           "WATCHTOWER_GITHUB_JSON": os.path.join(d, "github.json"),
+                                           "HOME": self.proj_home})
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("SUPERVISOR_DRY_RUN", None)
@@ -893,6 +897,165 @@ class Engines(Base):
         for sl in ("alpha", "beta"):
             with open(os.path.join(self.owners_dir, sl, "engine")) as f:
                 self.assertEqual(f.read().strip(), "devin")
+
+class OutsourcererSafety(Base):
+    """Safety fixes: fail-closed status/cancel, cwd, serialization, parsing."""
+
+    def setUp(self):
+        super().setUp()
+        self.osrc = "/fake/outsourcerer.sh"
+        self._p_find = mock.patch.object(sup, "find_outsourcerer", return_value=self.osrc)
+        self._p_find.start(); self.addCleanup(self._p_find.stop)
+        self._p_brief = mock.patch.object(sup, "brief_text", side_effect=lambda sl: "BRIEF:%s" % sl)
+        self._p_brief.start(); self.addCleanup(self._p_brief.stop)
+        self.runs.stdout = "job-abc123\n[outsourcerer] launched"
+
+    def set_engine(self, slug, eng):
+        d = os.path.join(self.owners_dir, slug)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "engine"), "w") as f:
+            f.write(eng + "\n")
+
+    def launches(self):
+        return [a for a, _ in self.runs.calls if self.osrc in a]
+
+    def test_parse_actual_status_output_json_and_text_tokens(self):
+        # JSON object forms
+        self.assertEqual(sup.parse_job_status_output('{"status":"running"}', json_ok=True), "running")
+        self.assertEqual(sup.parse_job_status_output('{"state":"done"}', json_ok=True), "done")
+        self.assertEqual(sup.parse_job_status_output('{"job":{"status":"permission-blocked"}}', json_ok=True), "permission-blocked")
+        self.assertEqual(sup.parse_job_status_output('{"status":"cancelled"}', json_ok=True), "canceled")
+        self.assertEqual(sup.parse_job_status_output('{"status":"done?"}', json_ok=True), "done?")
+        # scalar/string JSON
+        self.assertEqual(sup.parse_job_status_output('"failed"', json_ok=True), "failed")
+        # unknown/ambiguous JSON fails closed
+        self.assertIsNone(sup.parse_job_status_output('{"id":"x","progress":1}', json_ok=True))
+        self.assertIsNone(sup.parse_job_status_output('[1,2]', json_ok=True))
+        self.assertIsNone(sup.parse_job_status_output('', json_ok=True))
+        # text token parsing (non-JSON mode) - reliable whole-token match
+        self.assertEqual(sup.parse_job_status_output('  Status: running  \n'), "running")
+        self.assertEqual(sup.parse_job_status_output('job x canceled at 12:00'), "canceled")
+        self.assertEqual(sup.parse_job_status_output('result=permission-blocked reason=denied'), "permission-blocked")
+        self.assertIsNone(sup.parse_job_status_output('no known state here'))
+
+    def test_job_status_one_query_json_only(self):
+        calls = []
+        def runner(args):
+            calls.append(list(args))
+            return 0, '{"status":"queued"}'
+        self.assertEqual(sup.job_status("jid1", runner), "queued")
+        self.assertEqual(calls, [["status", "--json", "jid1"]])
+
+    def test_job_status_unknown_fails_closed_no_second_query(self):
+        calls = []
+        def runner(args):
+            calls.append(list(args))
+            return 0, '{"unexpected":"shape"}'
+        self.assertIsNone(sup.job_status("jid2", runner))
+        self.assertEqual(len(calls), 1)
+
+    def test_unknown_job_status_blocks_launch_never_launches_second(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"job_id": "job-unk", "started_at": NOON - 10 * MIN,
+                                               "engine": "opencode", "last_wake": {"ts": 0}}}})
+        with mock.patch.object(sup, "job_status", return_value=None):
+            self.run_cycle()
+        self.assertEqual(self.launches(), [])
+        reg = self.reg()
+        self.assertEqual(reg["job"]["id"], "job-unk")
+        self.assertTrue(reg["working_now"])
+        # ps still tracks the job (fail closed)
+        self.assertEqual(sup.load_state()["projects"]["alpha"]["job_id"], "job-unk")
+
+    def test_cancel_failure_fails_closed_keeps_tracking(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"job_id": "job-hung", "started_at": NOON - 100 * MIN,
+                                               "engine": "opencode"}}})
+        with mock.patch.object(sup, "job_status", return_value="running"), \
+             mock.patch.object(sup, "cancel_job", return_value=(False, "cancel denied")):
+            self.run_cycle(NOON + 100 * MIN)
+        self.assertEqual(self.launches(), [])
+        ps = sup.load_state()["projects"]["alpha"]
+        self.assertEqual(ps.get("job_id"), "job-hung")  # preserved: fail closed
+        reg = self.reg()
+        self.assertEqual(reg["job"]["id"], "job-hung")
+        self.assertTrue(reg["working_now"])
+
+    def test_project_cwd_fail_closed_no_supervisor_fallback(self):
+        bad = {"project": "nope-slug-xyz", "project_key": "/nonexistent/path/xyz"}
+        cwd, err = sup.project_cwd(bad)
+        self.assertIsNone(cwd)
+        self.assertIn("cwd unresolved", err)
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        # make both candidate paths invalid for alpha's resolved cwd
+        with mock.patch.object(sup, "project_cwd", return_value=(None, "cwd unresolved for alpha")):
+            self.run_cycle()
+        self.assertEqual(self.launches(), [])
+        self.assertIn("cwd unresolved", " ".join(self.cycles()))
+        self.assertNotIn("job_id", sup.load_state().get("projects", {}).get("alpha", {}))
+
+    def test_simultaneous_wake_preserves_job_id_across_race(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        # Simulate a race: durable state gets a different active job_id while cycle is in
+        # check-launch-track (e.g. lock bypass / concurrent writer). It must not be lost.
+        real_do = sup.do_wake
+        injected = {"done": False}
+        def racing_do(entry, reason, ps, now, dry, note=""):
+            if not injected["done"] and not dry:
+                st = sup.load_state()
+                st.setdefault("projects", {}).setdefault("alpha", {})["job_id"] = "job-race"
+                st["projects"]["alpha"]["started_at"] = now - 5
+                st["projects"]["alpha"]["engine"] = "opencode"
+                st["projects"]["alpha"]["last_wake"] = {"reason": "manual", "when": "x", "ts": now + 1}
+                sup.write_json(sup.path("state.json"), st)
+                injected["done"] = True
+            return real_do(entry, reason, ps, now, dry, note)
+        with mock.patch.object(sup, "do_wake", side_effect=racing_do):
+            self.run_cycle()
+        ps = sup.load_state()["projects"]["alpha"]
+        # raced durable job_id/wake must be preserved
+        self.assertEqual(ps.get("job_id"), "job-race")
+        self.assertEqual((ps.get("last_wake") or {}).get("ts"), NOON + 1)
+
+    def test_manual_wake_blocked_by_unknown_status(self):
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"job_id": "job-unk", "engine": "opencode"}}})
+        with mock.patch.object(sup, "job_status", return_value=None), \
+             mock.patch.object(sup.time, "time", return_value=NOON):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = sup.main(["wake", "alpha", "--json"])
+            res = json.loads(out.getvalue())
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(res.get("ok"))
+        self.assertIn("unknown", res.get("skip", ""))
+        self.assertEqual(self.launches(), [])
+
+    def test_terminal_job_clears_tracking_allows_rewake(self):
+        # extends existing behavior: confirmed terminal clears durable id
+        self.add_owner(P1, K1, status(), idle_min=40)
+        self.set_engine("alpha", "opencode")
+        os.makedirs(self.sup_dir, exist_ok=True)
+        sup.write_json(os.path.join(self.sup_dir, "state.json"),
+                       {"projects": {"alpha": {"job_id": "job-done", "started_at": NOON - 10 * MIN,
+                                               "engine": "opencode", "last_wake": {"ts": 0}}}})
+        with mock.patch.object(sup, "job_status", return_value="canceled"):
+            self.run_cycle()
+        # terminal cleared, so a launch may proceed
+        self.assertEqual(len(self.launches()), 1)
+        self.assertEqual(sup.load_state()["projects"]["alpha"]["job_id"], "job-abc123")
+
 
 
 if __name__ == "__main__":
