@@ -2208,7 +2208,9 @@ class App:
 
     def decision_session(self, d):
         """The session a decision came from, so its card can open it: the key it was asked with, else the
-        co-pilot (source "copilot") or a project owner (source "<project>-owner"). "" when unknown."""
+        co-pilot (source "copilot") or a project owner. The owner is found by, in order: the source
+        ("<project>-owner" or a path under owners/<project>/), the decision's lane, a project named inside the
+        source text. "" when unknown or ambiguous."""
         key = str(d.get("session") or "")
         if key:
             return key
@@ -2216,9 +2218,26 @@ class App:
         snap = self.state.snapshot()
         if src == "copilot":
             return snap["copilot"] or ""
-        if src.endswith("-owner"):
-            return next((k for repo, k in (snap.get("owners") or {}).items() if owner_slug(repo).lower() == src[:-6].lower()), "")
-        return ""
+        owners = {owner_slug(repo): k for repo, k in (snap.get("owners") or {}).items()}   # slug -> owner session
+        flat = lambda s: re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+        by_flat = {}
+        for slug, k in owners.items():
+            by_flat.setdefault(flat(slug), k)
+        if src.endswith("-owner") and flat(src[:-6]) in by_flat:
+            return by_flat[flat(src[:-6])]
+        m = re.search(r"owners/([^/\s]+)/", src)
+        if m and flat(m.group(1)) in by_flat:
+            return by_flat[flat(m.group(1))]
+        lane = flat(d.get("lane"))
+        if lane in by_flat:
+            return by_flat[lane]
+        # "shlav-bet" for shlav-bet-family, "airlinebridge" for airline: one owner whose name starts the other's
+        near = {k for f, k in by_flat.items() if lane and min(len(f), len(lane)) >= 4 and (f.startswith(lane) or lane.startswith(f))}
+        if len(near) == 1:
+            return near.pop()
+        text = flat(src)
+        named = {k for f, k in by_flat.items() if len(f) >= 4 and f in text}
+        return named.pop() if len(named) == 1 else ""
 
     def owner(self, repo):
         """The tree's `owner` field for one project (None when it has no owner)."""

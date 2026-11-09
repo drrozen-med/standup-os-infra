@@ -145,6 +145,34 @@ class DecisionOpeners(unittest.TestCase):
         self.assertEqual(a.decision_session({"asked_by": "boardsbridge-owner"}), "claude:own2")   # case does not matter
         self.assertEqual(a.decision_session({"source": "shlav-bet-owner"}), "")
 
+    OWNERS = {"/p/cdl-bridge": "claude:cdl", "/p/shlav-bet-family": "claude:shlav", "/p/airline": "claude:air",
+              "/p/shared-marketing": "claude:mkt", "/p/nurse_job_interview": "claude:nbi", "/p/vera": "claude:vera"}
+
+    def test_decision_without_a_session_opens_its_lane_owner(self):
+        a = self.app(owners=self.OWNERS)
+        self.assertEqual(a.decision_session({"lane": "cdl-bridge", "source": "cli"}), "claude:cdl")
+        self.assertEqual(a.decision_session({"lane": "Nurse_Job_Interview", "source": "issue #30"}), "claude:nbi")
+        self.assertEqual(a.decision_session({"lane": "shlav-bet", "source": "owner day plan"}), "claude:shlav")   # shorter lane name
+        self.assertEqual(a.decision_session({"lane": "airlinebridge", "source": "AirlineBridge lane"}), "claude:air")
+
+    def test_owner_path_in_the_source_beats_the_lane(self):
+        a = self.app(owners=self.OWNERS)
+        d = {"lane": "vera", "source": "~/.ccc-navigator/owners/cdl-bridge/uri-clicks-now.md"}
+        self.assertEqual(a.decision_session(d), "claude:cdl")
+
+    def test_project_named_in_the_source_when_the_lane_is_a_topic(self):
+        a = self.app(owners=self.OWNERS)
+        self.assertEqual(a.decision_session({"lane": "gtm-crm", "source": "shared-marketing owner r20; verified"}), "claude:mkt")
+        self.assertEqual(a.decision_session({"lane": "platform-cost", "source": "vera day plan 2026-11-09 / PR #535"}), "claude:vera")
+
+    def test_unknown_or_ambiguous_lane_stays_without_a_button(self):
+        a = self.app(owners=self.OWNERS)
+        self.assertEqual(a.decision_session({"lane": "aba-cdl-launch", "source": "ABA+CDL lane"}), "")
+        self.assertEqual(a.decision_session({"lane": "", "source": "cli"}), "")
+        self.assertEqual(a.decision_session({"lane": "sh", "source": ""}), "")                                  # too short to guess from
+        two = self.app(owners={"/p/shlav-bet-family": "claude:a", "/p/shlav-bet-cloud": "claude:b"})
+        self.assertEqual(two.decision_session({"lane": "shlav-bet", "source": ""}), "")                        # two candidates: do not guess
+
     def test_copilot_and_unknown_sources(self):
         a = self.app(copilot="claude:pilot")
         self.assertEqual(a.decision_session({"source": "copilot"}), "claude:pilot")

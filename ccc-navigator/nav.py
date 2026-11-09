@@ -1331,6 +1331,8 @@ def cmd_decisions(args, client):
             due = "" if left is None else ("  [%dd left]" % left if left >= 0 else "  [%dd overdue]" % -left)
             print("P%s %-24s %s%s\n     options: %s" % (x.get("priority", 3), x["id"], x.get("question", ""), due,
                                                      " / ".join(map(str, x.get("options") or []))))
+            if x.get("open_session"):
+                print("     session: %s  (the card's Claude / Codex / Orca buttons open it)" % x["open_session"])
     return 0
 
 
