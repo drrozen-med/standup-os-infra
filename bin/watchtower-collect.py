@@ -576,14 +576,44 @@ def render(snapshot, decisions, now):
     return "\n".join(lines)
 
 
+def _inbox_from_files():
+    """The navigator's inbox read straight from its files, with the navigator's own logic and paths
+    (CCC_NAV_DECISIONS / CCC_NAV_ANSWERS override, as in navigator.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("nav_decisions", ROOT / "ccc-navigator" / "decisions.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    home = Path(os.environ.get("CCC_NAV_HOME", "~/.ccc-navigator")).expanduser()
+    return mod.Inbox(os.environ.get("CCC_NAV_DECISIONS") or home / "decisions.json",
+                     os.environ.get("CCC_NAV_ANSWERS") or home / "answers.json",
+                     CONFIG_DIR / "decisions.json")
+
+
+def _normalize(d):
+    return dict(d, priority=d.get("priority") or 3, deadline=d.get("deadline") or None,
+                options=d.get("options") or [], lane=d.get("lane") or "", status="open")
+
+
 def load_decisions():
     """Open decisions from the navigator's inbox (Watchtower's queue minus what Uri answered, plus questions
-    agents asked with `nav ask`). Falls back to the local file when the navigator is down."""
+    agents asked with `nav ask`). When the navigator does not answer, the same inbox is read from its files,
+    so an answered decision is never shown as waiting just because the navigator was slow."""
     try:
         with urllib.request.urlopen(f"{NAV_URL}/api/decisions", timeout=20) as resp:
-            return json.loads(resp.read())["open"]
+            return [_normalize(d) for d in json.loads(resp.read())["open"]]
     except Exception:
-        return json.loads((CONFIG_DIR / "decisions.json").read_text())
+        pass
+    try:
+        return [_normalize(d) for d in _inbox_from_files().list()["open"]]
+    except Exception:
+        # Last resort: the raw queue minus answers, never the raw queue alone.
+        answers_path = Path(os.environ.get("CCC_NAV_ANSWERS") or "~/.ccc-navigator/answers.json").expanduser()
+        try:
+            answered = set(json.loads(answers_path.read_text()))
+        except (OSError, ValueError, TypeError):
+            answered = set()
+        raw = json.loads((CONFIG_DIR / "decisions.json").read_text())
+        return [_normalize(d) for d in raw if d.get("status", "open") == "open" and d.get("id") not in answered]
 
 
 def main():

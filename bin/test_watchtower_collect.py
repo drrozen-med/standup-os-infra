@@ -86,3 +86,35 @@ def test_update_and_baseline_state(tmp_path):
         assert "o/r" in base
     finally:
         wt.STATE_DIR = old
+
+
+def test_fallback_skips_answered_decisions(tmp_path, monkeypatch):
+    """Navigator down: the brief must still hide decisions Uri answered in the inbox."""
+    import json
+    queue = [
+        {"id": "aba-price", "lane": "aba", "priority": 1, "question": "Price?", "options": ["A", "B"],
+         "deadline": "2026-11-01", "status": "open"},
+        {"id": "still-open", "lane": "aba", "priority": 2, "question": "Ship?", "options": ["Yes", "No"],
+         "deadline": None, "status": "open"},
+        {"id": "closed-one", "lane": "aba", "priority": 1, "question": "Old?", "options": ["Yes"],
+         "deadline": None, "status": "done"},
+    ]
+    (tmp_path / "decisions.json").write_text(json.dumps(queue))
+    nav_home = tmp_path / "nav"
+    nav_home.mkdir()
+    (nav_home / "answers.json").write_text(json.dumps({"aba-price": {"choice": "A", "ts": 1}}))
+    (nav_home / "decisions.json").write_text(json.dumps([
+        {"id": "nav-asked", "lane": "x", "priority": 1, "question": "Asked by agent?", "options": ["Ok"],
+         "status": "open"}]))
+    monkeypatch.setattr(wt, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wt, "NAV_URL", "http://127.0.0.1:9")  # nothing listens: forces the fallback
+    monkeypatch.setenv("CCC_NAV_HOME", str(nav_home))
+    monkeypatch.delenv("CCC_NAV_ANSWERS", raising=False)
+    monkeypatch.delenv("CCC_NAV_DECISIONS", raising=False)
+    ids = sorted(d["id"] for d in wt.load_decisions())
+    assert ids == ["nav-asked", "still-open"]
+    # The brief renders the fallback items (missing deadline/priority keys must not crash it).
+    snap = {"live": {"ok": False, "error": "down", "lanes": {}}, "lane_titles": {}, "github": {}, "github_state": {}}
+    now = __import__("datetime").datetime(2026, 11, 9, tzinfo=__import__("datetime").timezone.utc)
+    out = wt.render(snap, wt.load_decisions(), now)
+    assert "Decisions waiting on you (2)" in out and "aba-price" not in out
