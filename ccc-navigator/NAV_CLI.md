@@ -375,6 +375,13 @@ python3 nav.py rank crm-fix-1a2b3 other-id --why crm-fix-1a2b3="blocks release" 
 python3 nav.py rank --clear
 ```
 
+Each card has **Conversation / ↗ Claude / ↗ Codex / ↗ Orca** buttons that open the session behind the
+question, for the steps that need Uri inside that session (a signed-in browser, a login). The session is the
+`--session` the question was asked with; without one, the project's owner session, found from the source
+(`<project>-owner` or a path under `owners/<project>/`), then the lane, then a project named in the source.
+When none is clear the card has no buttons. `nav.py decisions` returns it as `open_session` (and prints a
+`session:` line with `--table`).
+
 Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edited; its brief drops
 answered ones). Every ask, answer and reopen is in `~/.ccc-navigator/changes.jsonl` with its actor
 (`$NAV_ACTOR` for the CLI, `you` for the UI and the phone).
