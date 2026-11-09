@@ -82,6 +82,13 @@ class NavigatorClient:
                 detail = exc.read().decode("utf-8", "replace").strip()
             except Exception:
                 pass
+            try:
+                err = json.loads(detail).get("error")
+                message = err.get("message") if isinstance(err, dict) else None
+            except (ValueError, AttributeError):
+                message = None
+            if message and "\n" in str(message):     # a multi-line explanation: show it as written, not as JSON
+                raise NavError(f"navigator refused this (HTTP {exc.code}): {message}") from exc
             suffix = f": {detail}" if detail else ""
             raise NavError(f"navigator returned HTTP {exc.code}{suffix}") from exc
         except Exception as exc:
@@ -470,6 +477,10 @@ def build_parser():
     dl = subparsers.add_parser("decisions", help="the decision inbox: what waits on Uri (open first; --answered for recent answers)")
     _add_global_options(dl, subcommand=True)
     dl.add_argument("--answered", action="store_true", help="show recent answers instead of open questions")
+    dl.add_argument("--for", dest="holder", choices=("uri", "supervisor", "auto", "all"), default="all",
+                    help="whose they are: uri (waits on him), supervisor (problems on its desk), "
+                         "auto (go ahead on their default at the deadline), all (default)")
+    dl.add_argument("--went-ahead", action="store_true", help="defaults that went ahead in the last week (undo: nav decide <id> --undo)")
 
     dc = subparsers.add_parser("decide", help="answer a decision (as the actor in $NAV_ACTOR), or --reopen it")
     _add_global_options(dc, subcommand=True)
@@ -477,6 +488,7 @@ def build_parser():
     dc.add_argument("choice", nargs="?", default="", help="one of its options, or 'other' with --note")
     dc.add_argument("--note", default="", help="free-text answer or detail")
     dc.add_argument("--reopen", action="store_true", help="remove the answer so it is open again")
+    dc.add_argument("--undo", action="store_true", help="object to a default that went ahead: the asker is told to roll it back")
 
     ak = subparsers.add_parser("ask", help="put a question to Uri: it appears in his decision inbox (and on his phone)")
     _add_global_options(ak, subcommand=True)
@@ -488,6 +500,18 @@ def build_parser():
     ak.add_argument("--session", default="", help="session key that gets the answer as a message, e.g. claude:<uuid>")
     ak.add_argument("--source", default="", help="where the question comes from (PR, report)")
     ak.add_argument("--id", default="", help="stable id (default: derived from the question)")
+    _add_kind_options(ak)
+
+    so = subparsers.add_parser("sort", help="say what kind an open question is (who holds it); for questions asked without a kind")
+    _add_global_options(so, subcommand=True)
+    so.add_argument("id", help="decision id (from nav decisions)")
+    _add_kind_options(so)
+    so.add_argument("--deadline", help="YYYY-MM-DD (an approval without one gets tomorrow)")
+
+    df = subparsers.add_parser("defaults", help="approvals that go ahead on their default: status, on, off, or run now")
+    _add_global_options(df, subcommand=True)
+    df.add_argument("what", nargs="?", default="status", choices=("status", "on", "off", "run"))
+    df.add_argument("--dry-run", action="store_true", help="with run: list what would go ahead, change nothing")
 
     rk = subparsers.add_parser("rank", help="rank top decisions for Uri in the inbox")
     _add_global_options(rk, subcommand=True)
@@ -789,7 +813,11 @@ def print_json(value):
 
 
 def print_error(exc):
-    print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+    text = str(exc)
+    if "\n" in text:        # an explanation in several lines (the kinds of question): as written, so an agent reads it
+        print("error: " + text, file=sys.stderr)
+        return
+    print(json.dumps({"error": text}, ensure_ascii=False), file=sys.stderr)
 
 
 def human_age(ts):
@@ -1314,14 +1342,44 @@ def cmd_unhide_all(args, client):
     return 0
 
 
+def _add_kind_options(sub):
+    sub.add_argument("--kind", default="", help="choice (only Uri can decide) | errand (needs his own hands) | "
+                                               "approval (you go ahead on --default unless he objects) | "
+                                               "problem (broken or shared: the supervisor's, needs --topic)")
+    sub.add_argument("--default", default="", help="the option you go ahead with if nobody objects (required for approval)")
+    sub.add_argument("--undo", default="", help="how the step is rolled back (required for approval)")
+    sub.add_argument("--topic", default="", help="short name of the problem, e.g. test-server-full (required for problem)")
+
+
+def _when(ts):
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(ts)).strftime("%a %d %b %H:%M")
+
+
 def cmd_decisions(args, client):
     d = client.get("/api/decisions")
+    if args.went_ahead:
+        rows = d.get("went_ahead") or []
+        if not args.table:
+            print_json({"count": len(rows), "went_ahead": rows})
+            return 0
+        if not rows:
+            print("no default went ahead in the last week")
+        for x in rows:
+            print("%-24s -> %s  (%s)\n     %s\n     undo: nav decide %s --undo   [plan: %s]" % (
+                x["id"], x.get("choice"), _when(x.get("ts")), x.get("question", ""), x["id"], x.get("undo") or "none given"))
+        return 0
     rows = d.get("answered" if args.answered else "open") or []
+    if not args.answered and args.holder != "all":
+        rows = [x for x in rows if x.get("holder", "uri") == args.holder]
     if not args.table:
-        print_json({"count": len(rows), "decisions": rows})
+        print_json({"count": len(rows), "decisions": rows, "counts": d.get("counts") or {},
+                    "auto_defaults": d.get("auto_defaults"), "desk_open": d.get("desk_open")})
         return 0
     if not rows:
-        print("nothing answered yet" if args.answered else "nothing waits on Uri")
+        print("nothing answered yet" if args.answered else
+              {"uri": "nothing waits on Uri", "supervisor": "nothing on the supervisor's desk",
+               "auto": "nothing is set to go ahead on a default"}.get(args.holder, "no open questions"))
     for x in rows:
         if args.answered:
             a = x.get("answer") or {}
@@ -1331,6 +1389,16 @@ def cmd_decisions(args, client):
             due = "" if left is None else ("  [%dd left]" % left if left >= 0 else "  [%dd overdue]" % -left)
             print("P%s %-24s %s%s\n     options: %s" % (x.get("priority", 3), x["id"], x.get("question", ""), due,
                                                      " / ".join(map(str, x.get("options") or []))))
+            holder = x.get("holder", "uri")
+            who = {"uri": "waits on Uri", "supervisor": "on the supervisor's desk", "dupe": "same problem as %s" % x.get("dupe_of"),
+                   "auto": "goes ahead with \"%s\" on %s unless Uri objects" % (x.get("default"), _when(x["auto_at"]) if x.get("auto_at") else "?")}[holder]
+            if x.get("escalated"):
+                who += " (%s)" % x["escalated"]
+            if x.get("dupes"):
+                who += "; also asked by: %s" % ", ".join(sorted({m.get("lane") or m.get("source") or m["id"] for m in x["dupes"]}))
+            if holder == "uri" and x.get("default"):
+                who += "; the asker suggests \"%s\"" % x["default"]
+            print("     %s: %s" % (x.get("kind") or "not sorted (nav sort %s --kind ...)" % x["id"], who))
             if x.get("open_session"):
                 print("     session: %s  (the card's Claude / Codex / Orca buttons open it)" % x["open_session"])
     return 0
@@ -1339,6 +1407,8 @@ def cmd_decisions(args, client):
 def cmd_decide(args, client):
     if args.reopen:
         res = client.post("/api/decisions/reopen", {"id": args.id})
+    elif args.undo:
+        res = client.post("/api/decisions/undo-default", {"id": args.id, "note": args.note})
     else:
         if not args.choice and not args.note:
             raise UsageError("give a choice (or 'other' with --note)")
@@ -1352,10 +1422,59 @@ def cmd_decide(args, client):
 def cmd_ask(args, client):
     res = client.post("/api/decisions/ask", {"question": args.question, "options": args.option, "lane": args.lane,
                                             "priority": args.priority, "deadline": args.deadline, "session": args.session,
-                                            "source": args.source, "id": args.id})
+                                            "source": args.source, "id": args.id, "kind": args.kind,
+                                            "default": args.default, "undo": args.undo, "topic": args.topic})
     if not res.get("ok"):
         raise NavError((res.get("error") or {}).get("message") or "failed")
     print_json(res)
+    return 0
+
+
+def cmd_sort(args, client):
+    res = client.post("/api/decisions/sort", {"id": args.id, "kind": args.kind, "default": args.default,
+                                             "undo": args.undo, "topic": args.topic, "deadline": args.deadline})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    if args.table:
+        d = res.get("decision") or {}
+        print("%s is now: %s (%s)" % (args.id, (res.get("sorted") or {}).get("kind"),
+                                      {"uri": "waits on Uri", "supervisor": "on the supervisor's desk", "dupe": "same problem as %s" % d.get("dupe_of"),
+                                       "auto": "goes ahead on its default unless Uri objects"}.get(d.get("holder"), "?")))
+    else:
+        print_json(res)
+    return 0
+
+
+def cmd_defaults(args, client):
+    if args.what == "status":
+        d = client.get("/api/decisions")
+        res = {"ok": True, "on": bool(d.get("auto_defaults")), "desk_open": bool(d.get("desk_open")),
+               "waiting": [{"id": x["id"], "default": x.get("default"), "auto_at": x.get("auto_at")}
+                           for x in d.get("open") or [] if x.get("auto_at")],
+               "went_ahead": d.get("went_ahead") or []}
+    elif args.what == "run":
+        res = client.post("/api/decisions/defaults", {"run": True, "dry_run": bool(args.dry_run)})
+    else:
+        res = client.post("/api/decisions/defaults", {"on": args.what == "on"})
+    if not res.get("ok"):
+        raise NavError((res.get("error") or {}).get("message") or "failed")
+    if not args.table:
+        print_json(res)
+        return 0
+    if args.what == "status":
+        print("defaults go ahead by themselves: %s" % ("on" if res["on"] else "OFF (every approval waits on Uri)"))
+        for w in res["waiting"]:
+            print("  %-24s goes ahead with \"%s\" on %s" % (w["id"], w["default"], _when(w["auto_at"])))
+        for w in res["went_ahead"]:
+            print("  %-24s went ahead with \"%s\" on %s  (undo: nav decide %s --undo)" % (w["id"], w.get("choice"), _when(w.get("ts")), w["id"]))
+        if not res["waiting"] and not res["went_ahead"]:
+            print("  nothing waiting, nothing went ahead this week")
+    elif args.what == "run":
+        rows = res.get("applied") or []
+        print(("would go ahead: " if res.get("dry_run") else "went ahead: ") + (", ".join("%s (%s)" % (r["id"], r["choice"]) for r in rows) or "nothing")
+              + ("" if res.get("on") else "  [the switch is off]"))
+    else:
+        print("defaults go ahead by themselves: %s" % ("on" if res.get("on") else "off"))
     return 0
 
 
@@ -2697,6 +2816,10 @@ def main(argv=None):
             return cmd_decide(args, client)
         if args.command == "ask":
             return cmd_ask(args, client)
+        if args.command == "sort":
+            return cmd_sort(args, client)
+        if args.command == "defaults":
+            return cmd_defaults(args, client)
         if args.command == "rank":
             return cmd_rank(args, client)
         if args.command == "move-project":

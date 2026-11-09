@@ -223,7 +223,7 @@ class AlertTests(CheckinCase):
         self.assertEqual(self.runs.argvs("ask"),
                          [[sys.executable, cc.NAV, "ask", "--id", "copilot-down",
                            "--question", "Co-pilot check-ins are failing: API Error (500 upstream). Fix?",
-                           "--option", "I'll look", "--option", "Pause check-ins"]])
+                           "--option", "I'll look", "--option", "Pause check-ins", "--kind", "choice"]])
         argv, kwargs = self.runs.calls[0]
         self.assertEqual(kwargs["env"]["NAV_ACTOR"], "copilot-checkin")
         self.assertEqual(self.state_json()["last_alert"], NOON.isoformat(timespec="seconds"))

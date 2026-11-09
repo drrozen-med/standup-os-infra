@@ -855,7 +855,7 @@ def _decision_reopen(app, params, actor):
     inbox = getattr(app, "inbox")
     did = str(params.get("id") or "")
     try:
-        before = inbox.reopen(did)
+        before = inbox.reopen(did, by=actor)
         cid = app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}}, {"answers": {did: None}})
         return {"ok": True, "action": "decision.reopen", "change": cid, "result": {"ok": True, "id": did}}
     except Exception as e:
@@ -890,18 +890,37 @@ def _decision_ask(app, params, actor):
     inbox = getattr(app, "inbox")
     try:
         d = inbox.ask(params.get("question"), params.get("options"), params.get("lane"), params.get("priority", 2),
-                      params.get("deadline"), params.get("session"), params.get("source"), params.get("id") or "", by=actor)
-        app.changes.record(actor, "decision.ask", {"id": d["id"]}, {}, {"questions": {d["id"]: d["question"]}}, undoable=False)
+                      params.get("deadline"), params.get("session"), params.get("source"), params.get("id") or "", by=actor,
+                      kind=params.get("kind"), default=params.get("default"), undo=params.get("undo"), topic=params.get("topic"))
+        app.changes.record(actor, "decision.ask", {"id": d["id"], "kind": d["kind"]}, {}, {"questions": {d["id"]: d["question"]}}, undoable=False)
         return {"ok": True, "action": "decision.ask", "change": None, "result": {"ok": True, "decision": d}}
     except Exception as e:
         raise
 
 
+def _decision_sort(app, params, actor):
+    res = app.sort_decision({k: params.get(k) for k in ("id", "kind", "default", "undo", "topic", "deadline")}, actor)
+    return {"ok": True, "action": "decision.sort", "change": res.get("change"), "result": res}
+
+
+def _decision_undo_default(app, params, actor):
+    res = app.undo_default({"id": params.get("id"), "note": params.get("note")}, actor)
+    return {"ok": True, "action": "decision.undo-default", "change": res.get("change"), "result": res}
+
+
+# kind is checked by the inbox, not here, so a caller that leaves it out gets the text that explains the kinds
+_KIND = (Param("kind", "str", required=False, max_len=20, help="choice | errand | approval | problem. choice/errand = the owner's, approval = goes ahead on its default at the deadline, problem = the supervisor's"),
+         Param("default", "str", required=False, max_len=80, help="approval: the option that goes ahead if nobody objects"),
+         Param("undo", "str", required=False, max_len=300, help="approval: how the step is rolled back"),
+         Param("topic", "str", required=False, max_len=40, help="problem: short name; the same topic is one item"))
+
 register(Action("decision.answer", "Answer decision", (Param("id", "str"), Param("choice", "str"), Param("note", "str", required=False)), (), True, True, _decision_answer))
 register(Action("decision.reopen", "Reopen decision", (Param("id", "str"),), (), True, True, _decision_reopen))
 register(Action("decision.rank", "Rank decisions", (Param("ids", "refs"), Param("why", "str", required=False)), (), True, False, _decision_rank))
 register(Action("decision.rank-clear", "Clear decision ranks", (), (), True, False, _decision_rank_clear))
-register(Action("decision.ask", "Ask decision", (Param("question", "str"), Param("options", "refs"), Param("lane", "str", required=False), Param("priority", "int", required=False), Param("deadline", "str", required=False), Param("session", "str", required=False), Param("source", "str", required=False), Param("id", "str", required=False)), (), True, False, _decision_ask))
+register(Action("decision.ask", "Ask decision", (Param("question", "str"), Param("options", "refs"), Param("lane", "str", required=False), Param("priority", "int", required=False), Param("deadline", "str", required=False), Param("session", "str", required=False), Param("source", "str", required=False), Param("id", "str", required=False)) + _KIND, (), True, False, _decision_ask))
+register(Action("decision.sort", "Say what kind an open decision is", (Param("id", "str"),) + _KIND + (Param("deadline", "str", required=False),), (), True, False, _decision_sort))
+register(Action("decision.undo-default", "Object to a default that went ahead", (Param("id", "str"), Param("note", "str", required=False, max_len=1000)), (), True, False, _decision_undo_default))
 
 
 def _undo_action(app, params, actor):

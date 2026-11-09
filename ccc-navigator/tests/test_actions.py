@@ -134,7 +134,7 @@ class TestActionsDispatch(ActionsBase):
 
     def test_decision_answer(self):
         # add decision
-        d = self.app.inbox.ask("Question?", ["yes", "no"], by="you")
+        d = self.app.inbox.ask("Question?", ["yes", "no"], by="you", kind="choice")
         res = actions.dispatch(self.app, "decision.answer", {"id": d["id"], "choice": "yes"})
         self.assertTrue(res.get("ok"))
 

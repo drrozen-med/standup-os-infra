@@ -675,6 +675,51 @@ class LoudAlerts(Base):
         self.assertNotIn("alert", self.sent_text().lower())
 
 
+class Gate(Base):
+    """docs/supervisor.md, "The gate": Uri is counted and alerted only for what is his; the desk is the supervisor's."""
+
+    def test_only_uris_questions_are_counted_and_alerted(self):
+        self.nav.open = [
+            dec("his", priority=1, asked_at=NOON - 3 * DAY, for_uri=True, holder="uri"),
+            dec("auto", priority=1, asked_at=NOON - 9 * DAY, for_uri=False, holder="auto", kind="approval"),
+            dec("lead", priority=1, asked_at=NOON - 5 * DAY, for_uri=False, holder="supervisor", kind="problem",
+                topic="test-server", lane="alpha", question="No test server",
+                dupes=[{"id": "twin", "lane": "beta"}]),
+            dec("twin", priority=1, asked_at=NOON - 5 * DAY, for_uri=False, holder="dupe", kind="problem",
+                topic="test-server", lane="beta", dupe_of="lead")]
+        self.run_cycle()
+        self.assertEqual(self.raised(), ["his"])
+        dg = self.jfile("digest.json")
+        self.assertEqual([a["decision"] for a in dg["alerts"]], ["his"])
+        self.assertEqual(dg["decisions_overall"], {"open": 1, "oldest_days": 3.0})
+        self.assertEqual(dg["desk"], [{"id": "lead", "topic": "test-server", "question": "No test server",
+                                       "raised_by": ["alpha", "beta"], "days": 5.0}])
+        md = self.text("digest.md")
+        self.assertIn("Uri's open decisions: 1, oldest 3.0d.", md)
+        self.assertIn("On YOUR desk, not Uri's (1)", md)
+        self.assertIn("- lead [test-server] raised by alpha, beta, 5.0d on your desk: No test server", md)
+        self.assertIn('decide <id> other --note "solved:', md)
+
+    def raised(self):
+        return [a[a.index("--decision") + 1] for a in self.runs.raises()]
+
+    def test_an_older_navigator_without_the_gate_counts_everything(self):
+        self.nav.open = [dec("d1", priority=1), dec("d2")]
+        self.run_cycle()
+        dg = self.jfile("digest.json")
+        self.assertEqual((dg["decisions_overall"]["open"], dg["desk"]), (2, []))
+        self.assertEqual(self.raised(), ["d1"])
+        self.assertNotIn("On YOUR desk", self.text("digest.md"))
+
+    def test_an_owner_blocked_on_a_desk_problem_still_resolves_the_question(self):
+        """needs_uri lookups use every open question, so an owner waiting on a desk problem is not 'unknown id'."""
+        self.nav.open = [dec("lead", for_uri=False, holder="supervisor", kind="problem", topic="t")]
+        self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["lead"]), idle_min=45)
+        self.run_cycle()
+        self.assertEqual(self.raised(), [])
+        self.assertEqual(self.jfile("digest.json")["errors"], [])
+
+
 class Manual(Base):
     def test_manual_wake_sends_note_and_obeys_caps(self):
         self.add_owner(P1, K1, status(), idle_min=1)       # working now does not block a manual wake

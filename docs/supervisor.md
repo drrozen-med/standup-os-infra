@@ -56,8 +56,9 @@ linked decision, or on answering that decision in the inbox; on other devices it
 Store, API and CLI: `ccc-navigator/NAV_CLI.md`, "Loud alerts".
 
 Keep it rare, or it stops meaning anything. **Only the cycle raises alerts; owners never do** (an owner turns
-its question into a decision with `nav.py ask`; the cycle decides whether it is loud). In step 3, after the
-wakes, each cycle raises at most one alert per decision, for open decisions in Uri's inbox that are:
+its question into a decision with `nav.py ask --kind ...`; the cycle decides whether it is loud). In step 3, after
+the wakes, each cycle raises at most one alert per decision, for open decisions that are Uri's (see "The gate":
+approvals going ahead by themselves and problems on the supervisor's desk are never loud) and that are:
 
 | Reason | When |
 |---|---|
@@ -72,6 +73,37 @@ Navigator enforces both too), a paused project waits on the decision, or it is q
 supervisor is paused (no cycle at all). `--dry-run` decides but raises nothing. `digest.json` `alerts` and
 `digest.md` list what was raised or held and why; `cycles.log` names the decisions raised. A failing raise never
 stops the cycle.
+
+## The gate
+
+Uri's inbox holds only what is his. Every question says what kind it is when it is asked (`nav.py ask --kind`,
+refused without one; old questions get a kind with `nav.py sort`). Rules, not a model, decide who holds it
+(`ccc-navigator/decisions.py`; `holder` and `for_uri` on every open question in `GET /api/decisions`):
+
+| Kind | Who holds it | What happens |
+|---|---|---|
+| `choice` | Uri | A real choice that is his. Waits for his answer, however long. |
+| `errand` | Uri | Needs his own hands (his login, 2FA, a payment screen). Waits. |
+| `approval` | nobody (`auto`) | The asker names a `default` and an `undo`. Listed under "Going ahead unless you object". At the end of its deadline day, and never sooner than 24 h after it was announced, the default is recorded as the answer (`by: default`, `auto: true`) and the asker acts on it. Listed for 7 days under "Went ahead without you" with its undo. |
+| `problem` | the supervisor | Something broken or shared, with a `topic`. Every open question on one topic is ONE item (the others are `dupe`s of it); answering it answers them all. |
+
+- **What never goes ahead by itself**, whatever kind the asker gives: money, messages to real people, clinical
+  content, deleting data, accounts and access, legal terms. The words are checked when the question is asked or
+  sorted (refused with `needs_uri`: ask it as a `choice`) and again when the default would be applied.
+- **Uri always wins.** His answer before the deadline stops the default. "Undo it" afterwards replaces the default
+  with the answer "undo this, roll it back" (with the asker's own undo plan) and tells the asker. A question he
+  reopens comes back as a `choice`: it never re-arms. A switch on the Decisions page (`nav.py defaults off`) stops
+  every default; nothing is lost, the questions wait for him instead.
+- **The desk.** A problem stays with the supervisor for two days. It becomes Uri's (`escalated` says why) when it
+  is still open after two days, when its deadline has passed, or when no supervisor is on duty (`state.json` paused,
+  or no cycle in the last 2 h). The cycle lists the desk in `digest.json` `desk` and at the top of `digest.md`;
+  the co-pilot solves each problem and closes it with `nav.py decide <id> other --note "solved: ..."`.
+- **The cycle** counts and alerts only what is Uri's: `decisions_overall` and the loud alerts skip `auto`,
+  `supervisor` and `dupe` items. An owner's `needs_uri` may still name any open question.
+- Every sort, default, undo and switch is in the change log (`nav.py changes`), and the Watchtower brief lists what
+  is going ahead and what went ahead, with the undo for each.
+
+CLI and API: `ccc-navigator/NAV_CLI.md`, "Decisions".
 
 ## Control
 

@@ -363,8 +363,9 @@ P1 first, then by deadline, each with its answer buttons. A tap records the answ
 Reopen in the Answered list). Questions come from Watchtower's `decisions.json` and from agents:
 
 ```bash
-# An agent asks. With --session, the answer is sent back into that session as a message.
-NAV_ACTOR=copilot python3 nav.py ask --question "Deploy the CRM fix now?" --option deploy --option hold \
+# An agent asks, and says what kind of question it is (see "Kinds" below; refused without --kind).
+# With --session, the answer is sent back into that session as a message.
+NAV_ACTOR=copilot python3 nav.py ask --kind choice --question "Deploy the CRM fix now?" --option deploy --option hold \
     --lane gtm-crm --priority 1 --deadline 2026-11-01 --session claude:<uuid>
 
 python3 nav.py decisions --table              # open questions
@@ -385,6 +386,50 @@ When none is clear the card has no buttons. `nav.py decisions` returns it as `op
 Answers live in `~/.ccc-navigator/answers.json` (Watchtower's file is never edited; its brief drops
 answered ones). Every ask, answer and reopen is in `~/.ccc-navigator/changes.jsonl` with its actor
 (`$NAV_ACTOR` for the CLI, `you` for the UI and the phone).
+
+### Kinds: who gets the question
+
+Uri's inbox holds only what is his. The kind says who holds a question (`docs/supervisor.md`, "The gate"):
+
+| `--kind` | Also needs | Who holds it |
+|---|---|---|
+| `choice` | | Uri. A real choice that is his; waits for him. |
+| `errand` | | Uri. It needs his own hands (his login, 2FA, a payment screen). |
+| `approval` | `--default <one of the options>` and `--undo "how to roll it back"` | Nobody: it goes ahead on the default at the end of its deadline day (tomorrow when no `--deadline`), never sooner than 24 h after it was announced. |
+| `problem` | `--topic <short-name>` | The supervisor. Every open question on one topic is one item; one answer covers them all. Uri's after two days, past its deadline, or when no supervisor is on duty. |
+
+```bash
+# Goes ahead by itself unless Uri objects; the asker gets "your default applies" in its session.
+NAV_ACTOR=cdl-owner python3 nav.py ask --kind approval --question "Turn the new onboarding on for everyone?" \
+    --option "turn on" --option hold --default "turn on" --undo "switch the flag off" --lane cdl
+# Something broken or shared: one item on the supervisor's desk, however many projects raise it.
+NAV_ACTOR=cdl-owner python3 nav.py ask --kind problem --topic test-server-full \
+    --question "The test server is full, previews fail" --option "free space" --option "bigger disk" --lane cdl
+
+python3 nav.py sort <id> --kind problem --topic test-server-full   # give an old question its kind (any source)
+python3 nav.py decisions --for uri --table       # only what waits on Uri (also: supervisor, auto, all)
+python3 nav.py decisions --went-ahead --table    # defaults that went ahead in the last 7 days, with their undo
+python3 nav.py decide <id> --undo [--note "why"] # object to one: the asker is told to roll it back
+python3 nav.py defaults                          # switch on or off, what is waiting to go ahead and when
+python3 nav.py defaults off                      # stop every default (on: start again); questions wait for Uri
+python3 nav.py defaults run --dry-run            # what would go ahead now; without --dry-run, apply what is due
+```
+
+- **Never by itself:** money, messages to real people, clinical content, deleting data, accounts and access,
+  legal terms. An approval that touches one is refused with `needs_uri` (ask it as a `choice`; `--default` is
+  then shown as the asker's suggestion), and the check runs again before any default is applied.
+- **Uri's answer always wins:** answering before the deadline stops the default; a reopened approval comes
+  back as a `choice` and never re-arms. `sort` never edits the source (Watchtower's file stays as it is; the
+  kind lives in `~/.ccc-navigator/triage.json`) and an approval made by `sort` gets a fresh 24 h notice.
+- The navigator applies what is due every 5 minutes (`CCC_NAV_DEFAULTS_EVERY` seconds, `0` turns the timer
+  off; the switch itself is `~/.ccc-navigator/auto-defaults.json`). Each default is one change-log entry
+  (actor `default`), as is every sort, undo and switch.
+- `ask` without `--kind` exits 1 and prints the four kinds with an example, so an agent can correct itself.
+- JSON: `nav.py decisions` returns `open` (each with `kind`, `holder` `uri|auto|supervisor|dupe`, `for_uri`,
+  `auto_at`, `dupes`, `dupe_of`, `escalated`), `went_ahead`, `counts`, `auto_defaults` and `desk_open`.
+  HTTP: `POST /api/decisions/sort`, `/api/decisions/undo-default`, `/api/decisions/defaults`
+  (`{"on": true|false}` for the switch, `{"run": true, "dry_run"?: true}` to apply what is due);
+  v1 actions `decision.sort`, `decision.undo-default`.
 
 ## Loud alerts: when something truly needs Uri now
 

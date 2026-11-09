@@ -225,6 +225,12 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dsrc{font-size:11px;color:var(--dim)}
 .dopen{display:flex;flex-wrap:wrap;gap:6px}.dopen:empty{display:none}
 .dopen .bbtn{background:transparent;border:1px solid var(--line2);border-radius:7px;padding:4px 9px;font-size:12px;color:var(--muted);cursor:pointer}.dopen .bbtn:hover{color:var(--text);border-color:var(--line3)}
+/* Who holds a question (decisions.py): its kind, what happens if nobody answers, what went ahead */
+.kind{font-weight:700;border-radius:6px;padding:1px 6px;border:1px solid var(--line2);color:var(--muted)}.kind.k-errand{color:var(--accent)}
+.dnote{font-size:12px;color:var(--muted);line-height:1.5}.dnote b{color:var(--text)}
+.dopt.sug{border-color:var(--primary-hi)}
+.inbox h3{margin:10px 0 0;font:700 16px var(--display);display:flex;gap:8px;align-items:baseline}.inbox h3 .n{color:var(--dim);font-size:13px}
+.dsw{font-size:12px;color:var(--dim);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 /* Supervisor status board (docs/supervisor.md, "UI: the status board") */
 .pin-row.sup{flex-wrap:nowrap}
 .detail.sup{max-width:1000px;gap:14px;container:supb/inline-size}
@@ -275,6 +281,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .dlg-b .dlg-ok{background:var(--primary);border-color:var(--primary);color:var(--primary-fg)}.dlg-b .dlg-ok.danger{background:var(--bad,#c0392b);border-color:var(--bad,#c0392b)}
 .dlg-notes{display:flex;flex-direction:column;gap:10px}.dlg-note{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}.dlg-note .linkbtn{align-self:flex-start}
 .dother{display:flex;flex-direction:column;gap:8px}
+.dother[hidden]{display:none}
 .dother textarea{width:100%;box-sizing:border-box;min-height:64px;resize:vertical;border-radius:10px;border:1px solid var(--line3);background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);padding:10px 12px;unicode-bidi:plaintext;text-align:start}
 .dother textarea:focus{outline:none;border-color:var(--primary-hi)}
 .drow{display:flex;gap:12px;align-items:center}.dopt.dsend{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
@@ -676,7 +683,7 @@ body.has-alert #drawer{top:var(--alert-h)}
   async function loadDecisions() {
     try {
       const d = await fetch('/api/decisions').then(x => x.json());
-      const sig = JSON.stringify([d.open.map(x => x.id), d.answered.map(x => x.id + x.answer.ts)]);
+      const sig = JSON.stringify([d.open.map(x => [x.id, x.holder, x.kind, x.auto_at, x.default, (x.dupes || []).length]), d.answered.map(x => x.id + x.answer.ts), (d.went_ahead || []).map(x => x.id + x.ts), d.auto_defaults]);
       decs = d;
       if (sig !== decSig) { decSig = sig; lastDetailKey = null; }
     } catch (e) { /* inbox stays as it was */ }
@@ -801,22 +808,38 @@ body.has-alert #drawer{top:var(--alert-h)}
     const t = d.days_left < 0 ? Math.abs(d.days_left) + 'd overdue' : d.days_left === 0 ? 'due today' : d.days_left + 'd left';
     return `<span class="due ${d.days_left <= 3 ? 'soon' : ''}">${t}</span>`;
   }
+  // Who holds each open question (decisions.py): you, its own default ("auto"), the supervisor, or it repeats another ("dupe").
+  const KIND = { choice: 'Your choice', errand: 'Your hands', approval: 'Approval', problem: 'Problem' };
+  const mine = () => (decs.open || []).filter(d => d.for_uri !== false);
+  const mineN = () => mine().length;
+  const dayTime = (ts) => new Date(ts * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  function holdNote(d) {
+    const dup = d.dupes || [];
+    const also = dup.length ? ` Also raised by ${esc([...new Set(dup.map(x => x.lane || x.source || x.id))].join(', '))}: one answer covers all ${dup.length + 1}.` : '';
+    if (d.holder === 'auto') return `Goes ahead with <b dir="auto">${esc(d.default)}</b> on ${esc(dayTime(d.auto_at))} unless you pick something else.`;
+    if (d.holder === 'supervisor') return 'With the supervisor. It comes to you only if it is not solved in two days.' + also;
+    if (d.kind === 'problem') return `A problem to solve, not a choice${d.escalated ? '. Yours because: ' + esc(d.escalated) : ''}.` + also;
+    if (d.default) return `The owner suggests <b dir="auto">${esc(d.default)}</b>${d.kind === 'approval' ? '. It waits for you: it will not go ahead by itself' : ''}.`;
+    return '';
+  }
   function inboxHtml() {
     const card = (d, showWhy) => `<div class="dcard" data-dec="${esc(d.id)}">
-        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span><span class="lane">${esc(d.lane || '')}</span>${d.rank ? `<span class="pri">#${esc(d.rank)}</span>` : ''}${due(d)}</div>
+        <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span>${KIND[d.kind] ? `<span class="kind k-${esc(d.kind)}">${KIND[d.kind]}</span>` : ''}<span class="lane">${esc(d.lane || '')}</span>${d.rank ? `<span class="pri">#${esc(d.rank)}</span>` : ''}${due(d)}</div>
         <div class="dq" dir="auto">${esc(d.question)}</div>
         ${showWhy && d.why ? `<div class="dsrc">${esc(d.why)}</div>` : ''}
-        <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
+        ${holdNote(d) ? `<div class="dnote">${holdNote(d)}</div>` : ''}
+        <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt${o === d.default ? ' sug' : ''}" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
         <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt dsend" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
         ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}
         ${d.open_session ? `<div class="dopen" data-dopen="${esc(d.open_session)}"></div>` : ''}
       </div>`;
-    const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
-    const open = decs.open || [];
+    const done = decs.answered.map(d => `<div class="dans"><span class="dq" dir="auto">${esc(d.question)}</span><span class="dpick" dir="auto">→ ${esc(d.answer.choice)}${d.answer.auto ? ' (went ahead by default)' : d.answer.note ? ': ' + esc(d.answer.note) : ''}</span><button type="button" class="linkbtn" data-reopen="${esc(d.id)}">Reopen</button></div>`).join('');
+    const all = decs.open || [], open = mine();
+    const auto = all.filter(d => d.holder === 'auto'), desk = all.filter(d => d.holder === 'supervisor'), went = decs.went_ahead || [];
     const ranked = open.filter(d => d && d.rank);
     let body = '';
     if (ranked.length) {
-      body += `<h3 style="margin:10px 0 0;font:700 16px var(--display)">Top for you</h3>`;
+      body += `<h3>Top for you</h3>`;
       body += ranked.map(d => card(d, true)).join('');
       const rest = open.filter(d => !d.rank);
       if (rest.length) {
@@ -825,7 +848,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     } else if (open.length) {
       const top = open.slice(0, 5);
       const rest = open.slice(5);
-      body += `<h3 style="margin:10px 0 0;font:700 16px var(--display)">Most urgent</h3>`;
+      body += `<h3>Most urgent</h3>`;
       body += top.map(d => card(d, false)).join('');
       if (rest.length) {
         body += `<details class="danswered"><summary>More (${rest.length})</summary>${rest.map(d => card(d, false)).join('')}</details>`;
@@ -833,11 +856,30 @@ body.has-alert #drawer{top:var(--alert-h)}
     } else {
       body += '<p class="hint">Nothing waits on you. Agents add questions with <span class="kbd">nav ask</span>.</p>';
     }
+    // not yours to answer: what goes ahead on its default, what already did (with its undo), what the supervisor holds
+    if (auto.length) body += `<h3>Going ahead unless you object <span class="n">${auto.length}</span></h3>` + auto.map(d => card(d, false)).join('');
+    if (went.length) body += `<details class="danswered" open><summary>Went ahead without you, last 7 days (${went.length})</summary>${went.map(w => `<div class="dans"><span class="dq" dir="auto">${esc(w.question)}</span><span class="dpick" dir="auto">→ ${esc(w.choice)}</span><span class="dsrc">${esc(w.lane ? w.lane + ' · ' : '')}${esc(agoLong(w.ts))}${w.undo ? ' · to undo: ' + esc(w.undo) : ''}</span><button type="button" class="linkbtn" data-undo-default="${esc(w.id)}">Undo it</button></div>`).join('')}</details>`;
+    if (desk.length) body += `<details class="danswered"><summary>On the supervisor's desk (${desk.length})</summary>${desk.map(d => card(d, false)).join('')}</details>`;
+    const sw = typeof decs.auto_defaults !== 'boolean' ? '' : decs.auto_defaults
+      ? `<div class="dsw">Safe steps go ahead by themselves when you do not answer by the deadline. <button type="button" class="linkbtn" data-defaults="off">Switch off</button></div>`
+      : `<div class="dsw">Switched off: nothing goes ahead by itself, every approval waits for you. <button type="button" class="linkbtn" data-defaults="on">Switch on</button></div>`;
     return `<div class="detail inbox"><button type="button" class="mback" data-mback>‹ Sessions</button>
-      <h2>Decisions <span class="n">${decs.open.length}</span></h2>
+      <h2>Decisions <span class="n">${open.length}</span></h2>
       ${body}
       ${done ? `<details class="danswered"><summary>Answered (${decs.answered.length})</summary>${done}</details>` : ''}
+      ${sw}
     </div>`;
+  }
+  async function undoDefault(id) {
+    const r = await fetch('/api/decisions/undo-default', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(x => x.json()).catch(() => ({}));
+    if (!r.ok) return toast('Not undone: ' + ((r.error && r.error.message) || 'server unreachable'));
+    toast(r.delivery === 'sent' ? 'Undo sent to the agent that asked' : r.delivery && r.delivery !== 'recorded' ? 'Undo recorded · ' + r.delivery : 'Undo recorded. No agent session is linked: tell the owner');
+    await loadDecisions(); renderChips(); renderDetail(true);
+  }
+  async function setDefaults(on) {
+    const r = await fetch('/api/decisions/defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) }).then(x => x.json()).catch(() => ({}));
+    toast(!r.ok ? 'Could not change it' : on ? 'On: safe steps go ahead by themselves again' : 'Off: every approval now waits for you');
+    await loadDecisions(); renderChips(); renderDetail(true);
   }
   async function answerDecision(id, choice, note = '') {
     const r = await fetch('/api/decisions/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, choice, note }) }).then(x => x.json()).catch(() => ({}));
@@ -891,7 +933,8 @@ body.has-alert #drawer{top:var(--alert-h)}
       ackAlert(a.id);    // opening the decision counts as attending to it
       if (!decs.open.some(d => d.id === l.ref)) await loadDecisions();
       openInbox();
-      const card = document.querySelector(`.dcard[data-dec="${CSS.escape(l.ref)}"]`);
+      const dupe = decs.open.find(d => d.id === l.ref && d.dupe_of);   // shown on the card of the problem it repeats
+      const card = document.querySelector(`.dcard[data-dec="${CSS.escape(dupe ? dupe.dupe_of : l.ref)}"]`);
       if (!card) return toast('That decision is no longer open');
       const det = card.closest('details'); if (det) det.open = true;
       card.classList.add('flash'); card.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -1036,11 +1079,11 @@ body.has-alert #drawer{top:var(--alert-h)}
   function renderPinned() {
     const box = $('#pinned'); if (!box || !tree) return;
     const cp = tree.copilot, hit = cp && flatSessions().find(x => x.s.key === cp.key);
-    const n = decs.open.length;
+    const n = mineN(), going = (decs.counts && decs.counts.auto) || 0;   // only what is yours to answer counts
     const cpName = (hit && (hit.s.nick || hit.s.original)) || cp && cp.name || 'Co-pilot';
     box.innerHTML = (cp ? `<button type="button" class="pin-row pilot" id="pilotRow" aria-label="Co-pilot chat" aria-current="${!!hit && ui.selected === cp.key}" tabindex="0" title="${esc(cpName)}: ask me anything">
         <span class="dot ${hit ? dotState(hit.s) : ''}"></span><span class="pn"><bdi>Co-pilot</bdi></span><span class="ps">Ask me anything</span></button>` : '')
-      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0" title="Decisions: ${n ? n + ' waiting for you' : 'nothing waiting'}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : 'nothing waiting'}</span></button>`
+      + `<button type="button" class="pin-row dec ${n ? 'has' : ''}" id="decRow" aria-label="Decisions, ${n} waiting" aria-current="${!!ui.inbox}" tabindex="0" title="Decisions: ${n ? n + ' waiting for you' : 'nothing waiting'}"><span class="pn">Decisions</span>${n ? `<span class="n">${n}</span>` : ''}<span class="ps">${n ? 'waiting for you' : going ? going + ' going ahead by default' : 'nothing waiting'}</span></button>`
       + (sup ? (sm => `<button type="button" class="pin-row sup ${sm.n ? 'has' : ''}" id="supRow" aria-label="Supervisor, ${esc(sm.txt)}" aria-current="${!!ui.sup}" tabindex="0" title="Supervisor: ${esc(sm.txt)}"><span class="pn">Supervisor</span>${sm.n ? `<span class="n">${sm.n}</span>` : ''}<span class="ps">${esc(sm.txt)}</span></button>`)(supSummary()) : '')
       + `<a class="pin-row" href="/ride" title="Ride mode: hear it all, answer by voice" style="text-decoration:none;color:inherit"><span class="pn">Ride</span></a>`;
   }
@@ -1449,7 +1492,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
     if (!hit && ui.sup) { main.innerHTML = supHtml(); return; }
-    if (!hit) { main.innerHTML = (ui.today ? '<div class="detail overview"><button type="button" class="mback" data-mback>‹ Sessions</button></div>' : (ui.inbox || decs.open.length) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; fillDecisionOpeners(); loadToday(); return; }
+    if (!hit) { main.innerHTML = (ui.today ? '<div class="detail overview"><button type="button" class="mback" data-mback>‹ Sessions</button></div>' : (ui.inbox || mineN()) ? inboxHtml() : overview()) + '<div class="today" id="today"></div>'; fillDecisionOpeners(); loadToday(); return; }
     const { s, repo } = hit;
     if (chat) {
       const dotc = dotState(s);
@@ -1675,6 +1718,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     const cc = e.target.closest('[data-cancel]');
     if (cc) { const box = cc.closest('.dother'); box.querySelector('textarea').value = ''; box.hidden = true; }
     const ro = e.target.closest('[data-reopen]'); if (ro) return reopenDecision(ro.dataset.reopen);
+    const ud = e.target.closest('[data-undo-default]'); if (ud) return undoDefault(ud.dataset.undoDefault);
+    const sw = e.target.closest('[data-defaults]'); if (sw) return setDefaults(sw.dataset.defaults === 'on');
   });
   $('#main').addEventListener('click', e => {   // supervisor board
     const act = e.target.closest('[data-sup-act]');
@@ -1872,6 +1917,11 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (action === 'decision.answer') return 'Answered a decision';
     if (action === 'decision.ask') return 'Asked you a decision';
     if (action === 'decision.reopen') return 'Reopened a decision';
+    if (action === 'decision.sort') return 'Sorted a question (' + (params.kind || 'kind') + ')';
+    if (action === 'decision.default') return 'A default went ahead: ' + (params.choice || '');
+    if (action === 'decision.undo_default') return 'Undid a default that went ahead';
+    if (action === 'decision.defaults_on') return 'Switched defaults on';
+    if (action === 'decision.defaults_off') return 'Switched defaults off';
     if (action === 'undo') return 'Undid a change';
     if (action === 'decision.rank') return 'Ranked the top decisions';
     if (action === 'order.repos') return 'Reordered projects';

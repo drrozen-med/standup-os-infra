@@ -118,3 +118,44 @@ def test_fallback_skips_answered_decisions(tmp_path, monkeypatch):
     now = __import__("datetime").datetime(2026, 11, 9, tzinfo=__import__("datetime").timezone.utc)
     out = wt.render(snap, wt.load_decisions(), now)
     assert "Decisions waiting on you (2)" in out and "aba-price" not in out
+
+def test_brief_lists_only_what_is_his_and_what_went_ahead(tmp_path, monkeypatch):
+    """The gate (ccc-navigator/decisions.py): an approval going ahead on its default, a default that went ahead
+    and a repeat of the same problem are not "waiting on you"; each has its own line."""
+    import time
+    from datetime import datetime, timezone
+    nav_home = tmp_path / "nav"
+    nav_home.mkdir()
+    (tmp_path / "decisions.json").write_text("[]")
+    monkeypatch.setattr(wt, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(wt, "NAV_URL", "http://127.0.0.1:9")  # nothing listens: the inbox is read from its files
+    monkeypatch.setenv("CCC_NAV_HOME", str(nav_home))
+    monkeypatch.delenv("CCC_NAV_ANSWERS", raising=False)
+    monkeypatch.delenv("CCC_NAV_DECISIONS", raising=False)
+    inbox, t = wt._inbox_from_files(), time.time()
+    inbox.ask("Which landing page?", ["A", "B"], decision_id="his", kind="choice", lane="aba")
+    inbox.ask("Turn the new onboarding on?", ["turn on", "hold"], decision_id="soon", kind="approval",
+              default="turn on", undo="switch the flag off", lane="bb")
+    inbox.ask("Merge the faster search?", ["merge", "hold"], decision_id="gone", kind="approval",
+              default="merge", undo="revert the merge", lane="cdl", now=t - 3 * 86400)
+    inbox.apply_default("gone", t - 3600)
+    inbox.ask("The test server is full.", ["I'll look"], decision_id="srv-a", kind="problem",
+              topic="test-server-full", lane="bb", now=t - 60)
+    inbox.ask("No space on the test server.", ["I'll look"], decision_id="srv-b", kind="problem",
+              topic="test-server-full", lane="nb")
+    decisions, went = wt.load_inbox()
+    assert [w["id"] for w in went] == ["gone"]
+    snap = {"live": {"ok": False, "error": "down", "lanes": {}}, "lane_titles": {}, "github": {}, "github_state": {}}
+    out = wt.render(snap, decisions, datetime.now(timezone.utc), went)
+    assert "## Decisions waiting on you (2)" in out                      # the choice and one card for the problem
+    assert "`srv-a` (bb)" in out and "Same problem also raised by: nb (one answer covers all)." in out
+    assert "`srv-b`" not in out
+    assert "## Going ahead unless you object (1)" in out and "Goes ahead with **turn on** on " in out
+    assert "## Went ahead without you, last 7 days (1)" in out
+    assert "Went ahead with **merge** on " in out and "To undo: revert the merge." in out
+    assert "`nav decide gone --undo`" in out
+    # with a supervisor on duty the problem is on its desk, and the brief says so in one line
+    desk = [dict(d, holder="supervisor", for_uri=False) if d["id"] == "srv-a" else d for d in decisions]
+    out = wt.render(snap, desk, datetime.now(timezone.utc), went)
+    assert "## Decisions waiting on you (1)" in out
+    assert "_With the supervisor, not you: 1 problem (`srv-a`)." in out

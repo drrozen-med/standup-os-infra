@@ -187,7 +187,7 @@ class Http(unittest.TestCase):
         self.assertEqual((st, out["error"]["code"]), (400, "bad_link"))
 
     def test_answering_the_decision_acks_its_alerts(self):
-        d = self.app.inbox.ask("Which price for CDL?", ["A", "B"], decision_id="d1", priority=1)
+        d = self.app.inbox.ask("Which price for CDL?", ["A", "B"], decision_id="d1", priority=1, kind="choice")
         self.req("POST", "/api/alerts/raise", {"title": "Decide", "link": {"kind": "decision", "ref": d["id"]}})
         other = self.req("POST", "/api/alerts/raise", {"title": "Other", "key": "other"})[1]["alert"]["id"]
         st, out = self.req("POST", "/api/decisions/answer", {"id": "d1", "choice": "A"}, actor="you")
@@ -200,7 +200,7 @@ class Http(unittest.TestCase):
         self.assertEqual(ack["params"]["why"], "decision answered")
 
     def test_v1_decision_answer_acks_too(self):
-        self.app.inbox.ask("Which price for CDL?", ["A", "B"], decision_id="d2")
+        self.app.inbox.ask("Which price for CDL?", ["A", "B"], decision_id="d2", kind="choice")
         self.req("POST", "/api/alerts/raise", {"title": "Decide", "link": {"kind": "decision", "ref": "d2"}})
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         c.request("POST", "/nav/v1/actions/decision.answer", body=json.dumps({"id": "d2", "choice": "B"}),

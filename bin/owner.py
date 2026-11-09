@@ -209,7 +209,14 @@ RULES = """1. No passive status. Your end-of-turn status is validated by code. "
 5. Knock until released. You try, then ask the supervisor; the supervisor decides or turns it into ONE
    decision for Uri with options, a deadline and a default. Only money, 2FA/credentials, messages to people
    and product direction are truly Uri's, and they reach him as a crisp decision, never a "stuck" note.
-6. Scored on outcomes: days since something shipped, open decisions and their age, idle check-ins."""
+6. Scored on outcomes: days since something shipped, open decisions and their age, idle check-ins.
+7. Every question says what kind it is (`nav.py ask --kind ...`, refused without one), so Uri sees only what
+   is his. approval: reversible and inside your rights, you go ahead unless he objects; give --default and
+   --undo "how to roll it back", and when the deadline passes the default IS the answer: act on it. problem:
+   something broken or shared (a full server, a provider down); give --topic, it goes to the supervisor, not
+   to Uri. errand: it needs his own hands (his login, 2FA, a payment screen). choice: a real choice that is
+   his (money, clinical content, messages to real people, deleting data, product direction); these never go
+   ahead by themselves, whatever kind you give them."""
 
 
 def _section(title, body):
@@ -258,7 +265,9 @@ def brief(slug, session=None):
             "`OSRC_REQUIRE_INTERACTIVE=0 %s --provider opencode edit -m opencode-go/iceman-contributor-free \"task\"` "
             "(or opencode-go/beam-free). Free models ship bugs: read the full diff, run the checks and fix it yourself "
             "before it merges." % OSRC,
-            "- python3 %s: the Navigator (sessions, decision inbox, `ask` puts a decision to Uri)." % NAV,
+            "- python3 %s: the Navigator (sessions, decision inbox). `ask --kind choice|errand|approval|problem` puts a "
+            "question in the inbox (rule 7); `decisions --for auto --table` shows your approvals and when they go "
+            "ahead, `decisions --went-ahead --table` the ones that did." % NAV,
             "- Total Recall, before asking anything Uri may already have decided: "
             "%s search --query \"<topic>\" --mode preview --limit 5" % RECALL,
             "- Log anything worth remembering: python3 %s log %s \"<what, PR/issue numbers, job ids>\"" % (OWNER_PY, s),
