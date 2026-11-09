@@ -1075,6 +1075,60 @@ body.has-alert #drawer{top:var(--alert-h)}
     const repo = tree && tree.repos.find(r => r.key === repoKey), ow = repo && repo.owner;
     if (ow) openChatSession(ow.key, 'Owner');
   }
+  // Owner on another harness (docs/OWNER-ENGINES.md): pick an engine, then one of its sessions
+  // for this project's folder, then register it. claude is always available; the rest come from
+  // the navigator's engine registry (t.engines), and sessions are fetched when an engine opens.
+  async function ownerHarness(repo) {
+    const isDir = repo.key.startsWith('/');
+    const enginesHere = Object.entries(tree.engines || {}).filter(([, ok]) => ok).map(([n]) => n)
+      .filter(n => isDir || n === 'claude').sort();
+    const byEngine = (repo.owner && repo.owner.by_engine) || {};
+    if (!enginesHere.length) return toast('No engines available');
+    const setOwner = (key, eng) => post('/api/owner', { repo: repo.key, key }).then(r => {
+      if (r && r.ok) { closeD(); toast('Owner registered (' + eng + ')'); refreshSoon(); } else toast('Could not set owner');
+    }).catch(() => toast('Could not set owner'));
+    let closed = false, closeD = () => { closed = true; };
+    dialog((box, close) => {
+      closeD = () => close(null);
+      const render = (eng, rows) => {
+        const fmt = it => {
+          const d = new Date((it.updated || 0) * 1000);
+          const ago = it.updated ? (Date.now() - it.updated < 9e5 ? d.toLocaleTimeString() : d.toLocaleDateString()) : '';
+          return esc(it.title || it.id.slice(0, 18)) + (ago ? ` <span class="sub">· ${ago}</span>` : '');
+        };
+        box.innerHTML = `<div class="dlg-t">Owner of “${esc(repo.name)}”</div>
+          <div class="dlg-b" style="flex-direction:column;align-items:stretch;gap:4px">${enginesHere.map(n =>
+            `<button type="button" class="dopt" data-eng="${n}" style="width:100%;text-align:left">
+              ${esc(n)}${(repo.owner && repo.owner.key.startsWith(n + ':')) ? ' · now' : byEngine[n] ? ' · last' : ''}
+            </button>`).join('')}
+          <div data-list style="max-height:40vh;overflow:auto;margin-top:6px"></div>
+          <button type="button" class="linkbtn dlg-x" style="align-self:center">Close</button></div>`;
+        box.querySelector('.dlg-x').addEventListener('click', () => close(null));
+        box.querySelectorAll('[data-eng]').forEach(b => b.addEventListener('click', async () => {
+          const eng = b.dataset.eng;
+          const list = box.querySelector('[data-list]');
+          list.innerHTML = '<div class="dlg-h">Loading ' + esc(eng) + ' sessions…</div>';
+          let rows7;
+          if (eng === 'claude') {
+            const rp = tree.repos.find(x => x.key === repo.key);      // claude sessions are already loaded in the tree
+            rows7 = rp ? rp.groups.flatMap(g => g.items).filter(s => !s.batch && s.engine === 'claude')
+              .map(s => ({ id: s.key.split(':')[1] || s.key, title: s.nick || s.name || s.key, updated: s.mtime })) : [];
+          } else {
+            const r = await fetch('/api/engines/sessions?engine=' + eng + '&dir=' + encodeURIComponent(repo.key)).then(x => x.json()).catch(() => ({}));
+            if (closed) return;
+            rows7 = r && r.rows || [];
+            const last = (byEngine[eng] || '').split(':')[1];
+            if (last && !rows7.some(x => x.id === last)) rows7.push({ id: last, title: 'last owner of this harness (no recent activity)', updated: null });
+          }
+          list.innerHTML = rows7.length ? rows7.map(it => `<button type="button" class="dopt" data-sid="${esc(it.id)}" style="width:100%;text-align:left">${fmt(it)}</button>`).join('')
+            : '<div class="dlg-h">No ' + esc(eng) + ' sessions in this folder yet.</div>';
+          list.querySelectorAll('[data-sid]').forEach(sb => sb.addEventListener('click', () => close(null) || setOwner(eng + ':' + sb.dataset.sid, eng)));
+        }));
+      };
+      render(null);
+    });
+  }
+  function refreshSoon() { refresh(true).catch(() => {}); }
   $('#pinned').addEventListener('click', e => {
     if (e.target.closest('#decRow')) return openInbox();
     if (e.target.closest('#supRow')) return openSupervisor();
@@ -2006,7 +2060,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     const all = itemsOf(repo), vis = all.filter(s => !s.hidden);
     return [
       { hd: repo.name + ' · ' + all.length },
-      ...(repo.owner ? [{ label: 'Open owner', fn: () => openOwner(repo.key) }, { label: 'Remove owner', fn: () => post('/api/owner', { repo: repo.key, key: '' }) }, '-'] : []),
+      ...(repo.owner ? [{ label: 'Open owner', fn: () => openOwner(repo.key) }, { label: 'Owner on another harness…', fn: () => ownerHarness(repo) }, { label: 'Remove owner', fn: () => post('/api/owner', { repo: repo.key, key: '' }) }, '-'] : []),
+      ...(!repo.owner && tree.engines && Object.values(tree.engines).some(Boolean) ? [{ label: 'Owner on another harness…', fn: () => ownerHarness(repo) }, '-'] : []),
       { label: 'Move up', fn: () => moveRepoBy('up', repo.key) },
       { label: 'Move down', fn: () => moveRepoBy('down', repo.key) },
       '-',

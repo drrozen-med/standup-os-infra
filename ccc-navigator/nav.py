@@ -25,6 +25,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+quote = urllib.parse.quote
 
 DEFAULT_URL = "http://127.0.0.1:8095"
 REQUEST_TIMEOUT = 120
@@ -508,6 +511,15 @@ def build_parser():
     cpx = cp.add_mutually_exclusive_group()
     cpx.add_argument("--set", metavar="KEY", help="session key, e.g. claude:<uuid>, or a Claude desktop id local_<uuid>")
     cpx.add_argument("--clear", action="store_true", help="remove the Co-pilot button")
+
+    eg = subparsers.add_parser("engines", help="owner harnesses: what is installed and each repo's sessions (docs/OWNER-ENGINES.md)")
+    eg_sub = eg.add_subparsers(dest="eng_cmd", required=True)
+    egl = eg_sub.add_parser("ls", help="an engine's sessions in one folder")
+    _add_global_options(egl, subcommand=True)
+    egl.add_argument("engine", metavar="ENGINE", help="engine name, e.g. opencode, pi")
+    egl.add_argument("--dir", metavar="DIR", help="the project folder to list sessions for")
+    egi = eg_sub.add_parser("installed", help="which engines this navigator can drive")
+    _add_global_options(egi, subcommand=True)
 
     ow = subparsers.add_parser("owner", help="project owners: set, clear or list each project's AI owner session")
     ow_sub = ow.add_subparsers(dest="owner_cmd", required=True)
@@ -1135,6 +1147,36 @@ def owner_project(tree, needle):
     if path.startswith("/") and os.path.isdir(path):     # a project folder with no sessions shown yet
         return os.path.realpath(path)
     raise UsageError(f"no project {needle!r}; use its key, folder name or display name (nav.py ls --repos)")
+
+
+def cmd_engines(args, client):
+    """Owner harnesses (docs/OWNER-ENGINES.md): which engines are installed, and a repo's sessions.
+    `nav engines ls opencode --dir ~/projects/airline` -> the pick list for an opencode owner."""
+    if args.eng_cmd == "installed":
+        tree = client.tree()
+        avail = tree.get("engines") or {}
+        if args.table:
+            for n in sorted(avail):
+                print(f"{n:<10} {'installed' if avail[n] else 'NOT installed'}"
+                      + ("" if avail[n] else ""))
+        else:
+            print_json({n: bool(v) for n, v in avail.items()})
+        return 0
+    eng = args.engine
+    d = args.dir
+    if not d:
+        raise UsageError("--dir is required: which folder's sessions to list")
+    r = client.get("/api/engines/sessions?engine=%s&dir=%s&limit=50" % (quote(eng), quote(str(Path(d).expanduser()))))
+    if not r.get("ok"):
+        raise NavError(r.get("error") or "engine lookup failed")
+    rows = r.get("rows") or []
+    if args.table:
+        for it in rows:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(it.get("updated") or 0)) if it.get("updated") else "-"
+            print(f"{it.get('id') or '':<40} {when:<17} {(it.get('title') or '')[:60]}")
+    else:
+        print_json(rows)
+    return 0
 
 
 def cmd_owner(args, client):
@@ -2703,6 +2745,8 @@ def main(argv=None):
             return cmd_unhide_all(args, client)
         if args.command == "copilot":
             return cmd_copilot(args, client)
+        if args.command == "engines":
+            return cmd_engines(args, client)
         if args.command == "owner":
             return cmd_owner(args, client)
         if args.command == "supervisor":

@@ -40,6 +40,7 @@ from pathlib import Path
 import changes
 import decisions
 import devin_delivery
+import engines
 import orca
 import pi_run
 import remote
@@ -134,6 +135,8 @@ class State:
             "triage": dict(d.get("triage") or {}),
             "copilot": str(d.get("copilot") or ""),   # session key of Uri's main assistant
             "owners": {str(k): str(v) for k, v in (d.get("owners") or {}).items() if k and v},
+            "owner_by_engine": {str(k): {str(e): str(s) for e, s in (v or {}).items() if e and s}
+                                 for k, v in (d.get("owner_by_engine") or {}).items() if k},  # repo -> engine -> last owner key
             "hide_log": list(d.get("hide_log") or [])[-HIDE_LOG_MAX:],
             "repo_order": list(d.get("repo_order") or []),
             "group_order": {k: list(v) for k, v in (d.get("group_order") or {}).items()},
@@ -207,16 +210,28 @@ class State:
         return before
 
     def set_owner(self, repo, key):
-        """Register (or with an empty key, clear) a project's owner session. -> the previous key or None."""
+        """Register (or with an empty key, clear) a project's owner session. -> the previous key or None.
+
+        The session's engine prefix is remembered per repo (owner_by_engine), so switching a
+        project's owner between harnesses (e.g. claude -> opencode) can offer the last session
+        of each harness instead of making Uri re-pick from scratch."""
         repo, key = str(repo or "").strip()[:500], str(key or "").strip()[:200]
         with self.lock:
             before = self.data["owners"].get(repo)
             if key:
                 self.data["owners"][repo] = key
+                eng = key.partition(":")[0].strip().lower()
+                if eng:
+                    self.data.setdefault("owner_by_engine", {}).setdefault(repo, {})[eng] = key
             else:
                 self.data["owners"].pop(repo, None)
             self._save()
         return before
+
+    def owner_per_engine(self, repo):
+        """repo -> {engine: key} of the last owner session registered per harness."""
+        with self.lock:
+            return dict(self.data.get("owner_by_engine", {}).get(repo) or {})
 
     def map_desktop_group(self, group, repo):
         """File a Claude desktop sidebar group's sessions under a project; an empty repo unmaps it."""
@@ -2051,6 +2066,9 @@ class App:
         if engine == "pi":
             r = pi_run.send(self.args.pi_dir, sid, text)
             return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
+        reg = engines.get(engine)
+        if reg is not None:
+            return reg.deliver(self, sid, text)      # registry engines (opencode, ...): engines.py owns the details
         if self.moved(sid):
             return "moved"
         if engine == "devin":
@@ -2300,12 +2318,22 @@ class App:
                        archived_sids=desktop_archived())
         t["copilot"] = self.copilot()
         t["owners"] = {repo: self.owner(repo) for repo in self.state.snapshot()["owners"]}   # also projects not shown
+        with self.state.lock:                      # last owner key per harness, for the switch menu
+            by = {r: dict(v) for r, v in (self.state.data.get("owner_by_engine") or {}).items()}
+        for repo, ow in t["owners"].items():
+            if ow is not None:
+                ow["by_engine"] = by.get(repo) or {}
         for r in t.get("repos") or []:
             r["owner"] = t["owners"].get(r["key"])
         if t.get("resurface") and RESURFACE:
             self.state.set_hidden(t["resurface"], False)
         t["sources"] = {"ccc": dict(ccc_meta, base=self.ccc.base), "pi": pi_meta, "orca": orca_meta,
                         "outsourcerer": o_meta, "vm251": v_meta}
+        t["engines"] = {"claude": True}          # claude runs through CCC from this app; registry engines are extra
+        for n in engines.names():
+            e = engines.get(n)
+            if e is not None:
+                t["engines"][e.name] = e.available(self)   # opencode / pi / ... for the owner switcher
         t["generated_at"] = time.time()
         return t
 
@@ -2879,6 +2907,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"entries": [e for e in reversed(log) if not e.get("undone")][:15]})
         if u.path == "/api/version":
             return self._send(200, {"version": app_version()})
+        if u.path == "/api/engines/sessions":
+            q = urllib.parse.parse_qs(u.query)
+            eng = engines.get((q.get("engine") or [""])[0])
+            if eng is None or not eng.available(self.app):
+                return self._send(400, {"ok": False, "error": "engine unknown or not installed"})
+            rows, err = eng.ls_sessions(self.app, directory=(q.get("dir") or [""])[0])
+            if err:
+                return self._send(500, {"ok": False, "error": err})
+            return self._send(200, {"ok": True, "engine": eng.name, "rows": rows})
         if u.path.startswith("/api/conversations/"):
             sid = urllib.parse.unquote(u.path[len("/api/conversations/"):])
             key = "codex:" + sid
@@ -3128,7 +3165,13 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/icon":
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
         elif p == "/api/pi/send":
-            res = pi_run.send(self.app.args.pi_dir, body.get("sid"), body.get("text"))
+            sid = str(body.get("sid") or "")
+            # opencode ids all start with ses_; pi session ids are uuids (pi_run.SID_RE's shape)
+            eng = str(body.get("engine") or ("opencode" if sid.startswith("ses_") else "pi"))
+            if eng == "opencode":
+                r = engines.OpenCode().deliver(self.app, sid, body.get("text"))
+                return self._send(200 if r == "sent" else 400, {"ok": r == "sent", "status": r})
+            res = pi_run.send(self.app.args.pi_dir, sid, body.get("text"))
             return self._send(200 if res.get("ok") else 400, res)
         elif p == "/api/note":
             key = str(body.get("key") or "")

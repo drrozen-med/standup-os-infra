@@ -86,6 +86,16 @@ class Registry(OwnerBase):
         self.assertEqual(st.set_owner(REPO, ""), "claude:other")
         self.assertEqual(navigator.State(st.path).snapshot()["owners"], {})
 
+    def test_owner_per_engine_is_remembered_for_the_switch_menu(self):
+        st = self.app.state
+        st.set_owner(REPO, "claude:a1")
+        st.set_owner(REPO, "opencode:ses_b2")
+        self.assertEqual(st.owner_per_engine(REPO), {"claude": "claude:a1", "opencode": "opencode:ses_b2"})
+        snap = navigator.State(st.path).snapshot()
+        self.assertEqual(snap["owner_by_engine"][REPO]["opencode"], "opencode:ses_b2")   # survives a restart
+        self.assertEqual(st.set_owner(REPO, ""), "opencode:ses_b2")              # clear returns the last key
+        self.assertEqual(st.owner_per_engine(REPO), {"claude": "claude:a1", "opencode": "opencode:ses_b2"})  # clear keeps the history
+
     def test_action_records_change_and_undo_restores(self):
         res = actions.dispatch(self.app, "project.owner", {"repo": REPO, "key": OWNER})
         self.assertTrue(res["ok"])
