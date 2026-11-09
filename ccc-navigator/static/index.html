@@ -318,7 +318,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .s:hover .eye,.s[aria-current="true"] .eye,.repo-h:hover .eye,.grp-h:hover .eye{opacity:1}
 .eye:hover{background:var(--line2);color:var(--text)}
 .s.ishidden,.grp-h.ishidden,.repo-h.ishidden{opacity:.5}.ishidden .eye{opacity:1;color:var(--accent)}
-.row1 .tools{display:flex;align-items:center;gap:8px}
+/* the header must fit the 400px sidebar: tools may shrink and wrap (time window drops under the icons) instead of spilling under the main pane */
+.row1{gap:8px}.row1>div:first-child{flex:none}
+.row1 .tools{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;justify-content:flex-end;row-gap:6px}
 .iconbtn{background:transparent;border:1px solid var(--line2);border-radius:8px;width:28px;height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted)}
 .iconbtn:hover{border-color:var(--line3);color:var(--text);background:var(--hover)}
 .iconbtn.muted{color:var(--warn,#c8901a);border-color:var(--warn,#c8901a)}
@@ -431,8 +433,9 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .repo-h .rtxt .osum{display:none}
   .repo-h .osum-m{display:block;order:99;flex:1 0 100%;padding-left:44px;white-space:normal;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .row1{flex-wrap:wrap;gap:6px}
-  .row1 .tools{gap:4px}
-  .seg button{padding:4px 6px}
+  .row1 .tools{gap:3px}
+  .row1 #theme,.row1 #foldAll{min-width:32px;width:32px}
+  .seg button{padding:4px 4px}
   /* header = two rows: title + tools, then chips + search + View. The pinned pills and chips fold away while scrolling down. */
   .top{padding:6px 12px 6px;gap:6px}
   .row1{flex-wrap:nowrap}
@@ -2065,8 +2068,14 @@ body.has-alert #drawer{top:var(--alert-h)}
     ui.collapsed = {}; if (anyOpen) for (const k of keys) ui.collapsed[k] = true;
     store.set('collapsed', ui.collapsed); renderList();
   });
+  // View ▾ lives in #chips on phones and in #viewHost (next to search) on desktop: listen on both
+  const onViewBtn = e => {
+    const vb = e.target.closest('#viewBtn'); if (!vb) return false;
+    e.stopPropagation(); menuAnchor === vb ? closeMenu() : openViewMenu(vb); return true;
+  };
+  $('#viewHost').addEventListener('click', onViewBtn);
   $('#chips').addEventListener('click', e => {
-    const vb = e.target.closest('#viewBtn'); if (vb) { e.stopPropagation(); return menuAnchor === vb ? closeMenu() : openViewMenu(vb); }
+    if (onViewBtn(e)) return;
     const b = e.target.closest('[data-f]'); if (!b) return;
     ui.f[b.dataset.f] = !ui.f[b.dataset.f]; store.set('filters', ui.f); renderChips(); renderList(); schedulePushView({ [b.dataset.f]: ui.f[b.dataset.f] });
   });
