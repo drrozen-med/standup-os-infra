@@ -574,6 +574,23 @@ def codex_queue_pending(sid, db=None):
         return None
 
 
+CODEX_QUEUE_STALE_S = 300   # an unread row older than this means no Codex app is reading the thread
+
+
+def codex_queue_stale(sid, db=None, now=None):
+    """True when Codex's queue holds a row for this thread that nobody has read for CODEX_QUEUE_STALE_S."""
+    path = Path(db or CODEX_QUEUE_DB).expanduser()
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=2)
+        try:
+            oldest = con.execute("select min(created_at_ms) from queued_items where thread_id=?", (sid,)).fetchone()[0]
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError):
+        return False
+    return oldest is not None and ((now or time.time()) - oldest / 1000.0) > CODEX_QUEUE_STALE_S
+
+
 def queue_codex_message(sid, text):
     """Queue into Codex desktop's existing thread without resuming a competing process."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
@@ -3106,8 +3123,12 @@ class Handler(BaseHTTPRequestHandler):
                 b = {}
             sid = str(b.get("session_id") or "") if isinstance(b, dict) else ""
             if self.app.state.snapshot().get("copilot") == "codex:" + sid:
-                result = queue_codex_message(sid, str(b.get("text") or ""))
-                return self._send(200 if result["ok"] else 400, result)
+                if not codex_queue_stale(sid):
+                    result = queue_codex_message(sid, str(b.get("text") or ""))
+                    return self._send(200 if result["ok"] else 400, result)
+                # Nobody reads the queue (Codex app not open on this thread): resume through CCC,
+                # which delivers this text and the unread queued rows together.
+                return self._proxy(raw)
             if self.app.moved(sid):
                 return self._send(409, self.app.moved_reply(sid, str(b.get("text") or "")))
             if sid.startswith("devincli-"):
