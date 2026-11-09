@@ -1399,6 +1399,9 @@ def cmd_decisions(args, client):
             if holder == "uri" and x.get("default"):
                 who += "; the asker suggests \"%s\"" % x["default"]
             print("     %s: %s" % (x.get("kind") or "not sorted (nav sort %s --kind ...)" % x["id"], who))
+            for m in x.get("dupes") or []:      # one answer covers these too: show what they asked
+                if m.get("question"):
+                    print("     covers %s (%s): %s" % (m["id"], m.get("lane") or m.get("source") or "?", m["question"]))
             if x.get("open_session"):
                 print("     session: %s  (the card's Claude / Codex / Orca buttons open it)" % x["open_session"])
     return 0

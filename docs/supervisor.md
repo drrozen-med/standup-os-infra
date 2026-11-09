@@ -92,8 +92,15 @@ refused without one; old questions get a kind with `nav.py sort`). Rules, not a 
   sorted (refused with `needs_uri`: ask it as a `choice`) and again when the default would be applied.
 - **Uri always wins.** His answer before the deadline stops the default. "Undo it" afterwards replaces the default
   with the answer "undo this, roll it back" (with the asker's own undo plan) and tells the asker. A question he
-  reopens comes back as a `choice`: it never re-arms. A switch on the Decisions page (`nav.py defaults off`) stops
-  every default; nothing is lost, the questions wait for him instead.
+  reopens comes back as a `choice`: it never re-arms (the kind is changed before the answer is removed, so a
+  reopen cut short cannot leave a live default). Reopening a problem reopens every question its answer covered.
+  A switch on the Decisions page (`nav.py defaults off`) stops every default; nothing is lost, the questions wait
+  for him instead. A switch file that cannot be read counts as off.
+- **Nothing hides.** The switch, the answer and the deadline are checked again, under one lock, at the moment a
+  default is written. An approval still open an hour after its time (`LATE_S`) is Uri's again, marked "its default
+  did not go ahead". One default that cannot be written does not stop the others (`failed` in the run's result),
+  and the asker is told even when the change log cannot be written. A merged problem carries what every project
+  asked (`dupes[].question`), so one answer is never given blind.
 - **The desk.** A problem stays with the supervisor for two days. It becomes Uri's (`escalated` says why) when it
   is still open after two days, when its deadline has passed, or when no supervisor is on duty (`state.json` paused,
   or no cycle in the last 2 h). The cycle lists the desk in `digest.json` `desk` and at the top of `digest.md`;

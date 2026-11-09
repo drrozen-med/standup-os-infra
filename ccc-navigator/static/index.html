@@ -228,6 +228,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 /* Who holds a question (decisions.py): its kind, what happens if nobody answers, what went ahead */
 .kind{font-weight:700;border-radius:6px;padding:1px 6px;border:1px solid var(--line2);color:var(--muted)}.kind.k-errand{color:var(--accent)}
 .dnote{font-size:12px;color:var(--muted);line-height:1.5}.dnote b{color:var(--text)}
+.ddup{font-size:12px;color:var(--muted)}.ddup summary{cursor:pointer;padding:4px 0}.ddup .dsrc{padding:2px 0 2px 12px;line-height:1.5}
 .dopt.sug{border-color:var(--primary-hi)}
 .inbox h3{margin:10px 0 0;font:700 16px var(--display);display:flex;gap:8px;align-items:baseline}.inbox h3 .n{color:var(--dim);font-size:13px}
 .dsw{font-size:12px;color:var(--dim);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
@@ -822,12 +823,15 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (d.default) return `The owner suggests <b dir="auto">${esc(d.default)}</b>${d.kind === 'approval' ? '. It waits for you: it will not go ahead by itself' : ''}.`;
     return '';
   }
+  // One answer covers the same problem from other projects: show what each of them asked before you answer.
+  const dupList = (d) => (d.dupes || []).some(x => x.question) ? `<details class="ddup"><summary>What the other ${d.dupes.length === 1 ? 'project' : d.dupes.length + ' projects'} asked</summary>${d.dupes.map(x => `<div class="dsrc" dir="auto"><b>${esc(x.lane || x.source || x.id)}</b>: ${esc(x.question || '')}</div>`).join('')}</details>` : '';
   function inboxHtml() {
     const card = (d, showWhy) => `<div class="dcard" data-dec="${esc(d.id)}">
         <div class="dmeta"><span class="pri p${esc(d.priority || 3)}">${PRI[d.priority] || 'P3'}</span>${KIND[d.kind] ? `<span class="kind k-${esc(d.kind)}">${KIND[d.kind]}</span>` : ''}<span class="lane">${esc(d.lane || '')}</span>${d.rank ? `<span class="pri">#${esc(d.rank)}</span>` : ''}${due(d)}</div>
         <div class="dq" dir="auto">${esc(d.question)}</div>
         ${showWhy && d.why ? `<div class="dsrc">${esc(d.why)}</div>` : ''}
         ${holdNote(d) ? `<div class="dnote">${holdNote(d)}</div>` : ''}
+        ${dupList(d)}
         <div class="dopts">${(d.options || []).filter(o => String(o).toLowerCase() !== 'other').map(o => `<button type="button" class="dopt${o === d.default ? ' sug' : ''}" data-ans="${esc(d.id)}" data-choice="${esc(o)}" dir="auto">${esc(o)}</button>`).join('')}<button type="button" class="dopt other" data-other="${esc(d.id)}">Other…</button></div>
         <div class="dother" hidden><textarea dir="auto" rows="2" placeholder="Your answer… (Enter sends, Shift+Enter new line)"></textarea><div class="drow"><button type="button" class="dopt dsend" data-send="${esc(d.id)}">Send</button><button type="button" class="linkbtn" data-cancel>Cancel</button></div></div>
         ${d.source || d.session ? `<div class="dsrc">${esc(d.source || '')}${d.session ? ' · reply goes to the asking agent' : ''}</div>` : ''}

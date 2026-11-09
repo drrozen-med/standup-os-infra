@@ -852,14 +852,8 @@ def _decision_answer(app, params, actor):
 
 
 def _decision_reopen(app, params, actor):
-    inbox = getattr(app, "inbox")
-    did = str(params.get("id") or "")
-    try:
-        before = inbox.reopen(did, by=actor)
-        cid = app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}}, {"answers": {did: None}})
-        return {"ok": True, "action": "decision.reopen", "change": cid, "result": {"ok": True, "id": did}}
-    except Exception as e:
-        raise
+    res = app.reopen_decision({"id": params.get("id")}, actor)
+    return {"ok": True, "action": "decision.reopen", "change": res["change"], "result": res}
 
 
 def _decision_rank(app, params, actor):

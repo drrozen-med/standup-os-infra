@@ -185,6 +185,67 @@ class Kinds(unittest.TestCase):
         self.assertFalse(self.inbox.set_auto(True))
         self.assertEqual(self.inbox.list(now=NOW)["counts"], {"uri": 2, "auto": 1, "supervisor": 0, "dupe": 0})
 
+    # ---- what a second reviewer found (2026-11-10): the ways a default could go ahead when it must not
+    def test_the_guard_catches_other_ways_of_saying_it(self):
+        for q, area in (("Push a notification to all app users about the new version?", "messages to real people"),
+                        ("Send the weekly digest to subscribers?", "messages to real people"),
+                        ("Send reminders out tonight?", "messages to real people"),
+                        ("Post the summary to the team's Slack channel?", "messages to real people"),
+                        ("Start the re-engagement campaign?", "messages to real people"),
+                        ("Remove the old backup files?", "deleting data"),
+                        ("Rotate the OAuth tokens?", "accounts and access"),
+                        ("Widen the permissions of the deploy bot?", "accounts and access")):
+            e = self.code(self.ask, q, ["go", "hold"], kind="approval", default="go", undo="put it back as it was")
+            self.assertEqual(e.code, "needs_uri", q)
+            self.assertIn(area, str(e), q)
+        for q in ("Run the post-deploy checks before the release?", "Enable the cache. It was sent through review. Go live?",
+                  "Upgrade the build machine to Node 22?", "Ship the new search ranking to everyone?"):
+            self.assertIsNone(decisions.guard(q), q)
+
+    def test_a_reopen_cut_short_never_leaves_a_default_that_can_go_ahead_again(self):
+        self.approval()
+        self.inbox.apply_default("ap", NOW + 2 * DAY)
+        real, calls = decisions._write, []
+
+        def second_write_fails(path, data):
+            calls.append(Path(path).name)
+            if len(calls) == 2:
+                raise OSError("disk full")
+            return real(path, data)
+        with mock.patch.object(decisions, "_write", second_write_fails), self.assertRaises(OSError):
+            self.inbox.reopen("ap", by="you", now=NOW + 2 * DAY + 60)
+        self.assertEqual(calls, ["triage.json", "answers.json"])            # the kind first, the answer second
+        self.assertEqual(self.inbox.get("ap")["kind"], "choice")
+        self.assertEqual(self.inbox.answers()["ap"]["choice"], "turn on")    # still answered: nothing was lost
+        self.assertEqual(self.inbox.due_defaults(NOW + 9 * DAY), [])
+        self.inbox.reopen("ap", by="you", now=NOW + 2 * DAY + 120)           # and the reopen can be done again
+        self.assertEqual(self.inbox.due_defaults(NOW + 9 * DAY), [])
+        self.assertEqual(self.code(self.inbox.apply_default, "ap", NOW + 9 * DAY).code, "not_due")
+
+    def test_a_default_checks_everything_again_at_the_moment_it_is_written(self):
+        self.approval()
+        self.inbox.set_auto(False, by="you", now=NOW)
+        self.assertEqual(self.code(self.inbox.apply_default, "ap", NOW + 2 * DAY).code, "defaults_off")
+        self.assertNotIn("ap", self.inbox.answers())
+        self.inbox.set_auto(True)
+        Path(self.inbox.switch_path).write_text("{not json")                 # a switch nobody can read is off
+        self.assertFalse(self.inbox.auto_on())
+        self.assertEqual(self.code(self.inbox.apply_default, "ap", NOW + 2 * DAY).code, "defaults_off")
+        Path(self.inbox.switch_path).unlink()                                # no switch file at all: on, as shipped
+        self.assertTrue(self.inbox.auto_on())
+        self.inbox.sort("ap", "choice", now=NOW + DAY)                       # sorted away after it was listed as due
+        self.assertEqual(self.code(self.inbox.apply_default, "ap", NOW + 2 * DAY).code, "not_due")
+
+    def test_a_default_that_nothing_applied_comes_back_to_the_owner(self):
+        self.approval()
+        at = decisions.auto_at(self.inbox.get("ap"))
+        d = next(x for x in self.inbox.list(now=at + 600)["open"] if x["id"] == "ap")
+        self.assertEqual((d["holder"], d["for_uri"], d["escalated"]), ("auto", False, ""))     # a few minutes late is fine
+        lst = self.inbox.list(now=at + decisions.LATE_S + 60)
+        d = next(x for x in lst["open"] if x["id"] == "ap")
+        self.assertEqual((d["holder"], d["for_uri"], d["escalated"]), ("uri", True, "its default did not go ahead"))
+        self.assertEqual(lst["counts"]["auto"], 0)
+
     # ---- one item per problem, and the supervisor's desk
     def problems(self):
         self.ask("Test server is full, builds fail.", ["I'll look"], decision_id="p-bb", kind="problem",
@@ -203,6 +264,8 @@ class Kinds(unittest.TestCase):
         self.assertEqual((lead["holder"], lead["for_uri"], lead["escalated"]), ("uri", True, "no supervisor on duty"))
         self.assertEqual([m["id"] for m in lead["dupes"]], ["p-nb", "p-cdl"])
         self.assertEqual([m["lane"] for m in lead["dupes"]], ["nursebridge", "cdl"])
+        self.assertEqual([m["question"] for m in lead["dupes"]],      # what each of them asked is there to read
+                         ["No space left on the test server.", "Cannot deploy: test server disk full."])
         for i in ("p-nb", "p-cdl"):
             self.assertEqual((by_id[i]["holder"], by_id[i]["for_uri"], by_id[i]["dupe_of"]), ("dupe", False, "p-bb"))
         self.assertEqual((by_id["p-groq"]["holder"], by_id["p-groq"]["dupes"]), ("uri", []))
@@ -342,11 +405,12 @@ class Http(unittest.TestCase):
     def actions(self):
         return [c["action"] for c in self.app.changes.recent(limit=50)]
 
-    def old_approval(self, did="ap", days=3):
-        """An approval asked `days` ago whose day is over: its default is due now."""
-        t = datetime.datetime.now().timestamp() - days * DAY
+    def old_approval(self, did="ap", late=60):
+        """An approval asked a day ago, for that same day: its default came due `late` seconds ago."""
+        t = datetime.datetime.now().timestamp() - DAY - late
         return self.app.inbox.ask("Turn the new onboarding on for everyone?", ["turn on", "hold"], decision_id=did,
-                                  kind="approval", default="turn on", undo="switch the flag off", now=t, by="owner-bb")
+                                  kind="approval", default="turn on", undo="switch the flag off", now=t, by="owner-bb",
+                                  deadline=datetime.date.fromtimestamp(t).isoformat())
 
     def test_ask_needs_a_kind_and_stores_it(self):
         st, r = self.req("POST", "/api/decisions/ask", {"question": "Turn the new onboarding on?", "options": ["on", "hold"]})
@@ -437,6 +501,58 @@ class Http(unittest.TestCase):
             self.assertIn(part, a["p3"]["note"])
         st, lst = self.req("GET", "/api/decisions")
         self.assertEqual(lst["open"], [])
+
+    def test_reopening_a_problem_reopens_what_its_answer_covered(self):
+        for did, lane in (("p1", "bb"), ("p2", "nb"), ("p3", "cdl")):
+            self.app.inbox.ask("The test server is full.", ["I'll look", "wait"], decision_id=did, kind="problem",
+                               topic="test-server-full", lane=lane)
+        self.req("POST", "/api/decisions/answer", {"id": "p1", "choice": "I'll look"}, actor="you")
+        self.assertEqual(sorted(self.app.inbox.answers()), ["p1", "p2", "p3"])
+        st, r = self.req("POST", "/api/decisions/reopen", {"id": "p1"}, actor="you")
+        self.assertEqual((st, r["reopened"][0], sorted(r["reopened"])), (200, "p1", ["p1", "p2", "p3"]))
+        self.assertEqual(self.app.inbox.answers(), {})
+        st, lst = self.req("GET", "/api/decisions")
+        self.assertEqual(sorted(d["id"] for d in lst["open"]), ["p1", "p2", "p3"])
+        st, r = self.req("POST", "/api/decisions/answer", {"id": "p1", "choice": "wait"}, actor="you")
+        self.assertEqual(sorted(r["covered"]), ["p2", "p3"])                 # the new answer reaches all of them
+        self.assertEqual({a["choice"] for a in self.app.inbox.answers().values()}, {"wait"})
+        code, out, _ = self.nav("decide", "p1", "--reopen", actor="you")
+        self.assertEqual((code, sorted(json.loads(out)["reopened"])), (0, ["p1", "p2", "p3"]))
+        ch = self.app.changes.recent(limit=1)[0]
+        self.assertEqual((ch["action"], sorted(ch["before"]["answers"])), ("decision.reopen", ["p1", "p2", "p3"]))
+
+    def test_one_default_that_fails_does_not_stop_the_others(self):
+        self.old_approval("ap1")
+        self.old_approval("ap2")
+        real = self.app.inbox.apply_default
+
+        def first_cannot_be_written(did, now=None):
+            if did == "ap1":
+                raise OSError("disk full")
+            return real(did, now)
+        with mock.patch.object(self.app.inbox, "apply_default", first_cannot_be_written):
+            r = self.app.apply_defaults()
+        self.assertEqual(([a["id"] for a in r["applied"]], [f["id"] for f in r["failed"]]), (["ap2"], ["ap1"]))
+        self.assertIn("disk full", r["failed"][0]["error"])
+        with mock.patch.object(self.app.changes, "record", side_effect=OSError("log is read-only")), \
+                mock.patch.object(self.app, "_tell", return_value="sent") as tell:
+            r = self.app.apply_defaults()                                    # ap1 goes ahead now; the log cannot be written
+        self.assertEqual([(a["id"], a["change"], a["delivery"]) for a in r["applied"]], [("ap1", None, "sent")])
+        self.assertIn("read-only", r["applied"][0]["log_error"])
+        self.assertEqual(tell.call_count, 1)                                 # the asker was still told
+
+    def test_the_switch_is_read_for_every_default(self):
+        self.old_approval("ap1")
+        self.old_approval("ap2")
+        real = self.app.inbox.apply_default
+
+        def switched_off_after_the_first(did, now=None):
+            out = real(did, now)
+            self.app.inbox.set_auto(False, by="you")
+            return out
+        with mock.patch.object(self.app.inbox, "apply_default", switched_off_after_the_first):
+            self.assertEqual(len(self.app.apply_defaults()["applied"]), 1)
+        self.assertEqual(len(self.app.inbox.answers()), 1)
 
     def test_sort_over_http_and_the_change_log(self):
         (self.d / "wt.json").write_text(json.dumps([{"id": "legacy", "question": "Which landing page?", "options": ["A", "B"], "status": "open"}]))

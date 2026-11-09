@@ -37,6 +37,7 @@ NOTICE_S = 24 * 3600        # a default never goes ahead sooner than this after 
 DESK_MAX_S = 2 * 86400      # a problem the supervisor has not closed by then goes to the owner
 WENT_DAYS = 7               # how long a default that went ahead stays listed (with its undo)
 _lock = threading.Lock()
+LATE_S = 3600      # a default this long overdue did not go ahead: the question is the owner's again
 
 KIND_HELP = """say what kind of question this is with --kind:
   choice    a real choice only Uri can make (product direction, money, clinical content, messages to real people)
@@ -53,23 +54,26 @@ GUARDS = tuple((area, re.compile(rx, re.I)) for area, rx in (
                     r"|bids?|costs?|fees?|usd|nis|shekels?|dollars?") + r"|[$₪€£]\s?\d|\d\s?[$₪€£]"),
     ("messages to real people", _W % (
         r"e-?mail(?:s|ed|ing)?|whatsapp|sms|newsletters?|outreach|announc(?:e|es|ed|ing|ement|ements)"
-        r"|invit(?:e|es|ed|ing|ation|ations)|notif(?:y|ies|ying)|tweets?|linkedin|facebook|instagram|telegram|dms?"
-        r"|press release|(?:send|sends|sending|message|messages|messaging|post|posts|posting|reply|replies|replying)"
-        r"\s+(?:it\s+|this\s+|them\s+)?(?:to|out)")),
+        r"|invit(?:e|es|ed|ing|ation|ations)|notif(?:y|ies|ied|ying|ications?)|tweets?|linkedin|facebook|instagram"
+        r"|telegram|slack|dms?|mailing list|mail(?:s|ed|ing)?|broadcasts?|campaigns?|press release"
+        # "send the reminder to all users": the verb, a few words, then to/out
+        r"|(?:send|sends|sending|sent|message|messages|messaging|post|posts|posting|reply|replies|replying)"
+        r"(?:\s+[^\s.?!]+){0,5}?\s+(?:to|out)")),
     ("clinical content", _W % (r"clinical(?:ly)?|medical(?:ly)?|patients?|diagnos\w*|dosage|dos(?:e|es|ing)|drugs?"
                                r"|medications?|treatments?|sign[- ]?offs?")),
     ("deleting data", _W % (r"delet(?:e|es|ed|ing|ion)|drop(?:s|ped|ping)?|wip(?:e|es|ed|ing)|purg(?:e|es|ed|ing)"
-                            r"|eras(?:e|es|ed|ing)|truncat(?:e|es|ed|ing)|destroy(?:s|ed|ing)?"
+                            r"|eras(?:e|es|ed|ing)|truncat(?:e|es|ed|ing)|destroy(?:s|ed|ing)?|remov(?:e|es|ed|ing|al)"
                             r"|force[- ]?push(?:es|ed|ing)?|rm -rf")),
     ("accounts and access", _W % (r"passwords?|passcodes?|2fa|mfa|otp|credentials?|secrets?|api[- ]?keys?"
-                                  r"|access[- ]?tokens?|dns|ssh keys?|domain transfer")),
+                                  r"|tokens?|oauth|permissions?|dns|ssh keys?|domain transfer")),
     ("legal terms", _W % r"legal(?:ly)?|contracts?|terms of (?:service|use)|privacy policy|gdpr|hipaa|lawyers?"),
 ))
 
 
 class DecisionError(ValueError):
     """code: bad_id, unknown_decision, bad_choice, bad_question, bad_options, bad_deadline, exists, not_answered,
-    missing_kind, bad_kind, bad_default, bad_undo, bad_topic, needs_uri, answered, not_due, not_auto."""
+    missing_kind, bad_kind, bad_default, bad_undo, bad_topic, needs_uri, answered, not_due, not_auto,
+    defaults_off."""
 
     def __init__(self, code, message):
         super().__init__(message)
@@ -231,8 +235,10 @@ class Inbox:
 
     def auto_on(self):
         """The switch for defaults going ahead by themselves (on unless someone turned it off)."""
-        s = _read(self.switch_path, {}) if self.switch_path else {}
-        return not (isinstance(s, dict) and s.get("on") is False)
+        if not self.switch_path or not Path(self.switch_path).expanduser().exists():
+            return True
+        s = _read(self.switch_path, None)       # a switch file that cannot be read counts as off
+        return isinstance(s, dict) and s.get("on") is not False
 
     def set_auto(self, on, by="you", now=None):
         with _lock:
@@ -317,6 +323,8 @@ class Inbox:
             d["auto_at"] = auto_at(d)
             d["holder"] = "auto" if d["auto_at"] and auto_on else "uri"
             d["dupes"], d["dupe_of"], d["escalated"] = [], None, ""
+            if d["holder"] == "auto" and now - d["auto_at"] > LATE_S:      # nothing applied it: do not let it hide
+                d["holder"], d["escalated"] = "uri", "its default did not go ahead"
             if d["kind"] == "problem":
                 topics.setdefault(d.get("topic") or d["id"], []).append(d)
         for group in topics.values():
@@ -324,7 +332,8 @@ class Inbox:
             group.sort(key=lambda d: (d.get("rank") is None, d.get("rank") or 0, _start(d) or 0, d["id"]))
             lead, why = group[0], _escalated(group, now, desk_open)
             lead["escalated"], lead["holder"] = why, "uri" if why else "supervisor"
-            lead["dupes"] = [{"id": m["id"], "lane": m.get("lane") or "", "source": m.get("source") or ""} for m in group[1:]]
+            lead["dupes"] = [{"id": m["id"], "lane": m.get("lane") or "", "source": m.get("source") or "",
+                              "question": m.get("question") or ""} for m in group[1:]]
             for m in group[1:]:
                 m["holder"], m["dupe_of"] = "dupe", lead["id"]
         counts = {"uri": 0, "auto": 0, "supervisor": 0, "dupe": 0}
@@ -383,23 +392,32 @@ class Inbox:
                 and q.get("kind") == "problem" and q.get("topic") == d["topic"]]
 
     def reopen(self, decision_id, by="you", now=None):
-        """Take the answer back. A reopened approval becomes a choice: it waits for an answer, and its
-        default (still shown as the asker's suggestion) no longer goes ahead by itself."""
+        """Take the answer back. -> the answer it had. See reopen_all."""
+        return self.reopen_all(decision_id, by, now)[decision_id]
+
+    def reopen_all(self, decision_id, by="you", now=None):
+        """Take the answer back, and with it the answers it gave to the same problem from other projects.
+        A reopened approval becomes a choice: it waits for an answer, and its default (still shown as the
+        asker's suggestion) no longer goes ahead by itself. -> {id: the answer it had}, decision_id first."""
         with _lock:
             a = self.answers()
             if decision_id not in a:
                 raise DecisionError("not_answered", "%s has no answer" % decision_id)
-            before = a.pop(decision_id)
-            _write(self.answers_path, a)
             d = self._questions().get(decision_id)
             if d and d.get("kind") == "approval":
+                # first, while it still has its answer: if anything stops us between the two files, the
+                # question is answered or a choice, never an approval whose default could go ahead again
                 tri = self.triage()
                 rec = {"kind": "choice", "by": by, "ts": now or time.time(), "was": "approval"}
                 if d.get("default"):
                     rec["default"] = d["default"]
                 tri[decision_id] = rec
                 _write(self.triage_path, tri)
-        return before
+            out = {decision_id: a.pop(decision_id)}
+            for i in [i for i, r in a.items() if isinstance(r, dict) and r.get("same_as") == decision_id]:
+                out[i] = a.pop(i)
+            _write(self.answers_path, a)
+        return out
 
     def ask(self, question, options, lane="", priority=2, deadline=None, session="", source="", decision_id="", by="cli",
             now=None, kind="", default="", undo="", topic=""):
@@ -474,17 +492,29 @@ class Inbox:
         return [d for d in self._questions().values() if d["id"] not in ans and (auto_at(d) or float("inf")) <= now]
 
     def apply_default(self, decision_id, now=None):
-        """Record an approval's default as its answer (by "default", auto true). -> (record, None)."""
+        """Record an approval's default as its answer (by "default", auto true). -> (record, None).
+        Everything is read again in one step with the write, so an answer, a reopen or the switch a moment
+        ago wins: codes defaults_off, unknown_decision, not_due, answered."""
         now = now or time.time()
-        d = self.get(decision_id)
-        if not d:
-            raise DecisionError("unknown_decision", "no open decision %s" % decision_id)
-        at = auto_at(d)
-        if at is None or at > now:
-            raise DecisionError("not_due", "%s has no default that is due" % decision_id)
-        note = "No answer by the deadline (%s), so the default went ahead. To undo: %s" % (d.get("deadline"), d["undo"])
-        return self.answer(decision_id, d["default"], note, by="default", now=now,
-                           extra={"auto": True, "undo": d["undo"]}, only_open=True)
+        with _lock:
+            if not self.auto_on():
+                raise DecisionError("defaults_off", "defaults are switched off: nothing goes ahead by itself")
+            d = self.get(decision_id)
+            if not d:
+                raise DecisionError("unknown_decision", "no open decision %s" % decision_id)
+            a = self.answers()
+            if a.get(decision_id) is not None:
+                raise DecisionError("answered", "%s already has an answer" % decision_id)
+            at = auto_at(d)
+            if at is None or at > now:
+                raise DecisionError("not_due", "%s has no default that is due" % decision_id)
+            rec = {"choice": d["default"], "by": "default", "ts": now, "question": d.get("question", ""),
+                   "lane": d.get("lane", ""), "session": d.get("session", ""), "auto": True, "undo": d["undo"],
+                   "note": ("No answer by the deadline (%s), so the default went ahead. To undo: %s"
+                            % (d.get("deadline"), d["undo"]))[:MAX_NOTE]}
+            a[decision_id] = rec
+            _write(self.answers_path, a)
+        return rec, None
 
     def undo_default(self, decision_id, note="", by="you", now=None):
         """The owner objects to a default that went ahead: the answer becomes "undo it". -> (record, the default's record)."""

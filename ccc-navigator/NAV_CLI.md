@@ -419,11 +419,18 @@ python3 nav.py defaults run --dry-run            # what would go ahead now; with
   legal terms. An approval that touches one is refused with `needs_uri` (ask it as a `choice`; `--default` is
   then shown as the asker's suggestion), and the check runs again before any default is applied.
 - **Uri's answer always wins:** answering before the deadline stops the default; a reopened approval comes
-  back as a `choice` and never re-arms. `sort` never edits the source (Watchtower's file stays as it is; the
+  back as a `choice` and never re-arms. Reopening a problem also reopens every question its answer covered
+  (`reopened` lists them). `sort` never edits the source (Watchtower's file stays as it is; the
   kind lives in `~/.ccc-navigator/triage.json`) and an approval made by `sort` gets a fresh 24 h notice.
 - The navigator applies what is due every 5 minutes (`CCC_NAV_DEFAULTS_EVERY` seconds, `0` turns the timer
-  off; the switch itself is `~/.ccc-navigator/auto-defaults.json`). Each default is one change-log entry
-  (actor `default`), as is every sort, undo and switch.
+  off; the switch itself is `~/.ccc-navigator/auto-defaults.json`, and a switch file that cannot be read
+  counts as off). Each default is one change-log entry (actor `default`), as is every sort, undo and switch.
+  The switch, the answer and the deadline are checked again at the moment each default is written.
+- **A default that did not go ahead comes back:** an approval still open an hour after its time (the timer
+  was off, or writing it failed) is Uri's again, marked "its default did not go ahead". `defaults run` lists
+  what it could not write under `failed` and carries on with the rest.
+- A merged problem shows what each project asked: `dupes[].question` in JSON, a `covers ...` line per
+  project in `--table`, "What the other projects asked" on the card.
 - `ask` without `--kind` exits 1 and prints the four kinds with an example, so an agent can correct itself.
 - JSON: `nav.py decisions` returns `open` (each with `kind`, `holder` `uri|auto|supervisor|dupe`, `for_uri`,
   `auto_at`, `dupes`, `dupe_of`, `escalated`), `went_ahead`, `counts`, `auto_defaults` and `desk_open`.

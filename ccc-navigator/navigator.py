@@ -2191,12 +2191,31 @@ class App:
             try:
                 rec, _ = self.inbox.apply_default(d["id"], now)
             except decisions.DecisionError:
-                continue        # answered a moment ago: the answer wins
-            cid = self.changes.record("default", "decision.default", {"id": d["id"], "choice": rec["choice"]},
-                                      {"answers": {d["id"]: None}}, {"answers": {d["id"]: rec}}, undoable=False)
-            out["applied"].append({"id": d["id"], "choice": rec["choice"], "change": cid, "delivery": self._tell(d, rec)})
+                continue        # answered, reopened or switched off a moment ago: that wins
+            except OSError as e:    # this one could not be written; the others still get their turn
+                out.setdefault("failed", []).append({"id": d["id"], "error": "%s: %s" % (type(e).__name__, e)})
+                continue
+            item = {"id": d["id"], "choice": rec["choice"], "change": None}
+            try:        # it went ahead: whatever fails from here on, the asker is still told
+                item["change"] = self.changes.record("default", "decision.default", {"id": d["id"], "choice": rec["choice"]},
+                                                     {"answers": {d["id"]: None}}, {"answers": {d["id"]: rec}}, undoable=False)
+            except Exception as e:
+                item["log_error"] = "%s: %s" % (type(e).__name__, e)
+            try:
+                item["delivery"] = self._tell(d, rec)
+            except Exception as e:
+                item["delivery"] = "failed: %s" % e
+            out["applied"].append(item)
             self._ack_decision(d["id"], "default", "default went ahead")
         return out
+
+    def reopen_decision(self, b, actor):
+        """POST /api/decisions/reopen {id}: take the answer back, with the answers it gave to the same problem."""
+        did = str(b.get("id") or "")
+        before = self.inbox.reopen_all(did, by=actor)
+        cid = self.changes.record(actor, "decision.reopen", {"id": did}, {"answers": before},
+                                  {"answers": {i: None for i in before}})
+        return {"ok": True, "id": did, "change": cid, "reopened": list(before)}
 
     def undo_default(self, b, actor):
         """POST /api/decisions/undo-default {id, note?}: the owner objects to a default that went ahead."""
@@ -3316,11 +3335,7 @@ class Handler(BaseHTTPRequestHandler):
                 if p == "/api/decisions/answer":
                     return self._send(200, self.app.answer_decision(body, actor))
                 if p == "/api/decisions/reopen":
-                    did = str(body.get("id") or "")
-                    before = self.app.inbox.reopen(did, by=actor)
-                    cid = self.app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}},
-                                                  {"answers": {did: None}})
-                    return self._send(200, {"ok": True, "id": did, "change": cid})
+                    return self._send(200, self.app.reopen_decision(body, actor))
                 if p == "/api/decisions/rank":
                     ids = body.get("ids") or []
                     why = body.get("why") or {}
