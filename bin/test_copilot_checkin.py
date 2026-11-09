@@ -179,6 +179,41 @@ class RegressionTests(CheckinCase):
         self.assertEqual(self.state_json(), {"sent_day": TODAY, "sent_count": 1})
 
 
+class UnreadQueueTests(CheckinCase):
+    """A Codex Co-pilot that is not reading its queue gets no more check-ins, and Uri is told."""
+
+    def make_queue(self, n):
+        import sqlite3
+        db = os.path.join(self.tmp.name, "queue.sqlite")
+        con = sqlite3.connect(db)
+        con.execute("create table queued_items (id text, thread_id text, payload_json text, queue_order int, created_at_ms int, updated_at_ms int)")
+        for i in range(n):
+            con.execute("insert into queued_items values (?,?,?,?,?,?)", (str(i), "abc", "{}", i, 0, 0))
+        con.commit()
+        con.close()
+        p = mock.patch.object(cc, "CODEX_QUEUE", db)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_skips_and_alerts_when_queue_unread(self):
+        self.nav.copilot = "codex:abc"
+        self.make_queue(3)
+        self.run_main()
+        self.assertEqual(self.last_line(), "skip: 3 unread messages already queued for the co-pilot")
+        self.assertEqual(self.runs.argvs("send"), [])
+
+    def test_sends_when_queue_empty(self):
+        self.nav.copilot = "codex:abc"
+        self.make_queue(0)
+        self.run_main()
+        self.assertEqual(len(self.runs.argvs("send")), 1)
+
+    def test_other_engines_ignore_the_queue(self):
+        self.make_queue(5)
+        self.run_main()
+        self.assertEqual(len(self.runs.argvs("send")), 1)
+
+
 class AlertTests(CheckinCase):
     """G5: one copilot-down decision while check-ins fail, closed on recovery."""
 

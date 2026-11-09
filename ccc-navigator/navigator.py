@@ -558,6 +558,22 @@ def codex_copilot_transcript(key):
         return None
 
 
+CODEX_QUEUE_DB = "~/.codex/queue_1.sqlite"
+
+
+def codex_queue_pending(sid, db=None):
+    """How many messages sit unread in Codex's queue for this thread (None if unreadable)."""
+    path = Path(db or CODEX_QUEUE_DB).expanduser()
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=2)
+        try:
+            return con.execute("select count(*) from queued_items where thread_id=?", (sid,)).fetchone()[0]
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError):
+        return None
+
+
 def queue_codex_message(sid, text):
     """Queue into Codex desktop's existing thread without resuming a competing process."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
@@ -572,7 +588,13 @@ def queue_codex_message(sid, text):
                                 capture_output=True, text=True, timeout=90, env=env)
         if result.returncode:
             return {"ok": False, "error": "Could not queue the message in Codex"}
-        return {"ok": True, "queued": True}
+        out = {"ok": True, "queued": True}
+        pending = codex_queue_pending(sid)
+        if pending is not None:
+            out["pending"] = pending
+            if pending > 1:   # Codex is not picking the queue up: say so instead of "Sent"
+                out["warning"] = "%d messages are waiting and Codex has not read them. It may be out of usage or not open on this thread." % pending
+        return out
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "Delivery is unconfirmed; check the chat before retrying"}
     except OSError:

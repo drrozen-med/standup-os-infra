@@ -26,6 +26,7 @@ import datetime
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import urllib.error
@@ -42,6 +43,8 @@ ALERT_ID = "copilot-down"            # decision that tells Uri check-ins are fai
 ALERT_MIN = 720         # minutes between copilot-down alerts
 PAUSE_CHOICE = "Pause check-ins"     # his answer that stops check-ins
 MAX_PER_DAY = 70        # sent check-ins per local calendar day
+CODEX_QUEUE = os.environ.get("CODEX_QUEUE_DB", os.path.expanduser("~/.codex/queue_1.sqlite"))
+MAX_PENDING = 2         # unread messages Codex may hold for the Co-pilot before check-ins stop piling on
 NET_URL = "https://api.anthropic.com"
 NET_TIMEOUT = 5         # seconds to wait for the network check
 WAKE_MIN = 45           # previous log line older than this means the Mac slept through slots
@@ -192,6 +195,20 @@ def alert(st, open_ids, answered, failed, reason):
         save_state(st)
 
 
+def codex_pending(key):
+    """Unread messages in Codex's queue for a codex: Co-pilot (0 for other engines or if unreadable)."""
+    if not key.startswith("codex:"):
+        return 0
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % CODEX_QUEUE, uri=True, timeout=2)
+        try:
+            return con.execute("select count(*) from queued_items where thread_id=?", (key[6:],)).fetchone()[0]
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError):
+        return 0
+
+
 def main():
     now = datetime.datetime.now()
     if QUIET[0] <= now.hour < QUIET[1]:
@@ -222,6 +239,12 @@ def main():
             st.pop("consec_skip_offline_wake", None)
             save_state(st)
             return log("skip: last reply was an error %.0f min ago" % ago)
+    waiting = codex_pending(cp)
+    if waiting >= MAX_PENDING:   # Codex is not reading its queue: more check-ins only pile up unread
+        st.pop("consec_skip_offline_wake", None)
+        save_state(st)
+        alert(st, open_ids, answered, True, "%d messages are waiting and Codex has not read them" % waiting)
+        return log("skip: %d unread messages already queued for the co-pilot" % waiting)
     if not online():
         consec = int(st.get("consec_skip_offline_wake") or 0) + 1
         st["consec_skip_offline_wake"] = consec
