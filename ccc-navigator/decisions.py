@@ -56,6 +56,7 @@ GUARDS = tuple((area, re.compile(rx, re.I)) for area, rx in (
         r"e-?mail(?:s|ed|ing)?|whatsapp|sms|newsletters?|outreach|announc(?:e|es|ed|ing|ement|ements)"
         r"|invit(?:e|es|ed|ing|ation|ations)|notif(?:y|ies|ied|ying|ications?)|tweets?|linkedin|facebook|instagram"
         r"|telegram|slack|dms?|mailing list|mail(?:s|ed|ing)?|broadcasts?|campaigns?|press release"
+        r"|contact(?:s|ed|ing)?|respond(?:s|ed|ing)?|reach(?:es|ed|ing)? out|follow(?:s|ed|ing)?[- ]?ups?"
         # "send the reminder to all users": the verb, a few words, then to/out
         r"|(?:send|sends|sending|sent|message|messages|messaging|post|posts|posting|reply|replies|replying)"
         r"(?:\s+[^\s.?!]+){0,5}?\s+(?:to|out)")),
@@ -65,7 +66,8 @@ GUARDS = tuple((area, re.compile(rx, re.I)) for area, rx in (
                             r"|eras(?:e|es|ed|ing)|truncat(?:e|es|ed|ing)|destroy(?:s|ed|ing)?|remov(?:e|es|ed|ing|al)"
                             r"|force[- ]?push(?:es|ed|ing)?|rm -rf")),
     ("accounts and access", _W % (r"passwords?|passcodes?|2fa|mfa|otp|credentials?|secrets?|api[- ]?keys?"
-                                  r"|tokens?|oauth|permissions?|dns|ssh keys?|domain transfer")),
+                                  r"|tokens?|oauth|permissions?|dns|ssh|domain transfer|access|accounts?"
+                                  r"|grant(?:s|ed|ing)?|logins?|sudo|firewalls?|admins?|privileges?")),
     ("legal terms", _W % r"legal(?:ly)?|contracts?|terms of (?:service|use)|privacy policy|gdpr|hipaa|lawyers?"),
 ))
 

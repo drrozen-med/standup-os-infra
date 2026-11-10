@@ -194,7 +194,12 @@ class Kinds(unittest.TestCase):
                         ("Start the re-engagement campaign?", "messages to real people"),
                         ("Remove the old backup files?", "deleting data"),
                         ("Rotate the OAuth tokens?", "accounts and access"),
-                        ("Widen the permissions of the deploy bot?", "accounts and access")):
+                        ("Widen the permissions of the deploy bot?", "accounts and access"),
+                        ("Grant the worker SSH access to the production host?", "accounts and access"),
+                        ("Create accounts for the beta testers?", "accounts and access"),
+                        ("Respond to the customer's ticket automatically?", "messages to real people"),
+                        ("Reach out to the affected users?", "messages to real people"),
+                        ("Contact the clinic managers about the change?", "messages to real people")):
             e = self.code(self.ask, q, ["go", "hold"], kind="approval", default="go", undo="put it back as it was")
             self.assertEqual(e.code, "needs_uri", q)
             self.assertIn(area, str(e), q)
