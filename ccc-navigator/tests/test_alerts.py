@@ -9,6 +9,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -106,6 +107,27 @@ class Store(unittest.TestCase):
             self.assertEqual(e.exception.code, code)
         self.assertFalse(self.path.exists())
 
+    def test_a_report_link_is_validated(self):
+        ok = self.s.raise_alert("Morning report", link={"kind": "report", "ref": "morning-report-2026-11-10"}, now=NOW)["alert"]
+        self.assertEqual((ok["link"], ok["key"]), ({"kind": "report", "ref": "morning-report-2026-11-10"},
+                                                    "report:morning-report-2026-11-10"))
+        for ref in ("../../etc/passwd", "morning-report-2026-11-10.md", "morning-report-x", "report", "morning-report-2026-11-10/../x"):
+            with self.assertRaises(alerts.AlertError, msg=ref) as cm:
+                self.s.raise_alert("x", link={"kind": "report", "ref": ref}, now=NOW)
+            self.assertEqual(cm.exception.code, "bad_link")
+
+    def test_an_alert_keyed_as_a_report_is_shown_with_its_link(self):
+        self.s.raise_alert("Morning report is ready", "/some/path.md", key="morning-report-2026-11-10", by="cli", now=NOW)
+        self.s.raise_alert("Other", key="morning-report-soon", by="cli", now=NOW)
+        self.s.raise_alert("Decision", link={"kind": "decision", "ref": "d1"}, now=NOW)
+        by_key = {a["key"]: a for a in self.s.list()["open"]}
+        self.assertEqual(by_key["morning-report-2026-11-10"]["link"], {"kind": "report", "ref": "morning-report-2026-11-10"})
+        self.assertIsNone(by_key["morning-report-soon"]["link"])                 # not a report name: no link
+        self.assertEqual(by_key["decision:d1"]["link"], {"kind": "decision", "ref": "d1"})
+        self.assertIsNone(self.s._read()[0]["link"])                              # shown, not stored
+        self.s.ack(by_key["morning-report-2026-11-10"]["id"], now=NOW + 5)
+        self.assertEqual(self.s.list()["acked"][0]["link"]["kind"], "report")
+
     def test_env_overrides_default_path(self):
         with mock.patch.dict(os.environ, {"CCC_NAV_ALERTS": str(self.path)}):
             self.assertEqual(alerts.Alerts().path, self.path)
@@ -155,6 +177,52 @@ class Http(unittest.TestCase):
 
     def changes(self):
         return [c for c in self.app.changes.recent(limit=50)]
+
+    def sup_dir(self):
+        d = self.d / "sup"
+        d.mkdir(exist_ok=True)
+        return mock.patch.dict(os.environ, {"SUPERVISOR_DIR": str(d)}), d
+
+    def test_reports_are_listed_and_read_from_the_supervisor_folder_only(self):
+        env, d = self.sup_dir()
+        with env:
+            self.assertEqual(self.req("GET", "/api/reports")[1]["reports"], [])
+            self.assertEqual(self.req("GET", "/api/report")[0], 404)               # none yet
+            (d / "morning-report-2026-11-09.md").write_text("# Morning report 2026-11-09\nold\n")
+            (d / "morning-report-2026-11-10.md").write_text("# Morning report 2026-11-10\n\n## Needs you first\n- **x**: y\n")
+            (d / "digest.md").write_text("secret digest")
+            (d / "morning-report-notes.md").write_text("not a report name")
+            (d / "state.json").write_text("{}")
+            (d.parent / "outside.md").write_text("outside")
+            (d / "morning-report-2026-11-11.md").symlink_to(d.parent / "outside.md")
+            st, out = self.req("GET", "/api/reports")
+            self.assertEqual((st, [r["name"] for r in out["reports"]]), (200, ["morning-report-2026-11-10", "morning-report-2026-11-09"]))
+            st, out = self.req("GET", "/api/report")                                # no name: the newest
+            self.assertEqual((st, out["name"], out["ok"]), (200, "morning-report-2026-11-10", True))
+            self.assertIn("## Needs you first", out["text"])
+            self.assertEqual(self.req("GET", "/api/report?name=morning-report-2026-11-09")[1]["text"].splitlines()[1], "old")
+            for bad in ("digest", "../outside", "..%2Foutside", "morning-report-2026-11-10.md", "state", "morning-report-2026-1-1"):
+                self.assertEqual(self.req("GET", "/api/report?name=" + bad)[0], 400, bad)
+            self.assertEqual(self.req("GET", "/api/report?name=morning-report-2020-01-01")[0], 404)
+            self.assertEqual(self.req("GET", "/api/report?name=morning-report-2026-11-11")[0], 404)   # a link is never followed
+
+    def test_a_report_is_cut_at_the_size_limit(self):
+        env, d = self.sup_dir()
+        with env, mock.patch.object(navigator, "REPORT_BYTES", 50):
+            (d / "morning-report-2026-11-10.md").write_text("x" * 500)
+            self.assertEqual(len(self.req("GET", "/api/report")[1]["text"]), 50)
+
+    def test_the_alert_the_night_watchdog_raises_gets_its_open_button(self):
+        env, d = self.sup_dir()
+        with env:
+            (d / "morning-report-2026-11-10.md").write_text("# r\n")
+            st, out = self.req("POST", "/api/alerts/raise", {"title": "Morning report is ready", "body": str(d), "key": "morning-report-2026-11-10"})
+            self.assertEqual((st, out["raised"]), (200, True))
+            st, out = self.req("GET", "/api/alerts")
+            self.assertEqual(out["open"][0]["link"], {"kind": "report", "ref": "morning-report-2026-11-10"})
+            st, out = self.req("POST", "/api/alerts/raise", {"title": "T", "link": {"kind": "report", "ref": "morning-report-2026-11-12"}})
+            self.assertEqual(out["alert"]["key"], "report:morning-report-2026-11-12")
+            self.assertEqual(self.req("POST", "/api/alerts/raise", {"title": "T", "link": {"kind": "report", "ref": "../x"}})[0], 400)
 
     def test_raise_get_ack_with_change_log(self):
         st, out = self.req("GET", "/api/alerts")
@@ -256,6 +324,36 @@ class Cli(unittest.TestCase):
         self.assertEqual((code, out.strip()), (0, "raised al-1: t"))
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             nav.build_parser().parse_args(["alert", "raise", "--title", "T", "--decision", "d", "--session", "claude:x"])
+
+    def test_raise_with_a_report_link_and_the_report_command(self):
+        c = self.Client()
+        self.run_nav(c, "alert", "raise", "--title", "T", "--report", "morning-report-2026-11-10")
+        self.assertEqual(c.posts[-1][1]["link"], {"kind": "report", "ref": "morning-report-2026-11-10"})
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            nav.build_parser().parse_args(["alert", "raise", "--title", "T", "--report", "r", "--decision", "d"])
+
+        class Reports:
+            def __init__(self):
+                self.gets = []
+
+            def get(self, path):
+                self.gets.append(path)
+                if path == "/api/reports":
+                    return {"reports": [{"name": "morning-report-2026-11-10", "size": 1234, "mtime": time.time() - 7200}]}
+                return {"ok": True, "name": "morning-report-2026-11-10", "text": "# Morning report\n- **x**: y\n"}
+        r = Reports()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            nav.cmd_report(nav.build_parser().parse_args(["report", "--table"]), r)
+            nav.cmd_report(nav.build_parser().parse_args(["report", "2026-11-09", "--table"]), r)
+            nav.cmd_report(nav.build_parser().parse_args(["report", "morning-report-2026-11-08"]), r)
+            nav.cmd_report(nav.build_parser().parse_args(["report", "--list", "--table"]), r)
+        self.assertEqual(r.gets, ["/api/report", "/api/report?name=morning-report-2026-11-09",
+                                  "/api/report?name=morning-report-2026-11-08", "/api/reports"])
+        text = out.getvalue()
+        self.assertIn("- **x**: y", text)
+        self.assertIn('"name": "morning-report-2026-11-10"', text)
+        self.assertIn("morning-report-2026-11-10    1234 bytes  2h ago", text)
 
     def test_navigator_url_still_settable_before_the_command(self):
         a = nav.build_parser().parse_args(["--url", "http://127.0.0.1:8099", "alert", "raise", "--title", "T",

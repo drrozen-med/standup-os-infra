@@ -5,7 +5,9 @@ chimes, flashes the tab title and sends one system notification, until he acks i
 or opens what it links to.
 
 Store: ~/.ccc-navigator/alerts.json (env CCC_NAV_ALERTS), a list of
-  {id, title, body, link: {kind: decision|session|url, ref} | null, key, raised_by, raised_at, acked_at, acked_by}
+  {id, title, body, link: {kind: decision|session|url|report, ref} | null, key, raised_by, raised_at, acked_at, acked_by}
+`report` links to a morning report (ref: morning-report-YYYY-MM-DD, read from the supervisor folder). An alert
+with that key and no link of its own (the night watchdog raises it that way) is shown with the link anyway.
 `key` dedupes: a raise with the key of an open alert returns that alert; an acked key may raise again only
 12 h after its ack. Only the supervisor cycle raises (bin/supervisor.py); answering a decision acks the
 alerts linked to it (navigator.App.answer_decision).
@@ -20,7 +22,8 @@ import threading
 import time
 from pathlib import Path
 
-KINDS = ("decision", "session", "url")
+KINDS = ("decision", "session", "url", "report")
+REPORT_RE = re.compile(r"^morning-report-\d{4}-\d{2}-\d{2}$")
 REARM = 12 * 3600          # an acked key may raise again this long after its ack
 ACKED_SHOWN = 20           # GET /api/alerts: open + this many most recent acked
 KEEP_ACKED = 200           # the file keeps this many acked alerts
@@ -55,7 +58,16 @@ def _clean_link(link):
         raise AlertError("bad_link", "url must start with http:// or https://")
     if kind == "session" and not SESSION_RE.match(ref):
         raise AlertError("bad_link", "session must be <engine>:<id>")
+    if kind == "report" and not REPORT_RE.match(ref):
+        raise AlertError("bad_link", "report must be morning-report-YYYY-MM-DD")
     return {"kind": kind, "ref": ref}
+
+
+def _shown(a):
+    """The alert as clients see it: a morning-report alert without a link gets the link to its report."""
+    if not a.get("link") and REPORT_RE.match(str(a.get("key") or "")):
+        return dict(a, link={"kind": "report", "ref": a["key"]})
+    return a
 
 
 class Alerts:
@@ -85,7 +97,7 @@ class Alerts:
         rows = self._read()
         opened = sorted((a for a in rows if not a.get("acked_at")), key=lambda a: -float(a.get("raised_at") or 0))
         acked = sorted((a for a in rows if a.get("acked_at")), key=lambda a: -float(a.get("acked_at") or 0))
-        return {"open": opened, "acked": acked[:acked_limit]}
+        return {"open": [_shown(a) for a in opened], "acked": [_shown(a) for a in acked[:acked_limit]]}
 
     def raise_alert(self, title, body="", link=None, key="", by="cli", now=None):
         """-> {"raised": bool, "alert": the new or the existing alert, "reason"?: why nothing new was raised}."""

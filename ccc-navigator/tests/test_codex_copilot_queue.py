@@ -31,6 +31,53 @@ def test_queue_uses_existing_thread_without_resume():
         assert not navigator.queue_codex_message(SID, 'hello')['ok']
 
 
+def test_a_broken_codex_program_falls_back_to_the_next_one():
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv[0])
+        r = mock.Mock()
+        r.returncode = 1 if argv[0].startswith('/broken/') else 0
+        return r
+    with mock.patch.object(navigator, 'codex_clis', return_value=['/broken/codex', '/app/codex']), \
+            mock.patch.object(navigator.subprocess, 'run', fake_run):
+        assert navigator.queue_codex_message(SID, 'hello')['queued']
+        assert calls == ['/broken/codex', '/app/codex']
+        calls.clear()
+        assert navigator.queue_codex_message(SID, 'hello')['ok']
+    with mock.patch.object(navigator, 'codex_clis', return_value=['/broken/codex', '/broken/codex2']), \
+            mock.patch.object(navigator.subprocess, 'run', fake_run):
+        assert navigator.queue_codex_message(SID, 'hello') == {'ok': False, 'error': 'Could not queue the message in Codex'}
+
+
+def test_a_timeout_is_never_retried_on_the_next_program():
+    calls = []
+
+    def slow(argv, **kw):
+        calls.append(argv[0])
+        raise navigator.subprocess.TimeoutExpired(argv, 90)
+    with mock.patch.object(navigator, 'codex_clis', return_value=['/a/codex', '/b/codex']), mock.patch.object(navigator.subprocess, 'run', slow):
+        res = navigator.queue_codex_message(SID, 'hello')
+    assert calls == ['/a/codex'] and not res['ok'] and 'unconfirmed' in res['error']   # it may have queued: never twice
+
+
+def test_codex_programs_are_listed_best_first_each_once(tmp_path):
+    good = tmp_path / 'codex'
+    good.write_text('#!/bin/sh\n')
+    good.chmod(0o755)
+    plain = tmp_path / 'plain'
+    plain.write_text('x')
+    with mock.patch.object(navigator.shutil, 'which', return_value=str(good)), \
+            mock.patch.object(navigator, 'CODEX_APP_CLI', str(good)), mock.patch.object(navigator.Path, 'home', return_value=tmp_path / 'nohome'):
+        assert navigator.codex_clis() == [str(good)]
+    with mock.patch.object(navigator.shutil, 'which', return_value=None), \
+            mock.patch.object(navigator, 'CODEX_APP_CLI', str(plain)), mock.patch.object(navigator.Path, 'home', return_value=tmp_path / 'nohome'):
+        assert navigator.codex_clis() == []                            # present but not runnable: not offered
+    with mock.patch.object(navigator.shutil, 'which', return_value=None), \
+            mock.patch.object(navigator, 'CODEX_APP_CLI', str(good)), mock.patch.object(navigator.Path, 'home', return_value=tmp_path / 'nohome'):
+        assert navigator.codex_clis() == [str(good)]                   # nothing on PATH: the app's own copy
+
+
 def test_transcript_only_exposes_user_visible_messages(tmp_path):
     import json
     transcript = tmp_path / 'session.jsonl'

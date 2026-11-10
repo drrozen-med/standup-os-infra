@@ -121,7 +121,11 @@ stopped this way does not count against its provider; one that could not be canc
 The escalation ladder's loud step (#79 rule 5). An alert turns every open Navigator page red until Uri attends
 to it: a red bar above everything (phone too), a two-tone chime every 20 s (Web Audio, no files), the tab title
 flashing `(!) <title>` and one system notification per alert. It stops on **I'm on it** (ack), on opening the
-linked decision, or on answering that decision in the inbox; on other devices it stops at their next refresh.
+linked decision or report (**Open decision** / **Open report**), or on answering that decision in the inbox; on
+other devices it stops at their next refresh. The night watchdog's "Morning report is ready" alert (key
+`morning-report-YYYY-MM-DD`) opens that day's report on a screen of its own inside the Supervisor area; the
+board's **Morning report** button opens the newest one any time. The Navigator serves only files named
+`morning-report-YYYY-MM-DD.md` from the supervisor folder, read-only.
 Store, API and CLI: `ccc-navigator/NAV_CLI.md`, "Loud alerts".
 
 Keep it rare, or it stops meaning anything. **Only the cycle raises alerts; owners never do** (an owner turns

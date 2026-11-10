@@ -598,19 +598,39 @@ def codex_queue_stale(sid, db=None, now=None):
     return oldest is not None and ((now or time.time()) - oldest / 1000.0) > CODEX_QUEUE_STALE_S
 
 
+CODEX_APP_CLI = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+
+
+def codex_clis():
+    """Every codex program that could queue the message, best first, each once: the one on PATH, the usual folders,
+    then the copy the Codex desktop app carries. An npm install can be left broken by an interrupted update (its
+    platform package missing: every call exits 1 at once) while the app's own copy keeps working."""
+    out = []
+    first = shutil.which("codex")
+    if first:
+        out.append(first)
+    for c in (str(Path.home() / ".local/bin/codex"), "/opt/homebrew/bin/codex", CODEX_APP_CLI):
+        if c not in out and Path(c).is_file() and os.access(c, os.X_OK):
+            out.append(c)
+    return out
+
+
 def queue_codex_message(sid, text):
     """Queue into Codex desktop's existing thread without resuming a competing process."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
         return {"ok": False, "error": "Invalid session or empty message"}
-    cli = shutil.which("codex") or next((str(p) for p in (Path.home() / ".local/bin/codex", Path("/opt/homebrew/bin/codex")) if p.is_file() and os.access(p, os.X_OK)), None)
-    if not cli:
+    clis = codex_clis()
+    if not clis:
         return {"ok": False, "error": "Codex CLI is unavailable"}
     try:
         env = os.environ.copy()
         env["PATH"] = os.pathsep.join((str(Path.home() / ".local/bin"), "/opt/homebrew/bin", env.get("PATH", "")))
-        result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
-                                capture_output=True, text=True, timeout=90, env=env)
-        if result.returncode:
+        for cli in clis:    # a program that exits at once with an error did not queue anything: try the next one
+            result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
+                                    capture_output=True, text=True, timeout=90, env=env)
+            if not result.returncode:
+                break
+        else:
             return {"ok": False, "error": "Could not queue the message in Codex"}
         out = {"ok": True, "queued": True}
         pending = codex_queue_pending(sid)
@@ -1990,6 +2010,44 @@ def desk_open(now=None):
     return bool(seen) and (now or time.time()) - max(seen) < DESK_FRESH_S
 
 
+REPORT_BYTES = 400_000
+
+
+def reports_list():
+    """GET /api/reports: {reports: [{name, mtime, size}]} newest first. Only the morning reports the night watchdog
+    writes into the supervisor folder (morning-report-YYYY-MM-DD.md); nothing else there is ever served."""
+    out = []
+    try:
+        for p in supervisor_dir().glob("morning-report-*.md"):
+            name = p.stem
+            if alerts.REPORT_RE.match(name) and p.is_file() and not p.is_symlink():
+                st = p.stat()
+                out.append({"name": name, "mtime": st.st_mtime, "size": st.st_size})
+    except OSError:
+        pass
+    return {"reports": sorted(out, key=lambda r: r["name"], reverse=True)}
+
+
+def report_read(name):
+    """GET /api/report?name=: {name, text, mtime}; no name = the newest. -> (http status, body)."""
+    name = str(name or "").strip()
+    if not name:
+        rows = reports_list()["reports"]
+        if not rows:
+            return 404, {"ok": False, "error": "no morning report yet"}
+        name = rows[0]["name"]
+    if not alerts.REPORT_RE.match(name):
+        return 400, {"ok": False, "error": "report must be morning-report-YYYY-MM-DD"}
+    p = supervisor_dir() / (name + ".md")
+    try:
+        if p.is_symlink() or not p.is_file():
+            return 404, {"ok": False, "error": "no such report"}
+        text = p.read_bytes()[:REPORT_BYTES].decode("utf-8", "replace")
+        return 200, {"ok": True, "name": name, "text": text, "mtime": p.stat().st_mtime}
+    except OSError:
+        return 404, {"ok": False, "error": "no such report"}
+
+
 def supervisor_run(body, actor, nav_url):
     """POST /api/supervisor: runs bin/supervisor.py. -> (http status, result).
     {action: pause|resume, project?} | {action: wake, project, reason?} | {action: engine, project (or "all"),
@@ -3151,6 +3209,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/alerts":
             return self._send(200, alerts_view(self.app))
+        if u.path == "/api/reports":
+            return self._send(200, dict(reports_list(), ok=True))
+        if u.path == "/api/report":
+            code, res = report_read((urllib.parse.parse_qs(u.query).get("name") or [""])[0])
+            return self._send(code, res)
         if u.path == "/api/desktop-groups":
             return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
                                     "folders": self.app.project_folders()})
