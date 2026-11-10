@@ -58,7 +58,7 @@ class InboxTests(unittest.TestCase):
         self.assertEqual((rec["choice"], rec["note"]), ("other", "next month"))
 
     def test_ask_adds_to_own_queue(self):
-        d = self.inbox.ask("Deploy CRM now?", ["deploy", "hold"], lane="gtm", priority=5, session="claude:abc", by="copilot")
+        d = self.inbox.ask("Deploy CRM now?", ["deploy", "hold"], lane="gtm", priority=5, session="claude:abc", by="copilot", kind="choice")
         self.assertEqual(d["priority"], 3)
         self.assertIn(d["id"], [x["id"] for x in self.inbox.list()["open"]])
         self.assertEqual(self.inbox.get(d["id"])["origin"], "navigator")
@@ -75,12 +75,13 @@ class InboxTests(unittest.TestCase):
                          ({"question": "A real question?", "options": ["a"], "decision_id": "Bad Id"}, "bad_id"),
                          ({"question": "A real question?", "options": ["a"], "decision_id": "aba-price"}, "exists")):
             with self.assertRaises(DecisionError) as cm:
-                self.inbox.ask(**kw)
+                self.inbox.ask(kind="choice", **kw)
             self.assertEqual(cm.exception.code, code, kw)
 
     def test_missing_watchtower_file_is_fine(self):
         inbox = decisions.Inbox(Path(self.tmp.name) / "o.json", Path(self.tmp.name) / "a.json", Path(self.tmp.name) / "none.json")
-        self.assertEqual(inbox.list(), {"open": [], "answered": []})
+        self.assertEqual(inbox.list(), {"open": [], "answered": [], "went_ahead": [], "auto_defaults": True, "desk_open": False,
+                                        "counts": {"uri": 0, "auto": 0, "supervisor": 0, "dupe": 0}})
 
     def test_set_ranks_behavior(self):
         inbox = decisions.Inbox(Path(self.tmp.name) / "own.json", Path(self.tmp.name) / "answers.json", self.wt)
@@ -99,7 +100,7 @@ class InboxTests(unittest.TestCase):
         # cap at 7
         many = [f"d{i}" for i in range(10)]
         for mid in many:
-            inbox.ask(f"Question {mid} now?", ["yes", "no"], decision_id=mid)
+            inbox.ask(f"Question {mid} now?", ["yes", "no"], decision_id=mid, kind="choice")
         rec4, _ = inbox.set_ranks(many)
         self.assertEqual(len(rec4["ids"]), 7)
 

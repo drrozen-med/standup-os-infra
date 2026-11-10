@@ -75,8 +75,25 @@ writes the file atomically, and appends `[owner] <state>: <summary>` to `log.md`
   one muted line; a warning style when `stale` or `state` is `blocked` / `waiting-on-uri`.
 - Session menu (Claude sessions): "Make this the owner of <project>" / "Stop being the owner".
 
+## Asking Uri: every question has a kind
+
+An owner never writes "stuck". It asks with `nav.py ask --kind <kind>` (refused without a kind, with the list
+below in the error), and the kind decides who gets the question (`docs/supervisor.md`, "The gate"):
+
+- `approval`: reversible and inside the owner's rights. Needs `--default <one of the options>` and
+  `--undo "how to roll it back"`. Uri sees it under "Going ahead unless you object"; when the deadline passes
+  (tomorrow if none is given) the default is the answer and the owner acts on it.
+- `problem`: something broken or shared (a full server, a provider down). Needs `--topic <short-name>`; the same
+  topic from several projects is one item on the supervisor's desk, not five in Uri's inbox.
+- `errand`: it needs Uri's own hands (his login, 2FA, a payment screen).
+- `choice`: a real choice that is his. Money, messages to real people, clinical content, deleting data, accounts
+  and access and legal terms are always this, whatever kind the owner gives.
+
+`nav.py decisions --for auto --table` shows an owner's approvals and when they go ahead; `--went-ahead` the ones
+that did.
+
 ## Owner prompt
 
 `bin/owner.py brief <slug>` prints the prompt that starts or restarts an owner: who it is, the
-rules of #79, its goals, the scoreboard, its status, the last 10 log entries, the toolbelt, and the
+rules of #79 (and rule 7: every question has a kind), its goals, the scoreboard, its status, the last 10 log entries, the toolbelt, and the
 exact `owner.py status set` command it must run at the end of every turn.

@@ -491,7 +491,7 @@ def baseline_github_state(state, now, hours=20):
     return state["snapshots"].get(latest, {}) or {}
 
 
-def render(snapshot, decisions, now):
+def render(snapshot, decisions, now, went_ahead=()):
     today = now.date()
     live, gh = snapshot["live"], snapshot.get("github") or {}
     gh_state = snapshot.get("github_state") or snapshot.get("github_prev_state") or load_github_state()
@@ -511,8 +511,11 @@ def render(snapshot, decisions, now):
         lines.append(f"**Live sessions unavailable:** {live['error']}")
     lines.append("")
 
-    open_dec = [d for d in decisions if d.get("status") == "open"]
-    open_dec.sort(key=lambda d: (d["priority"], d["deadline"] or "9999"))
+    # The gate (ccc-navigator/decisions.py): only what is his is listed as waiting on him. Approvals going ahead
+    # on their default, problems with the supervisor and repeats of the same problem are told apart below.
+    all_open = [d for d in decisions if d.get("status") == "open"]
+    all_open.sort(key=lambda d: (d["priority"], d["deadline"] or "9999"))
+    open_dec = [d for d in all_open if d.get("for_uri") is not False]
     lines.append(f"## Decisions waiting on you ({len(open_dec)})")
     lines.append("")
     for d in open_dec:
@@ -520,8 +523,39 @@ def render(snapshot, decisions, now):
         if d["deadline"]:
             days = (datetime.fromisoformat(d["deadline"]).date() - today).days
             due = f" **[due {d['deadline']}, {'OVERDUE' if days < 0 else f'{days}d left'}]**"
-        lines.append(f"- **P{d['priority']}** `{d['id']}` ({d['lane']}){due}: {d['question']} Options: {' / '.join(d['options'])}")
+        also = sorted({str(x.get("lane") or x.get("id")) for x in d.get("dupes") or []})
+        same = f" Same problem also raised by: {', '.join(also)} (one answer covers all)." if also else ""
+        lines.append(f"- **P{d['priority']}** `{d['id']}` ({d['lane']}){due}: {d['question']} Options: {' / '.join(d['options'])}{same}")
     lines.append("")
+
+    def when(ts):
+        try:
+            return f"{datetime.fromtimestamp(float(ts)).astimezone():%a %d %b %H:%M}"
+        except (TypeError, ValueError, OSError):
+            return "its deadline"
+
+    going = [d for d in all_open if d.get("holder") == "auto"]
+    if going:
+        lines.append(f"## Going ahead unless you object ({len(going)})")
+        lines.append("")
+        for d in going:
+            lines.append(f"- `{d['id']}` ({d['lane']}): {d['question']} Goes ahead with **{d.get('default')}** on "
+                         f"{when(d.get('auto_at'))}. Pick another answer on the Decisions page to stop it.")
+        lines.append("")
+    if went_ahead:
+        lines.append(f"## Went ahead without you, last 7 days ({len(went_ahead)})")
+        lines.append("")
+        for w in went_ahead:
+            undo = f" To undo: {w['undo']}." if w.get("undo") else ""
+            lines.append(f"- `{w.get('id')}` ({w.get('lane') or ''}): {w.get('question') or ''} Went ahead with "
+                         f"**{w.get('choice')}** on {when(w.get('ts'))}.{undo} "
+                         f"\"Undo it\" on the Decisions page, or `nav decide {w.get('id')} --undo`.")
+        lines.append("")
+    desk = [d for d in all_open if d.get("holder") == "supervisor"]
+    if desk:
+        lines.append(f"_With the supervisor, not you: {len(desk)} problem{'s' if len(desk) != 1 else ''} "
+                     f"({', '.join('`%s`' % d['id'] for d in desk)}). They come to you only if not solved in two days._")
+        lines.append("")
 
     order = list(snapshot["lane_titles"]) + ["other"]
     quiet = []
@@ -594,17 +628,29 @@ def _normalize(d):
                 options=d.get("options") or [], lane=d.get("lane") or "", status="open")
 
 
+def _went(view):
+    return [w for w in view.get("went_ahead") or [] if isinstance(w, dict)]
+
+
 def load_decisions():
-    """Open decisions from the navigator's inbox (Watchtower's queue minus what Uri answered, plus questions
-    agents asked with `nav ask`). When the navigator does not answer, the same inbox is read from its files,
-    so an answered decision is never shown as waiting just because the navigator was slow."""
+    """Open decisions from the navigator's inbox. See load_inbox()."""
+    return load_inbox()[0]
+
+
+def load_inbox():
+    """(open decisions, defaults that went ahead in the last week) from the navigator's inbox (Watchtower's
+    queue minus what Uri answered, plus questions agents asked with `nav ask`). When the navigator does not
+    answer, the same inbox is read from its files, so an answered decision is never shown as waiting just
+    because the navigator was slow."""
     try:
         with urllib.request.urlopen(f"{NAV_URL}/api/decisions", timeout=20) as resp:
-            return [_normalize(d) for d in json.loads(resp.read())["open"]]
+            view = json.loads(resp.read())
+            return [_normalize(d) for d in view["open"]], _went(view)
     except Exception:
         pass
     try:
-        return [_normalize(d) for d in _inbox_from_files().list()["open"]]
+        view = _inbox_from_files().list()
+        return [_normalize(d) for d in view["open"]], _went(view)
     except Exception:
         # Last resort: the raw queue minus answers, never the raw queue alone.
         answers_path = Path(os.environ.get("CCC_NAV_ANSWERS") or "~/.ccc-navigator/answers.json").expanduser()
@@ -613,12 +659,12 @@ def load_decisions():
         except (OSError, ValueError, TypeError):
             answered = set()
         raw = json.loads((CONFIG_DIR / "decisions.json").read_text())
-        return [_normalize(d) for d in raw if d.get("status", "open") == "open" and d.get("id") not in answered]
+        return [_normalize(d) for d in raw if d.get("status", "open") == "open" and d.get("id") not in answered], []
 
 
 def main():
     cfg = json.loads((CONFIG_DIR / "lanes.json").read_text())
-    decisions = load_decisions()
+    decisions, went_ahead = load_inbox()
     now = datetime.now(timezone.utc)
 
     github = collect_github(cfg, now)
@@ -637,7 +683,7 @@ def main():
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / "latest.json").write_text(json.dumps(snapshot, indent=2))
-    brief = render(snapshot, decisions, now)
+    brief = render(snapshot, decisions, now, went_ahead)
     (STATE_DIR / "brief.md").write_text(brief)
     print(brief)
     return 0

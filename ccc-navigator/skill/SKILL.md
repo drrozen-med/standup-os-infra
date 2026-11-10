@@ -120,6 +120,10 @@ Ask decision (changes state)
 - `session` str
 - `source` str
 - `id` str
+- `kind` str - choice | errand | approval | problem. choice/errand = the owner's, approval = goes ahead on its default at the deadline, problem = the supervisor's
+- `default` str - approval: the option that goes ahead if nobody objects
+- `undo` str - approval: how the step is rolled back
+- `topic` str - problem: short name; the same topic is one item
 
 ### `decision.rank`
 Rank decisions (changes state)
@@ -132,6 +136,20 @@ Clear decision ranks (changes state)
 ### `decision.reopen`
 Reopen decision (changes state, undoable)
 - `id` str, required
+
+### `decision.sort`
+Say what kind an open decision is (changes state)
+- `id` str, required
+- `kind` str - choice | errand | approval | problem. choice/errand = the owner's, approval = goes ahead on its default at the deadline, problem = the supervisor's
+- `default` str - approval: the option that goes ahead if nobody objects
+- `undo` str - approval: how the step is rolled back
+- `topic` str - problem: short name; the same topic is one item
+- `deadline` str
+
+### `decision.undo-default`
+Object to a default that went ahead (changes state)
+- `id` str, required
+- `note` str
 
 ### `group.hide`
 Hide group (changes state, undoable; targets: group)
