@@ -1055,8 +1055,10 @@ class Jobs(Base):
                          (1, "job-1", "cancel failed"))
         self.assertEqual(self.skip_of(), "its turn is running (job job-1 on iceman, 95 min)")
         self.assertNotIn("last_job", self.ps())
+        self.run_cycle(NOON + 200 * MIN)                                # however old: nothing starts beside it
+        self.assertEqual((len(self.osrc.launches()), self.ps()["job"]["id"], self.reg()["flags"]), (1, "job-1", ["job-stuck"]))
         self.osrc.stuck = set()
-        self.run_cycle(NOON + 110 * MIN)                                # now it goes: the next provider takes over
+        self.run_cycle(NOON + 215 * MIN)                                # now it goes: the next provider takes over
         self.assertEqual((self.ps()["last_job"]["ended"], self.ps()["job"]["id"]), ("hung", "job-2"))
 
     def test_a_pause_that_lands_while_a_job_starts_cancels_that_job(self):
@@ -1078,7 +1080,51 @@ class Jobs(Base):
         self.run_cycle()
         self.assertEqual(self.osrc.cancels(), ["job-1"])                # the cycle's job, not the one started by hand
         self.assertEqual((self.ps()["job"]["id"], self.ps()["last_wake"]["reason"], self.ps()["wakes"]["count"]), ("m-1", "manual", 1))
-        self.assertEqual(self.skip_of(), "started, then cancelled: woken by hand meanwhile")
+        self.assertEqual(self.skip_of(), "started, then cancelled: woken meanwhile")
+        self.assertEqual(self.jfile("register.json")["jobs"]["running"], 1)        # the job that stayed in its place
+
+    def test_a_manual_wake_cancels_its_own_job_when_a_pause_lands_while_it_starts(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.on_launch = lambda: sup.set_pause(None, True)
+        code, res = self.cli("wake", "alpha")
+        self.assertEqual((code, res["ok"], res["skip"]), (1, False, "started, then cancelled: paused meanwhile"))
+        st = self.jfile("state.json")
+        self.assertEqual((self.osrc.cancels(), st["paused"], ((st.get("projects") or {}).get("alpha") or {}).get("job")),
+                         (["job-1"], True, None))
+
+    def test_a_stop_that_lands_during_a_cycle_keeps_its_mark_on_the_job(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.run_cycle()
+
+        def stop_now(*a):           # a stop marks the job in state.json while the cycle is between its read and its write
+            st = self.jfile("state.json")
+            st["projects"]["alpha"]["job"]["stopped"] = True
+            self.seed(**st)
+            self.osrc.jobs["job-1"]["status"] = "canceled"
+            return []
+        with mock.patch.object(sup, "raise_alerts", stop_now):
+            self.run_cycle(NOON + 15 * MIN)
+        self.assertTrue(self.ps()["job"]["stopped"])
+        self.run_cycle(NOON + 30 * MIN)
+        self.assertEqual((self.ps()["last_job"]["ended"], self.jfile("state.json")["providers"]), ("canceled", {}))
+
+    def test_no_job_for_any_reason_within_half_an_hour_of_its_session_being_used(self):
+        self.add_owner(P1, K1, status(state="waiting-on-uri", needs_uri=["d-one"]), idle_min=5)
+        with open(self.answers, "w") as f:
+            json.dump({"d-one": {"choice": "Ship it", "by": "you", "ts": NOON - 2 * MIN, "question": "Which plan?"}}, f)
+        self.run_cycle()
+        self.assertEqual((self.osrc.launches(), self.skip_of()), ([], "its session was used 5 min ago"))
+        self.nav.items[K1] = 31
+        self.run_cycle(NOON + 26 * MIN)
+        self.assertIn("[Supervisor wake: answered]", self.osrc.launches()[0][6])
+
+    def test_stop_cancels_a_recorded_job_that_outsourcerer_does_not_list(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.run_cycle()
+        self.osrc.blind = True                                          # no listing, no status: cancel without asking
+        code, res = self.cli("stop")
+        self.assertEqual((res["cancelled"], [a[:2] for a, _ in self.osrc.calls if a[0] == "status" and len(a) > 2]),
+                         ([{"project": "alpha", "job": "job-1"}], []))
 
     def test_only_one_cycle_runs_at_a_time(self):
         import fcntl

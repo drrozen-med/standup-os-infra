@@ -68,13 +68,15 @@ The `jobs` engine, by rule and with no model in the loop:
   in the owner's folder that nobody recorded (a launch whose answer was lost, another runner's) is taken over, not
   doubled, and not scored; if several are left there, each is taken over in turn, the newest first. A job whose
   state cannot be read counts as running, and one that cannot be cancelled keeps its record (the board says "cancel
-  failed") until it can, so no turn starts beside it. A start time that cannot be trusted counts from now.
+  failed", and after three hours the flag `job-stuck`) until it can, however old it is, so no turn starts beside
+  it. A start time that cannot be trusted counts from now.
 - **Nothing slips in.** Only one cycle runs at a time (`cycle.lock`; a second one logs "the previous cycle is still
   running"). Just before a job starts, and again right after, the cycle looks at `state.json`: if a pause, a stop
-  or a manual wake landed meanwhile, the new job is cancelled at once and the newer row stays.
+  or another wake landed meanwhile, the new job is cancelled at once and the newer row stays. A manual wake does
+  the same. Outsourcerer never runs while the state lock is held, so a pause or a stop always gets through.
 - **Never beside a session.** If the owner's registered session is at work (someone types in it, or it runs a tool),
-  or was active in the last 30 minutes, no job takes a turn for that project. A manual wake is refused only while
-  the session is at work right now.
+  or was used in the last 30 minutes, no job takes a turn for that project, whatever the reason for the wake. A
+  manual wake is refused only while the session is at work right now.
 - **Delivered or not.** A turn delivered when the owner wrote its status after the job started. A job is ended (and
   cancelled, so nothing is left running in the owner's folder) when it runs over 90 min ("hung"), when Outsourcerer
   calls it stalled or silent 30 min in with no status, or 10 min after the status was written (the turn is over).
