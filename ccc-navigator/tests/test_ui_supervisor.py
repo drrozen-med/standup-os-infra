@@ -101,11 +101,21 @@ class SupervisorUiTests(unittest.TestCase):
         self.assertIn("const shownAlert = () =>", HTML)
         click = re.search(r"\$\('#alertBar'\)\.addEventListener\('click', e => \{(.*?)\n    if \(e\.target\.closest\('#abAck'\)", HTML, re.S).group(1)
         self.assertIn("const a = shownAlert();", click)           # Open and I'm on it act on the alert on screen, not the newest
-        self.assertIn("abIdx = (abIdx + 1) % openAlerts().length", click)
+        self.assertIn("abId = o[(o.findIndex(x => x.id === a.id) + 1) % o.length].id", click)
         draw = re.search(r"function renderAlerts\(\) \{(.*?)\n  \}", HTML, re.S).group(1)
-        self.assertIn("alarm.top = open[0].id; alarm.lastChime = 0; abIdx = 0;", draw)    # a new alert chimes and comes first
-        self.assertIn("const a = open[abIdx];", draw)
+        # followed by id: an ack on another device must not swap the alert on screen for a different one
+        self.assertIn("let shown = open.findIndex(x => x.id === abId);", draw)
+        self.assertIn("const a = open[shown];", draw)
+        # only a really new alert (raised after the one on top before) chimes and takes the screen; a removal does neither
+        self.assertIn("const fresh = (Number(open[0].raised_at) || 0) > (alarm.topAt || 0);", draw)
+        self.assertIn("if (fresh || !alarm.topAt) { alarm.lastChime = 0; abId = open[0].id; }", draw)
         self.assertNotIn("alarm.top = a.id", draw)                 # stepping through must not chime again
+        # the tab title flashes the alert the bar shows
+        self.assertIn("(shownAlert() || open[0]).title", HTML)
+        # a long title shrinks with an ellipsis; the step button stays in the bar
+        self.assertRegex(HTML, r"#alertBar \.ab-t\{[^}]*display:flex")
+        self.assertRegex(HTML, r"#alertBar #abTitle\{[^}]*overflow:hidden;text-overflow:ellipsis")
+        self.assertRegex(HTML, r"#alertBar \.ab-n\{flex:none")
 
     def test_jobs_show_on_the_board(self):
         for frag in ("data-sup-jobs", "new turns are held: ", "jb.running", "x.cooling ? ' (resting)'", "data-sup-turn",
