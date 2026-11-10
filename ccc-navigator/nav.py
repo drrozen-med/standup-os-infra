@@ -545,12 +545,20 @@ def build_parser():
     owl = ow_sub.add_parser("ls", help="every registered owner with its status")
     _add_global_options(owl, subcommand=True)
 
-    sv = subparsers.add_parser("supervisor", help="the project-owner supervisor: register, pause, resume, manual wake")
+    sv = subparsers.add_parser("supervisor", help="the project-owner supervisor: register, pause, resume, manual wake, "
+                                                 "engine, night, feedback, stop")
     _add_global_options(sv, subcommand=True)
-    sv.add_argument("action", nargs="?", default="show", choices=("show", "pause", "resume", "wake"),
-                    help="show (default) the register; pause/resume all or one project; wake one owner")
+    sv.add_argument("action", nargs="?", default="show",
+                    choices=("show", "pause", "resume", "wake", "engine", "night", "feedback", "stop"),
+                    help="show (default) the register; pause/resume all or one project; wake one owner; "
+                         "engine PROJECT|all session|jobs: how an owner gets its turn; night on|off: keep working "
+                         "through 00:00-07:00 under the night rules; feedback PROJECT TEXT: a note that opens that "
+                         "owner's next turn; stop: pause everything and cancel every running owner job")
     sv.add_argument("project", nargs="?", default="", metavar="PROJECT",
-                    help="project key, folder name or display name (required for wake)")
+                    help="project key, folder name or display name (required for wake, engine, feedback); "
+                         "`all` for engine; on|off for night")
+    sv.add_argument("value", nargs="?", default="", metavar="VALUE",
+                    help="engine: session|jobs; feedback: the text")
     sv.add_argument("--reason", default="", help="wake: what the owner should do")
 
     al = subparsers.add_parser("alerts", help="loud alerts: open ones, then the last 20 acked (the red banner in the UI)")
@@ -1199,8 +1207,15 @@ def cmd_supervisor(args, client):
         if not args.table:
             print_json(v)
             return 0
-        print(f"supervisor {'PAUSED' if v.get('paused') else 'running'}; last cycle {v.get('last_cycle') or 'never'}"
+        print(f"supervisor {'PAUSED' if v.get('paused') else 'running'}{'; night mode on' if v.get('night') else ''}"
+              f"; last cycle {v.get('last_cycle') or 'never'}"
               + (f"; paused projects: {', '.join(v['paused_projects'])}" if v.get("paused_projects") else ""))
+        jb = v.get("jobs")
+        if jb:
+            prov = ", ".join(f"{k} {x.get('ok', 0)}/{x.get('ok', 0) + x.get('bad', 0)}{' resting' if x.get('cooling') else ''}"
+                             for k, x in (jb.get("providers") or {}).items())
+            print(f"jobs: {jb.get('running', 0)} running of {jb.get('max', 0)}"
+                  + (f"; new turns held, {jb['held']}" if jb.get("held") else "") + f"; providers: {prov}")
         for r in v.get("register") or []:
             if r.get("error"):
                 print(f"{r.get('project', '?'):<20} ERROR {r['error']}")
@@ -1209,22 +1224,41 @@ def cmd_supervisor(args, client):
             old = "" if r.get("oldest_decision_days") is None else f" ({r['oldest_decision_days']}d)"
             wake = (r.get("last_wake") or {}).get("reason") or "-"
             flags = (" [" + ", ".join(r["flags"]) + "]") if r.get("flags") else ""
+            job, lj = r.get("job") or {}, r.get("last_job") or {}
+            turn = (f" {{job {job.get('id')} on {job.get('provider')}, {job.get('min', 0)} min}}" if job.get("running")
+                    else f" {{last turn on {lj.get('provider')}: {lj.get('ended')}{'' if lj.get('delivered') else ', no status'}}}"
+                    if lj else " {jobs}" if r.get("engine") == "jobs" else "")
             print(f"{r['project']:<20} {r.get('state') or 'no status':<15} shipped {ship:<6} decisions "
                   f"{r.get('decisions_open', 0)}{old:<8} idle {r.get('idle_checkins', 0)} wakes "
-                  f"{r.get('wakes_today', 0)} last {wake:<12}{flags}{' (paused)' if r.get('paused') else ''}")
+                  f"{r.get('wakes_today', 0)} last {wake:<12}{turn}{flags}{' (paused)' if r.get('paused') else ''}")
         return 0
-    if args.action == "wake" and not args.project:
-        raise UsageError("wake needs a project")
+    if args.action in ("wake", "engine", "feedback") and not args.project:
+        raise UsageError(f"{args.action} needs a project")
     body = {"action": args.action}
-    if args.project:
+    if args.action == "night":
+        if args.project not in ("on", "off"):
+            raise UsageError("night needs on or off")
+        body["on"] = args.project == "on"
+    elif args.action == "engine":
+        if args.value not in ("session", "jobs"):
+            raise UsageError("engine needs session or jobs")
+        body.update(project=args.project, engine=args.value)
+    elif args.action == "feedback":
+        if not args.value.strip():
+            raise UsageError("feedback needs a text")
+        body.update(project=args.project, text=args.value)
+    elif args.project:
         body["project"] = args.project
     if args.reason:
         body["reason"] = args.reason
     res = client.post("/api/supervisor", body)   # a refused wake (cap, pause) is HTTP 400 with the reason: NavError
     res.pop("supervisor", None)
     if args.table:
-        print(f"supervisor {args.action} {args.project or 'all'}: "
-              + ("ok" if res.get("ok") else res.get("skip") or res.get("error") or "refused"))
+        done = "ok" if res.get("ok") else res.get("skip") or res.get("error") or "refused"
+        if args.action == "stop" and res.get("ok"):
+            done = "paused; cancelled %d job(s)" % len(res.get("cancelled") or []) + (
+                "; could not cancel %s" % ", ".join(x["job"] for x in res["failed"]) if res.get("failed") else "")
+        print(f"supervisor {args.action} {args.project or ('' if args.action == 'stop' else 'all')}".rstrip() + ": " + done)
     else:
         print_json(res)
     return 0 if res.get("ok") else 1

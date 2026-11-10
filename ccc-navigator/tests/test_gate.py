@@ -578,6 +578,11 @@ class Http(unittest.TestCase):
         self.assertFalse(navigator.desk_open())                                          # it stopped cycling
         state.write_text(json.dumps({"paused": False, "last_cycle": "not a date"}))
         self.assertFalse(navigator.desk_open())
+        old = (now - datetime.timedelta(hours=5)).isoformat()
+        state.write_text(json.dumps({"paused": False, "last_cycle": old, "heartbeat": (now - datetime.timedelta(minutes=10)).isoformat()}))
+        self.assertTrue(navigator.desk_open())                                           # asleep in the quiet hours, not gone
+        state.write_text(json.dumps({"paused": True, "last_cycle": old, "heartbeat": now.isoformat()}))
+        self.assertFalse(navigator.desk_open())
         state.write_text(json.dumps({"paused": False, "last_cycle": (now - datetime.timedelta(minutes=20)).isoformat()}))
         self.assertTrue(navigator.desk_open())
         self.app.inbox.ask("The test server is full.", ["I'll look"], decision_id="p1", kind="problem", topic="test-server-full")

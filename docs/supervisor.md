@@ -5,8 +5,8 @@ code; judgment stays with the AI supervisor (the Super-co-pilot session). Owners
 
 ## The 15-minute cycle: `bin/supervisor.py cycle`
 
-Run by launchd `com.standup-os.supervisor` every 15 minutes. Skips 00:00-07:00 local and when paused.
-One run, in order:
+Run by launchd `com.standup-os.supervisor` every 15 minutes. Skips 00:00-07:00 local (unless night mode is on,
+see "Night") and when paused. One run, in order:
 
 1. **Refresh** scoreboards (`bin/owner-scoreboard.py`, no GitHub calls of its own).
 2. **Digest**: build `~/.ccc-navigator/supervisor/digest.json` and `digest.md` from code only:
@@ -26,8 +26,9 @@ One run, in order:
    Never wake when: the owner session is working now (activity in the last 3 minutes), `state` is
    `waiting-on-uri` with nothing newly answered, the owner was woken in the last 30 minutes, it already had
    24 wakes today, or supervision is paused (globally or for that project).
-   A wake sends one message through the Navigator (`nav.py send <owner key> <text>`, same path the
-   co-pilot check-in uses). The text starts with `[Supervisor wake: <reason>]`, says what to do, and ends
+   A wake is one message through the Navigator (`nav.py send <owner key> <text>`, same path the co-pilot
+   check-in uses) or, for an owner on the `jobs` engine, one free-model job that runs the owner's turn
+   (section "Engines"). The text starts with `[Supervisor wake: <reason>]`, says what to do, and ends
    with "End with owner.py status set". Each wake appends `[supervisor] woke owner: <reason>` to the
    project's `log.md`.
    Then raise **loud alerts** for the few decisions that need Uri now (section "Loud alerts" below).
@@ -35,7 +36,8 @@ One run, in order:
    `project, owner_key, state, summary, updated_at, stale, problem, last_shipped (text + when),
    days_since_shipped, decisions_open (count), oldest_decision_days, idle_checkins (consecutive cycles with
    nothing new in status), wakes_today, last_wake (reason + when), flags` (e.g. `idle-2x`, `no-status`,
-   `blocked-past-due`, `decision-7d`). "Shipped" means a non-empty `shipped` list in a status write;
+   `blocked-past-due`, `decision-7d`, `turns-failing`), and `engine`, `job`, `last_job` (section "Engines").
+   "Shipped" means a non-empty `shipped` list in a status write;
    track the last one per project in `~/.ccc-navigator/supervisor/state.json`.
    Append one line per cycle to `~/.ccc-navigator/supervisor/cycles.log`: time, wakes done, skips with reason.
 5. **Hand judgment to the AI supervisor**: the existing co-pilot check-in (`bin/copilot-checkin.py`)
@@ -44,8 +46,63 @@ One run, in order:
    than their deadline: chase Uri once with a default), and never re-do what the cycle already did.
 
 Env: `SUPERVISOR_DIR` (default `~/.ccc-navigator/supervisor`), `OWNER_DIR`, `CCC_NAV_URL`,
-`SUPERVISOR_DRY_RUN=1` (decide and log wakes, send nothing). Everything is atomic-write; a failing owner
-never stops the others; the run always exits 0 after logging the error.
+`SUPERVISOR_DRY_RUN=1` (decide and log wakes, send nothing, start and cancel no job). Everything is
+atomic-write; a failing owner never stops the others; the run always exits 0 after logging the error.
+
+## Engines: how an owner gets its turn
+
+There is one supervisor. What used to be a separate day/night runner is an engine of this cycle.
+
+| Engine | A wake is | The owner is busy when |
+|---|---|---|
+| `session` (default) | one message into the owner's registered session (`nav.py send`) | its session shows activity or runs a tool |
+| `jobs` | one Outsourcerer job on a free model, started in the owner's folder with the owner's whole turn: `owner.py brief`, how a turn runs (own worktree under `owners/<slug>/wt/`, never the main checkout, second-model review before a merge, a production deploy is asked as an approval), the supervisor's feedback, the night rules at night, then the wake text | that job is running |
+
+Set it with `supervisor.py engine <project|all> <session|jobs>` (`claude` is the old name of `session`). It is one
+line in `~/.ccc-navigator/owners/<slug>/engine`; `all` writes every registered owner and makes it the default for
+owners registered later (`engine_default` in `state.json`). `SUPERVISOR_ENGINE` overrides every owner (tests).
+
+The `jobs` engine, by rule and with no model in the loop:
+
+- **One job per owner.** The record is `job {id, started, provider}` in the owner's row of `state.json`. A live job
+  in the owner's folder that nobody recorded (a launch whose answer was lost, another runner's) is taken over, not
+  doubled, and not scored. A job whose state cannot be read counts as running.
+- **Delivered or not.** A turn delivered when the owner wrote its status after the job started. A job is ended (and
+  cancelled, so nothing is left running in the owner's folder) when it runs over 90 min ("hung"), when Outsourcerer
+  calls it stalled 20 min in with no status, or 10 min after the status was written (the turn is over).
+- **Providers.** The chain, best measured first: `iceman` (opencode-go/iceman-contributor-free), `minimax` (MiniMax
+  through Droid), `beam` (opencode-go/beam-free), `devin` (swe-2-high); `SUPERVISOR_CHAIN=devin,iceman` narrows or
+  reorders it. An owner stays on the provider that delivered. A turn that delivered nothing, or a job that could not
+  start, moves that owner to the next provider, which gets its try 5 minutes later instead of 30, until every provider
+  had one (flag `turns-failing`). A provider whose last 3 turns all failed rests for an hour, unless all of them rest;
+  then one loud alert says "No AI provider is working" (key `supervisor:providers-down`). Counts are in `state.json`
+  `providers` and in the digest.
+- **Room.** At most 4 owner jobs at once (`SUPERVISOR_JOBS_MAX`), 2 at night. No new job while the Mac's 5-minute
+  load is above 3 per CPU (`SUPERVISOR_LOAD_PER_CPU`) or memory pressure is critical: the wake is skipped with
+  "the Mac is busy" and tried again next cycle. The owner that waited longest goes first.
+- **No .env in the way.** Outsourcerer refuses to start in a folder that holds a `.env` file; before a launch each
+  one under the owner's folder is moved (never deleted) to `~/.ccc-navigator/owners-env-stash/<slug>/<same path>`.
+- **Feedback.** `supervisor.py feedback <project> "<text>"` appends a dated line to
+  `owners/<slug>/supervisor-feedback.md`; the end of that file (1800 chars) opens the owner's next job, before the
+  wake text. This is how the AI supervisor steers an owner that has no session to type into.
+
+`register.json` and `digest.json` carry `jobs` when an owner runs this way: `{running, max, held, night, providers}`
+(`held` says why new turns are waiting). `digest.md` says the same in two lines for the co-pilot.
+
+## Night
+
+`supervisor.py night on|off` (`night` in `state.json`). On: the cycle keeps going from 00:00 to 07:00; every job
+gets the night rules (no spending, no production deploy or production-branch merge, at most 2 workers, no messages
+to real people, no deleting); at most 2 owner jobs run; owners on the `session` engine rest (nobody types into a
+session at night); loud alerts stay silent until 07:00. Off: the cycle skips
+those hours but stamps `heartbeat` in `state.json`, so the supervisor still counts as on duty and problems stay on
+its desk until the morning (the desk closes only when it is paused, or silent for two hours).
+
+## Stop
+
+`supervisor.py stop`: pause everything and cancel every job that runs an owner's turn, plus the jobs Outsourcerer
+lists as running inside an owner's folder (the owner's workers). A job stopped this way does not count against its
+provider. `resume` starts the cycle again; nothing else is undone.
 
 ## Loud alerts
 
@@ -115,12 +172,16 @@ CLI and API: `ccc-navigator/NAV_CLI.md`, "Decisions".
 ## Control
 
 - `bin/supervisor.py cycle [--dry-run]`, `status` (register as a table), `wake <project> [--reason TEXT]`
-  (manual wake, same caps), `pause [<project>]`, `resume [<project>]`. Pause state lives in
+  (manual wake, same caps; on the jobs engine it starts the turn's job), `pause [<project>]`, `resume [<project>]`,
+  `engine <project|all> <session|jobs>`, `night on|off`, `feedback <project> <text>`, `stop`. Pause state lives in
   `supervisor/state.json`.
-- Navigator: `GET /api/supervisor` returns `{register, digest_at, paused, cycles_tail}`;
-  `POST /api/supervisor` `{action: "pause"|"resume"|"wake", project?, reason?}` (remote/phone gate like other
-  mutations). CLI: `nav supervisor [--table]`, `nav supervisor pause|resume [project]`,
-  `nav supervisor wake <project>`.
+- Navigator: `GET /api/supervisor` returns `{register, digest_at, paused, paused_projects, last_cycle, cycles_tail,
+  night, engine_default, jobs}`; `POST /api/supervisor` `{action: "pause"|"resume", project?}`,
+  `{action: "wake", project, reason?}`, `{action: "engine", project (or "all"), engine}`, `{action: "night", on}`,
+  `{action: "feedback", project, text}`, `{action: "stop"}` (remote/phone gate like other mutations). CLI:
+  `nav supervisor [--table]`, `nav supervisor pause|resume [project]`, `nav supervisor wake <project>`,
+  `nav supervisor engine <project|all> <session|jobs>`, `nav supervisor night on|off`,
+  `nav supervisor feedback <project> "<text>"`, `nav supervisor stop`.
 - launchd plist template in `systemd/` style folder used by this repo (see existing plists in
   `~/Library/LaunchAgents/com.standup-os.*.plist`); the builder adds the template, Claude installs it.
 
@@ -129,7 +190,11 @@ CLI and API: `ccc-navigator/NAV_CLI.md`, "Decisions".
 A pinned row "Supervisor" next to "Super-co-pilot" and "Decisions" opens a screen in the main pane: one
 row per project with the owner's state dot, summary, days since shipped, open decisions (and oldest age),
 last wake (reason, how long ago), flags as small warning chips, and a 🧠 that opens the owner (same path
-as the project row). Header: last cycle time, paused or running, a Pause/Resume button. Works at 375 px.
+as the project row). An owner on the jobs engine also shows its turn: which provider, running for how long, or
+how the last one ended ("ended without a status" in the warning colour). Header: last cycle time, paused or
+running, "Night work: on/off", Pause/Resume and "Stop all" (asks first). Under it, when owners run as jobs: how
+many are running, why new turns are held, and what each provider delivered. A row's menu adds "Give feedback…"
+and the engine switch. Works at 375 px.
 
 ### Mac alarm
 

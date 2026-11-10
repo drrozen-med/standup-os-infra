@@ -1928,7 +1928,8 @@ def owner_info(repo, key, turn=None, now=None):
 # ---------------------------------------------------------------- supervisor (docs/supervisor.md)
 
 SUPERVISOR_PY = HERE.parent / "bin" / "supervisor.py"
-SUPERVISOR_ACTIONS = ("pause", "resume", "wake")
+SUPERVISOR_ACTIONS = ("pause", "resume", "wake", "engine", "night", "feedback", "stop")
+SUPERVISOR_ENGINES = ("session", "jobs")
 
 
 def supervisor_dir():
@@ -1936,8 +1937,9 @@ def supervisor_dir():
 
 
 def supervisor_view(tail=20):
-    """GET /api/supervisor: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail},
-    read from the files bin/supervisor.py writes (same shape as `supervisor.py status --json`)."""
+    """GET /api/supervisor: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail, night,
+    engine_default, jobs}, read from the files bin/supervisor.py writes (same shape as `supervisor.py status --json`).
+    jobs is None unless an owner runs as free-model jobs: {running, max, held, night, providers}."""
     d = supervisor_dir()
 
     def read(name):
@@ -1950,40 +1952,67 @@ def supervisor_view(tail=20):
         lines = [ln for ln in (d / "cycles.log").read_text().splitlines() if ln.strip()][-tail:]
     except OSError:
         lines = []
-    st = read("state.json")
-    return {"register": read("register.json").get("rows") or [], "digest_at": read("digest.json").get("generated_at"),
+    st, reg = read("state.json"), read("register.json")
+    eng = str(st.get("engine_default") or "").lower()
+    return {"register": reg.get("rows") or [], "digest_at": read("digest.json").get("generated_at"),
             "paused": bool(st.get("paused")), "paused_projects": st.get("paused_projects") or [],
-            "last_cycle": st.get("last_cycle"), "cycles_tail": lines}
+            "last_cycle": st.get("last_cycle"), "cycles_tail": lines,
+            "night": bool(st.get("night")), "engine_default": eng if eng in SUPERVISOR_ENGINES else "session",
+            "jobs": reg.get("jobs") if isinstance(reg.get("jobs"), dict) else None}
 
 
 DESK_FRESH_S = 2 * 3600
 
 
 def desk_open(now=None):
-    """A supervisor is on duty: bin/supervisor.py is not paused and finished a cycle in the last two hours.
-    Only then do shared problems wait on its desk; otherwise they go to the owner (decisions.py)."""
+    """A supervisor is on duty: bin/supervisor.py is not paused and ran in the last two hours (a cycle, or its
+    heartbeat while it sleeps through the quiet hours). Only then do shared problems wait on its desk; otherwise
+    they go to the owner (decisions.py)."""
     try:
         st = json.loads((supervisor_dir() / "state.json").read_text())
-        if not isinstance(st, dict) or st.get("paused"):
-            return False
-        last = datetime.datetime.fromisoformat(str(st.get("last_cycle"))).timestamp()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
         return False
-    return (now or time.time()) - last < DESK_FRESH_S
+    if not isinstance(st, dict) or st.get("paused"):
+        return False
+    seen = []
+    for k in ("last_cycle", "heartbeat"):
+        try:
+            seen.append(datetime.datetime.fromisoformat(str(st.get(k))).timestamp())
+        except (ValueError, TypeError):
+            pass
+    return bool(seen) and (now or time.time()) - max(seen) < DESK_FRESH_S
 
 
 def supervisor_run(body, actor, nav_url):
-    """POST /api/supervisor {action: pause|resume|wake, project?, reason?}: runs bin/supervisor.py.
-    -> (http status, result)."""
+    """POST /api/supervisor: runs bin/supervisor.py. -> (http status, result).
+    {action: pause|resume, project?} | {action: wake, project, reason?} | {action: engine, project (or "all"),
+    engine: session|jobs} | {action: night, on: bool} | {action: feedback, project, text} | {action: stop}."""
     action = str(body.get("action") or "").strip()
     project = str(body.get("project") or "").strip()[:300]
     reason = str(body.get("reason") or "").strip()[:500]
     if action not in SUPERVISOR_ACTIONS:
         return 400, {"ok": False, "error": "action must be one of: " + ", ".join(SUPERVISOR_ACTIONS)}
-    if action == "wake" and not project:
-        return 400, {"ok": False, "error": "wake needs a project"}
-    argv = [sys.executable, str(SUPERVISOR_PY), action] + ([project] if project else [])
-    argv += (["--reason", reason] if action == "wake" and reason else []) + ["--json"]
+    if action in ("wake", "engine", "feedback") and not project:
+        return 400, {"ok": False, "error": "%s needs a project" % action}
+    if action == "engine":
+        engine = str(body.get("engine") or "").strip().lower()
+        if engine not in SUPERVISOR_ENGINES:
+            return 400, {"ok": False, "error": "engine must be one of: " + ", ".join(SUPERVISOR_ENGINES)}
+        argv = ["--json", project, engine]
+    elif action == "night":
+        if not isinstance(body.get("on"), bool):
+            return 400, {"ok": False, "error": "night needs on: true or false"}
+        argv = ["--json", "on" if body["on"] else "off"]
+    elif action == "feedback":
+        text = " ".join(str(body.get("text") or "").split())[:2000]
+        if not text:
+            return 400, {"ok": False, "error": "feedback needs a text"}
+        argv = ["--json", "--", project, text]      # the text is free: it must never be read as an option
+    elif action == "stop":
+        argv = ["--json"]
+    else:
+        argv = ([project] if project else []) + (["--reason", reason] if action == "wake" and reason else []) + ["--json"]
+    argv = [sys.executable, str(SUPERVISOR_PY), action] + argv
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=150,
                            env=dict(os.environ, NAV_ACTOR=actor, CCC_NAV_URL=nav_url))
