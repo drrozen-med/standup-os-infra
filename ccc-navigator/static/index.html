@@ -498,8 +498,9 @@ body.has-alert #drawer{top:var(--alert-h)}
 #alertBar{position:fixed;top:0;left:0;right:0;max-width:100vw;z-index:150;height:var(--alert-h);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--alert);color:#fff;font-weight:700;box-shadow:0 2px 14px oklch(0.4 0.2 27/45%);animation:abpulse 2s ease-in-out infinite}
 #alertBar[hidden]{display:none}
 #alertBar .ab-i{flex:none;width:22px;height:22px;border-radius:50%;background:#fff;color:var(--alert);display:flex;align-items:center;justify-content:center;font:800 14px var(--display)}
-#alertBar .ab-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
-#alertBar .ab-n{font-weight:600;opacity:.85;margin-inline-start:8px;font-size:12px}
+#alertBar .ab-t{flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:13.5px}
+#alertBar #abTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#alertBar .ab-n{flex:none;margin:0;min-height:26px;padding:2px 10px;font:700 12px var(--sans)}
 #alertBar .ab-b{display:flex;gap:6px;flex:none;align-items:center}
 #alertBar button{background:oklch(1 0 0/14%);border:1px solid oklch(1 0 0/40%);color:#fff;border-radius:999px;padding:4px 12px;font:700 12.5px var(--sans);cursor:pointer;white-space:nowrap;min-height:30px}
 #alertBar button:hover{background:oklch(1 0 0/26%)}
@@ -522,7 +523,7 @@ body.has-alert #drawer{top:var(--alert-h)}
 <body>
 <div id="alertBar" role="alert" aria-live="assertive" hidden>
   <span class="ab-i" aria-hidden="true">!</span>
-  <span class="ab-t" id="abText"><span id="abTitle" dir="auto"></span><span class="ab-n" id="abCount"></span></span>
+  <span class="ab-t" id="abText"><span id="abTitle" dir="auto"></span><button type="button" class="ab-n" id="abCount" hidden title="Show the next alert"></button></span>
   <span class="ab-b">
     <button type="button" class="ab-snd" id="abSound" hidden>Turn on alert sound</button>
     <button type="button" class="ab-main" id="abOpen">Open</button>
@@ -1089,25 +1090,37 @@ body.has-alert #drawer{top:var(--alert-h)}
     const open = openAlerts();
     if (!open.length) return stopAlarm();
     alarm.flash = !alarm.flash;
-    document.title = alarm.flash ? '(!) ' + open[0].title : BASE_TITLE;
+    document.title = alarm.flash ? '(!) ' + (shownAlert() || open[0]).title : BASE_TITLE;
     if (!muted() && Date.now() - alarm.lastChime >= CHIME_MS && chime()) alarm.lastChime = Date.now();
     alarm.timer = setTimeout(alarmTick, 1000);
   }
   function stopAlarm() {
-    clearTimeout(alarm.timer); alarm.timer = null; alarm.flash = false; alarm.top = null;
+    clearTimeout(alarm.timer); alarm.timer = null; alarm.flash = false; alarm.top = null; alarm.topAt = 0;
     document.title = BASE_TITLE;
   }
+  // The bar shows one alert at a time. The newest comes first; "+N more" steps to the next, so an alert behind
+  // others (the morning report behind a decision) is still one tap from its own Open button.
+  let abId = null;   // the alert on screen, by id: an ack on another device must not swap it for a different one
+  const shownAlert = () => { const o = openAlerts(); return o.length ? (o.find(x => x.id === abId) || o[0]) : null; };
   function renderAlerts() {
     const bar = $('#alertBar'); if (!bar) return;
     const open = openAlerts(), on = open.length > 0;
     document.body.classList.toggle('has-alert', on);
     bar.hidden = !on;
-    if (!on) return stopAlarm();
-    const a = open[0];
-    if (alarm.top !== a.id) { alarm.top = a.id; alarm.lastChime = 0; }   // a new alert on top chimes at once
+    if (!on) { abId = null; return stopAlarm(); }
+    if (alarm.top !== open[0].id) {
+      const fresh = (Number(open[0].raised_at) || 0) > (alarm.topAt || 0);   // newer than the one on top before: really new
+      alarm.top = open[0].id; alarm.topAt = Number(open[0].raised_at) || 0;
+      if (fresh || !alarm.topAt) { alarm.lastChime = 0; abId = open[0].id; }   // a new alert chimes at once and is shown; a removal elsewhere changes neither
+    }
+    let shown = open.findIndex(x => x.id === abId);
+    if (shown < 0) { shown = 0; abId = open[0].id; }
+    const a = open[shown];
     bar.dataset.id = a.id;
     $('#abTitle').textContent = a.title;
-    $('#abCount').textContent = open.length > 1 ? '+' + (open.length - 1) + ' more' : '';
+    const more = $('#abCount');
+    more.hidden = open.length < 2;
+    more.textContent = open.length > 1 ? (shown + 1) + ' of ' + open.length + ' ›' : '';
     $('#abText').title = a.title + (a.body ? '\n' + a.body : '');
     $('#abOpen').hidden = !a.link;
     $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : a.link && a.link.kind === 'report' ? 'Open report' : 'Open';
@@ -1118,7 +1131,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (!alarm.timer) alarmTick();
   }
   $('#alertBar').addEventListener('click', e => {
-    const a = openAlerts()[0]; if (!a) return;
+    const a = shownAlert(); if (!a) return;
+    if (e.target.closest('#abCount')) { const o = openAlerts(); abId = o[(o.findIndex(x => x.id === a.id) + 1) % o.length].id; return renderAlerts(); }
     if (e.target.closest('#abAck')) return ackAlert(a.id);
     if (e.target.closest('#abOpen')) return openAlert(a);
     if (e.target.closest('#abSound')) { unlockAudio(); const c = alarm.ctx; if (c) c.resume().then(() => { if (chime()) alarm.lastChime = Date.now(); renderAlerts(); }).catch(() => {}); return; }
