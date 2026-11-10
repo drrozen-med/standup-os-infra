@@ -77,6 +77,17 @@ class SupervisorUiTests(unittest.TestCase):
         self.assertIn("if (inReport()) return repHtml();", HTML)
         self.assertIn("if (ui.sup && !inReport()) lastDetailKey = null;", HTML)
         self.assertRegex(HTML, r"(?s)function openSupervisor\(\) \{\s*ui\.sup = true; ui\.inbox = false; ui\.report = null;")
+        # the key that decides a redraw does not move with the clock or the inbox while a report is on screen
+        key = re.search(r"const key = (!hit && ui\.sup && inReport\(\) \? 'report\|'.*?)\n    if \(!force && main\.contains", HTML, re.S).group(1)
+        report_part = key[:key.index(": hit ?")]
+        for moving in ("supSig", "decSig", "Date.now"):
+            self.assertNotIn(moving, report_part)
+        # a late answer is dropped when the reader went back or opened another one
+        fn = re.search(r"async function openReport\(name\) \{(.*?)\n  \}", HTML, re.S).group(1)
+        self.assertIn("const tok = repTok = {};", fn)
+        self.assertLess(fn.index("await fetch("), fn.index("if (repTok !== tok"))
+        self.assertLess(fn.index("if (repTok !== tok"), fn.index("rep = got;"))
+        self.assertIn("repTok = null;", re.search(r"function openSupervisor\(\) \{(.*?)\n  \}", HTML, re.S).group(1))
         # and a way back to it after the alarm is gone
         self.assertIn("data-rep-open", HTML)
         self.assertIn("return openReport('')", HTML)

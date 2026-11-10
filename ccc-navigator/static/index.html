@@ -632,6 +632,7 @@ body.has-alert #drawer{top:var(--alert-h)}
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
   let decs = { open: [], answered: [] }, decSig = '';
   let sup = null, supSig = '', supAt = 0, supFailAt = 0;
+  let repTok = null;   // which openReport call may still fill the screen (leaving, or opening another, retires it)
   let rep = null;   // the morning report on screen: {name, text, mtime} or {name, error} (opened from the alarm or the board)
   const inReport = () => ui.report != null && ui.report !== false;   // '' = "the newest", still a report screen   // supervisor register (GET /api/supervisor)
   const supOpen = new Set();   // projects whose summary is expanded
@@ -805,17 +806,21 @@ body.has-alert #drawer{top:var(--alert-h)}
     </div>`;
   }
   async function openReport(name) {
+    const tok = repTok = {};
     ui.sup = true; ui.report = name || ''; ui.inbox = false; ui.today = false; ui.selected = null; store.set('selected', null);
     rep = null;
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
+    let got;
     try {
       const r = await fetch('/api/report' + (name ? '?name=' + encodeURIComponent(name) : ''), { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
-      rep = r.ok && d.ok ? d : { name: name || '', error: (d && d.error) || 'The report could not be read (HTTP ' + r.status + ').' };
-      if (rep.name) ui.report = rep.name;
-    } catch (e) { rep = { name: name || '', error: 'The Navigator could not be reached.' }; }
-    if (ui.sup && inReport()) { renderPinned(); renderDetail(true); }
+      got = r.ok && d.ok ? d : { name: name || '', error: (d && d.error) || 'The report could not be read (HTTP ' + r.status + ').' };
+    } catch (e) { got = { name: name || '', error: 'The Navigator could not be reached.' }; }
+    if (repTok !== tok || !ui.sup || !inReport()) return;   // they went back, or opened another one, while it loaded
+    rep = got;
+    if (rep.name) ui.report = rep.name;
+    renderPinned(); renderDetail(true);
   }
   function supHtml() {
     if (inReport()) return repHtml();
@@ -879,7 +884,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     openChatSession(row.owner_key, 'Owner');
   }
   function openSupervisor() {
-    ui.sup = true; ui.inbox = false; ui.report = null; rep = null; ui.today = false; ui.selected = null; store.set('selected', null);
+    ui.sup = true; ui.inbox = false; ui.report = null; rep = null; repTok = null; ui.today = false; ui.selected = null; store.set('selected', null);
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
     loadSupervisor(true).then(() => { if (ui.sup) { renderPinned(); renderDetail(true); } });
@@ -1577,7 +1582,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     const hit = findSel();
     const chat = !!(hit && ui.pane === 'chat' && (hit.s.open_url || hit.s.engine === 'pi') && !hit.s.batch);
     main.classList.toggle('chat', chat);
-    const key = hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + !!ui.today + '|' + decSig + (ui.sup ? '|sup|' + supSig : '');
+    const key = !hit && ui.sup && inReport() ? 'report|' + (ui.report || '') + '|' + (rep ? (rep.error ? 'error' : rep.mtime) : 'loading')   // a reader keeps their place: only the report itself redraws it
+      : hit ? (chat ? 'chat|' : 'd|') + hit.s.key + '|' + hit.s.group + '|' + hit.s.nick + '|' + hit.repo.group_names.join(',') : 'overview|' + !!ui.inbox + '|' + !!ui.today + '|' + decSig + (ui.sup ? '|sup|' + supSig : '');
     if (!force && main.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     if (!force && key === lastDetailKey) { const a = hit && main.querySelector('[data-ago]'); if (a) a.textContent = agoLong(hit.s.mtime); if (hit && chat) loadBrief(hit.s.key); return; }
     lastDetailKey = key;
