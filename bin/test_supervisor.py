@@ -985,15 +985,25 @@ class Jobs(Base):
         self.assertEqual((self.ps()["last_job"]["ended"], self.ps()["last_job"]["delivered"]), ("done", True))
         self.assertEqual(self.jfile("state.json")["providers"]["iceman"]["ok"], 1)
 
-    def test_a_stalled_job_gets_twenty_minutes(self):
+    def test_a_silent_job_is_alive_and_gets_half_an_hour(self):
+        for word in ("stalled?", "no-progress-writes", "some-word-outsourcerer-adds-later"):
+            with self.subTest(word=word):
+                self.osrc.__init__()
+                self.seed()
+                self.add_owner(P1, K1, status(), idle_min=None)
+                self.run_cycle()
+                self.osrc.jobs["job-1"]["status"] = word
+                self.run_cycle(NOON + 25 * MIN)                         # alive: no second job beside it
+                self.assertEqual((self.osrc.cancels(), len(self.osrc.launches()), self.reg()["job"]["running"]), ([], 1, True))
+                self.run_cycle(NOON + 35 * MIN)
+                self.assertEqual(self.osrc.cancels(), ["job-1"])
+                self.assertEqual(self.jfile("state.json")["providers"]["iceman"]["bad"], 1)
+
+    def test_a_silent_job_nobody_recorded_is_still_taken_over(self):
         self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.jobs["x-1"] = {"status": "no-progress-writes", "cwd": self.folder(), "started": NOON - 12 * MIN, "model": "m"}
         self.run_cycle()
-        self.osrc.jobs["job-1"]["status"] = "stalled?"
-        self.run_cycle(NOON + 15 * MIN)
-        self.assertEqual((self.osrc.cancels(), len(self.osrc.launches())), ([], 1))
-        self.run_cycle(NOON + 25 * MIN)
-        self.assertEqual(self.osrc.cancels(), ["job-1"])
-        self.assertEqual(self.ps()["last_job"]["ended"], "stalled")
+        self.assertEqual((self.osrc.launches(), self.ps()["job"]["id"]), ([], "x-1"))
 
     def test_a_job_whose_state_cannot_be_read_counts_as_running_until_it_is_too_old(self):
         self.add_owner(P1, K1, status(), idle_min=None)

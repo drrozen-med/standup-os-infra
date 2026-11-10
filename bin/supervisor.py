@@ -81,11 +81,15 @@ PROVIDERS = (                       # the jobs engine's chain, best measured fir
 OSRC_GLOB = "~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh"
 JOB_PATH = ("~/.opencode/bin", "~/.local/bin", "~/bin", "/opt/homebrew/bin", "/usr/local/bin")   # launchd's PATH is bare
 JOB_LIVE = ("launching", "running", "queued", "starting")
+# Outsourcerer's words for a job that is over. Any other word ("stalled?", "no-progress-writes", one it adds
+# later) and a state that cannot be read count as alive: the job may still be working in the owner's folder.
+JOB_ENDED = ("done", "done?", "failed", "canceled", "cancelled", "timeout", "interrupted", "wedged", "blocked",
+             "permission-blocked")
 JOBS_MAX = 4            # owner jobs at once (env SUPERVISOR_JOBS_MAX)
 JOBS_MAX_NIGHT = 2      # ... during quiet hours, when night mode keeps the cycle going
 LAUNCH_S = 120          # seconds a launch may take
 HUNG_MIN = 90           # a job running longer than this is cancelled
-STALL_MIN = 20          # a job Outsourcerer calls stalled, this old and with no status written, is cancelled
+STALL_MIN = 30          # a job Outsourcerer calls stalled or silent, this old and with no status written, is cancelled
 LINGER_MIN = 10         # a job still running this long after its owner wrote the status is cancelled: the turn is over
 RETRY_MIN = 5           # after a turn that delivered nothing, the next provider gets its try this soon (not GAP_MIN)
 COOL_STREAK = 3         # a provider whose last turns all failed, this many in a row...
@@ -270,7 +274,7 @@ def stray_job(slug, listing, skip=()):
     here = os.path.realpath(owner.folder(slug))
     live = [(j.get("started") if isinstance(j.get("started"), (int, float)) else 0, jid, j)
             for jid, j in (listing or {}).items()
-            if jid not in skip and str(j.get("status") or "").lower() in JOB_LIVE and j.get("cwd")
+            if jid not in skip and str(j.get("status") or "").lower() not in JOB_ENDED + ("",) and j.get("cwd")
             and os.path.realpath(str(j["cwd"])) == here]
     if not live:
         return None
@@ -318,13 +322,13 @@ def settle_one(ps, st, job, upd_ts, listing, now, dry):
     age = now - started
     delivered = upd_ts is not None and upd_ts > started
     word = job_status(job["id"], listing)
-    alive = word in JOB_LIVE or word == "stalled?" or word is None      # it may still hold the owner's folder
+    alive = word not in JOB_ENDED       # it may still hold the owner's folder
     end = word
-    if word in JOB_LIVE or word == "stalled?":
-        end = ("hung" if age > HUNG_MIN * 60 else "done" if delivered and now - upd_ts > LINGER_MIN * 60
-               else "stalled" if word == "stalled?" and not delivered and age > STALL_MIN * 60 else None)
-    elif word is None:
+    if word is None:
         end = "lost" if age > HUNG_MIN * 60 else None
+    elif alive:                         # running, or one of Outsourcerer's words for alive but silent
+        end = ("hung" if age > HUNG_MIN * 60 else "done" if delivered and now - upd_ts > LINGER_MIN * 60
+               else "stalled" if word not in JOB_LIVE and not delivered and age > STALL_MIN * 60 else None)
     view = {"id": job["id"], "provider": job.get("provider"), "state": word or "unknown", "min": int(age // 60),
             "running": True}
     if end is None or (dry and alive):
@@ -332,8 +336,7 @@ def settle_one(ps, st, job, upd_ts, listing, now, dry):
     if not dry and (alive or word in ("wedged", "blocked", "permission-blocked")):
         failed = osrc_run(["cancel", str(job["id"])], timeout=60)[0] != 0   # nothing may be left running in the folder
         if failed and alive and age <= 2 * HUNG_MIN * 60:
-            again = job_status(job["id"], None)
-            if again in JOB_LIVE or again == "stalled?" or again is None:
+            if job_status(job["id"], None) not in JOB_ENDED:
                 return dict(view, state="cancel failed")    # still there: keep the record and try again next cycle
     ps["last_job"] = {"id": job["id"], "provider": job.get("provider"), "ended": end, "ts": now, "when": iso(now),
                       "delivered": delivered, "min": int(age // 60)}
@@ -1533,12 +1536,11 @@ def stop_all():
     root = os.path.realpath(owner.root()) + os.sep
     for jid, j in listing.items():      # and the workers the owners started, as far as Outsourcerer lists them
         cwd = os.path.realpath(str(j.get("cwd") or os.sep)) + os.sep
-        if str(j.get("status") or "").lower() in JOB_LIVE and cwd.startswith(root) and cwd != root:
+        if str(j.get("status") or "").lower() not in JOB_ENDED + ("",) and cwd.startswith(root) and cwd != root:
             jobs.setdefault(jid, cwd[len(root):].split(os.sep)[0])
     done, failed = [], []
     for jid, slug in sorted(jobs.items()):
-        word = job_status(jid, listing)
-        if word is not None and word not in JOB_LIVE and word != "stalled?":
+        if job_status(jid, listing) in JOB_ENDED:
             continue                    # it ended by itself
         (failed if osrc_run(["cancel", jid], timeout=20)[0] else done).append({"project": slug, "job": jid})
     for slug in sorted({x["project"] for x in done}):

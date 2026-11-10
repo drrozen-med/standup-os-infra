@@ -77,7 +77,8 @@ The `jobs` engine, by rule and with no model in the loop:
   the session is at work right now.
 - **Delivered or not.** A turn delivered when the owner wrote its status after the job started. A job is ended (and
   cancelled, so nothing is left running in the owner's folder) when it runs over 90 min ("hung"), when Outsourcerer
-  calls it stalled 20 min in with no status, or 10 min after the status was written (the turn is over).
+  calls it stalled or silent 30 min in with no status, or 10 min after the status was written (the turn is over).
+  Only Outsourcerer's own words for "over" end a job; any other word counts as alive.
 - **Providers.** The chain, best measured first: `iceman` (opencode-go/iceman-contributor-free), `minimax` (MiniMax
   through Droid), `beam` (opencode-go/beam-free), `devin` (swe-2-high); `SUPERVISOR_CHAIN=devin,iceman` narrows or
   reorders it. An owner stays on the provider that delivered. A turn that delivered nothing, or a job that could not
