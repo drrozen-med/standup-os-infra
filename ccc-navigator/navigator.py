@@ -591,19 +591,39 @@ def codex_queue_stale(sid, db=None, now=None):
     return oldest is not None and ((now or time.time()) - oldest / 1000.0) > CODEX_QUEUE_STALE_S
 
 
+CODEX_APP_CLI = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+
+
+def codex_clis():
+    """Every codex program that could queue the message, best first, each once: the one on PATH, the usual folders,
+    then the copy the Codex desktop app carries. An npm install can be left broken by an interrupted update (its
+    platform package missing: every call exits 1 at once) while the app's own copy keeps working."""
+    out = []
+    first = shutil.which("codex")
+    if first:
+        out.append(first)
+    for c in (str(Path.home() / ".local/bin/codex"), "/opt/homebrew/bin/codex", CODEX_APP_CLI):
+        if c not in out and Path(c).is_file() and os.access(c, os.X_OK):
+            out.append(c)
+    return out
+
+
 def queue_codex_message(sid, text):
     """Queue into Codex desktop's existing thread without resuming a competing process."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or not text.strip():
         return {"ok": False, "error": "Invalid session or empty message"}
-    cli = shutil.which("codex") or next((str(p) for p in (Path.home() / ".local/bin/codex", Path("/opt/homebrew/bin/codex")) if p.is_file() and os.access(p, os.X_OK)), None)
-    if not cli:
+    clis = codex_clis()
+    if not clis:
         return {"ok": False, "error": "Codex CLI is unavailable"}
     try:
         env = os.environ.copy()
         env["PATH"] = os.pathsep.join((str(Path.home() / ".local/bin"), "/opt/homebrew/bin", env.get("PATH", "")))
-        result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
-                                capture_output=True, text=True, timeout=90, env=env)
-        if result.returncode:
+        for cli in clis:    # a program that exits at once with an error did not queue anything: try the next one
+            result = subprocess.run([cli, "queue", "--thread", sid, "--message", text],
+                                    capture_output=True, text=True, timeout=90, env=env)
+            if not result.returncode:
+                break
+        else:
             return {"ok": False, "error": "Could not queue the message in Codex"}
         out = {"ok": True, "queued": True}
         pending = codex_queue_pending(sid)
