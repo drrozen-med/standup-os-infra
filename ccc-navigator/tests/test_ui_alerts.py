@@ -29,9 +29,10 @@ class AlertUiTests(unittest.TestCase):
         for b in ('id="abOpen"', 'id="abAck"', ">I'm on it<", 'id="abSound"', ">Turn on alert sound<", 'id="abMute"'):
             self.assertIn(b, HTML)
         r = fn("renderAlerts")
-        self.assertIn("const a = open[0];", r)
+        self.assertIn("const a = open[abIdx];", r)                 # the alert on screen; the newest (index 0) until stepped on
+        self.assertIn("if (alarm.top !== open[0].id) { alarm.top = open[0].id; alarm.lastChime = 0; abIdx = 0; }", r)
         self.assertIn("$('#abTitle').textContent = a.title;", r)
-        self.assertIn("'+' + (open.length - 1) + ' more'", r)
+        self.assertIn("(abIdx + 1) + ' of ' + open.length", r)     # "2 of 3 ›": the count is the button that steps
         self.assertIn("document.body.classList.toggle('has-alert', on);", r)
 
     def test_ack_call_is_local_first(self):
@@ -87,7 +88,7 @@ class AlertUiTests(unittest.TestCase):
         self.assertIn("document.title = alarm.flash ? '(!) ' + open[0].title : BASE_TITLE;", t)
         self.assertIn("setTimeout(alarmTick, 1000)", t)
         self.assertIn("document.title = BASE_TITLE;", fn("stopAlarm"))
-        self.assertIn("if (!on) return stopAlarm();", fn("renderAlerts"))
+        self.assertIn("if (!on) { abIdx = 0; return stopAlarm(); }", fn("renderAlerts"))
 
     def test_notification_once_per_alert_and_click_opens(self):
         n = fn("notifyAlerts")
