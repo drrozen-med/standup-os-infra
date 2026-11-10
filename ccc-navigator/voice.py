@@ -315,7 +315,7 @@ def _numbered(n):
 
 def briefing(tree, inbox_list, last_text=None, max_decisions=5, max_sessions=6):
     """-> {"intro": str, "items": [...], "outro": str}. last_text(key) gives a session's newest agent message."""
-    decs = (inbox_list or {}).get("open") or []
+    decs = [d for d in (inbox_list or {}).get("open") or [] if d.get("for_uri", True)]     # only what is his to answer
     decs = sorted(decs, key=lambda d: (d.get("rank") or 99, d.get("priority") or 9))[:max_decisions]
     sessions, more = waiting_sessions(tree, max_sessions)
     items = []

@@ -1956,6 +1956,22 @@ def supervisor_view(tail=20):
             "last_cycle": st.get("last_cycle"), "cycles_tail": lines}
 
 
+DESK_FRESH_S = 2 * 3600
+
+
+def desk_open(now=None):
+    """A supervisor is on duty: bin/supervisor.py is not paused and finished a cycle in the last two hours.
+    Only then do shared problems wait on its desk; otherwise they go to the owner (decisions.py)."""
+    try:
+        st = json.loads((supervisor_dir() / "state.json").read_text())
+        if not isinstance(st, dict) or st.get("paused"):
+            return False
+        last = datetime.datetime.fromisoformat(str(st.get("last_cycle"))).timestamp()
+    except (OSError, ValueError, TypeError):
+        return False
+    return (now or time.time()) - last < DESK_FRESH_S
+
+
 def supervisor_run(body, actor, nav_url):
     """POST /api/supervisor {action: pause|resume|wake, project?, reason?}: runs bin/supervisor.py.
     -> (http status, result)."""
@@ -2109,18 +2125,117 @@ class App:
         except Exception as e:
             return "failed: %s" % e
 
+    def decisions_view(self):
+        """GET /api/decisions: the inbox with who holds each question, and a session to open for each."""
+        out = self.inbox.list(desk_open=desk_open())
+        for d in (out.get("open") or []) + (out.get("went_ahead") or []):
+            d["open_session"] = self.decision_session(d)
+        return out
+
+    def _tell(self, d, rec):
+        """Send an answer to the session that asked, when the question names one. -> short status."""
+        return self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
+
+    def _ack_decision(self, did, actor, why):
+        try:        # the answer stands even if its alerts cannot be acked now (the banner's ack still works)
+            return alert_ack(self, {"link": {"kind": "decision", "ref": did}}, actor, why=why)["acked"]
+        except (OSError, alerts.AlertError, changes.ChangeError):
+            return []
+
     def answer_decision(self, b, actor):
         did = str(b.get("id") or "")
         d = self.inbox.get(did)
+        same = self.inbox.same_problem(did)
         rec, before = self.inbox.answer(did, b.get("choice"), b.get("note"), by=actor)
         cid = self.changes.record(actor, "decision.answer", {"id": did, "choice": rec["choice"]},
                                   {"answers": {did: before}}, {"answers": {did: rec}})
-        delivery = self.deliver(d.get("session"), decisions.message_for(d, rec)) if d and d.get("session") else "recorded"
-        try:        # the answer stands even if its alerts cannot be acked now (the banner's ack still works)
-            acked = alert_ack(self, {"link": {"kind": "decision", "ref": did}}, actor, why="decision answered")["acked"]
-        except (OSError, alerts.AlertError, changes.ChangeError):
-            acked = []
-        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery, "alerts_acked": acked}
+        delivery = self._tell(d, rec)
+        acked = self._ack_decision(did, actor, "decision answered")
+        covered = []
+        for q in same:      # the same problem asked by other projects: one answer closes them all
+            opts = [str(o) for o in q.get("options") or []]
+            note = ("Same problem as %s, which was answered: %s. %s" % (did, rec["choice"], rec["note"])).strip()
+            try:
+                r2, b2 = self.inbox.answer(q["id"], rec["choice"] if rec["choice"] in opts else "other", note,
+                                           by=actor, extra={"same_as": did}, only_open=True)
+            except decisions.DecisionError:
+                continue
+            self.changes.record(actor, "decision.answer", {"id": q["id"], "choice": r2["choice"], "same_as": did},
+                                {"answers": {q["id"]: b2}}, {"answers": {q["id"]: r2}})
+            self._tell(q, r2)
+            acked += self._ack_decision(q["id"], actor, "decision answered")
+            covered.append(q["id"])
+        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": delivery, "alerts_acked": acked,
+                "covered": covered}
+
+    def sort_decision(self, b, actor):
+        """POST /api/decisions/sort {id, kind, default?, undo?, topic?, deadline?}: say what kind a question is."""
+        did = str(b.get("id") or "")
+        rec, before = self.inbox.sort(did, b.get("kind"), b.get("default"), b.get("undo"), b.get("topic"),
+                                      b.get("deadline"), by=actor)
+        cid = self.changes.record(actor, "decision.sort", {"id": did, "kind": rec["kind"]},
+                                  {"triage_kinds": {did: before}}, {"triage_kinds": {did: rec}}, undoable=False)
+        d = next((x for x in self.decisions_view()["open"] if x["id"] == did), None)
+        return {"ok": True, "id": did, "sorted": rec, "decision": d, "change": cid}
+
+    def apply_defaults(self, dry=False, now=None):
+        """Record the default of every approval whose time has come, while the switch is on.
+        -> {ok, on, dry_run, applied: [{id, choice, change?, delivery?}]}"""
+        out = {"ok": True, "on": self.inbox.auto_on(), "dry_run": bool(dry), "applied": []}
+        if not out["on"]:
+            return out
+        for d in self.inbox.due_defaults(now):
+            if dry:
+                out["applied"].append({"id": d["id"], "choice": d["default"]})
+                continue
+            try:
+                rec, _ = self.inbox.apply_default(d["id"], now)
+            except decisions.DecisionError:
+                continue        # answered, reopened or switched off a moment ago: that wins
+            except OSError as e:    # this one could not be written; the others still get their turn
+                out.setdefault("failed", []).append({"id": d["id"], "error": "%s: %s" % (type(e).__name__, e)})
+                continue
+            item = {"id": d["id"], "choice": rec["choice"], "change": None}
+            try:        # it went ahead: whatever fails from here on, the asker is still told
+                item["change"] = self.changes.record("default", "decision.default", {"id": d["id"], "choice": rec["choice"]},
+                                                     {"answers": {d["id"]: None}}, {"answers": {d["id"]: rec}}, undoable=False)
+            except Exception as e:
+                item["log_error"] = "%s: %s" % (type(e).__name__, e)
+            try:
+                item["delivery"] = self._tell(d, rec)
+            except Exception as e:
+                item["delivery"] = "failed: %s" % e
+            out["applied"].append(item)
+            self._ack_decision(d["id"], "default", "default went ahead")
+        return out
+
+    def reopen_decision(self, b, actor):
+        """POST /api/decisions/reopen {id}: take the answer back, with the answers it gave to the same problem."""
+        did = str(b.get("id") or "")
+        before = self.inbox.reopen_all(did, by=actor)
+        cid = self.changes.record(actor, "decision.reopen", {"id": did}, {"answers": before},
+                                  {"answers": {i: None for i in before}})
+        return {"ok": True, "id": did, "change": cid, "reopened": list(before)}
+
+    def undo_default(self, b, actor):
+        """POST /api/decisions/undo-default {id, note?}: the owner objects to a default that went ahead."""
+        did = str(b.get("id") or "")
+        rec, before = self.inbox.undo_default(did, b.get("note"), by=actor)
+        cid = self.changes.record(actor, "decision.undo_default", {"id": did, "choice": before.get("choice")},
+                                  {"answers": {did: before}}, {"answers": {did: rec}}, undoable=False)
+        d = self.inbox.get(did) or {"id": did, "question": rec.get("question"), "session": rec.get("session")}
+        return {"ok": True, "id": did, "answer": rec, "change": cid, "delivery": self._tell(d, rec)}
+
+    def defaults_switch(self, b, actor):
+        """POST /api/decisions/defaults {on: bool} | {run: true, dry_run?}: the switch, or apply what is due now."""
+        if b.get("run"):
+            return self.apply_defaults(dry=bool(b.get("dry_run")))
+        if not isinstance(b.get("on"), bool):
+            raise decisions.DecisionError("bad_switch", "give on: true or false, or run: true")
+        before = self.inbox.set_auto(b["on"], by=actor)
+        cid = self.changes.record(actor, "decision.defaults_on" if b["on"] else "decision.defaults_off", {},
+                                  {"auto_defaults": {"on": before}}, {"auto_defaults": {"on": b["on"]}}, undoable=False)
+        return {"ok": True, "on": b["on"], "was": before, "change": cid}
 
     def brief_refresh(self, key, rename=False):
         """Summarise one session now with the small model; with rename, also apply the suggested title."""
@@ -2548,7 +2663,7 @@ class App:
             t.start()
         for t in ts:
             t.join(8)
-        return voice.briefing(tree, self.inbox.list(), lambda k: texts.get(k, ""))
+        return voice.briefing(tree, self.inbox.list(desk_open=desk_open()), lambda k: texts.get(k, ""))
 
     def voice_find(self, target):
         hit = voice.find_session(target, self.tree("3d"))
@@ -2754,6 +2869,7 @@ class Handler(BaseHTTPRequestHandler):
 
     NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
+                "/api/decisions/sort", "/api/decisions/undo-default", "/api/decisions/defaults",
                 "/api/alerts/raise", "/api/alerts/ack", "/api/alerts/mute",
                 "/api/ask/answer", "/api/brief/refresh", "/api/hook", "/api/open-in"}
     HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
@@ -2953,10 +3069,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/pi/run":
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
         if u.path == "/api/decisions":
-            out = self.app.inbox.list()
-            for d in out.get("open") or []:
-                d["open_session"] = self.app.decision_session(d)
-            return self._send(200, dict(out, ok=True))
+            return self._send(200, dict(self.app.decisions_view(), ok=True))
         if u.path == "/api/supervisor":
             return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/alerts":
@@ -3222,11 +3335,7 @@ class Handler(BaseHTTPRequestHandler):
                 if p == "/api/decisions/answer":
                     return self._send(200, self.app.answer_decision(body, actor))
                 if p == "/api/decisions/reopen":
-                    did = str(body.get("id") or "")
-                    before = self.app.inbox.reopen(did)
-                    cid = self.app.changes.record(actor, "decision.reopen", {"id": did}, {"answers": {did: before}},
-                                                  {"answers": {did: None}})
-                    return self._send(200, {"ok": True, "id": did, "change": cid})
+                    return self._send(200, self.app.reopen_decision(body, actor))
                 if p == "/api/decisions/rank":
                     ids = body.get("ids") or []
                     why = body.get("why") or {}
@@ -3241,11 +3350,18 @@ class Handler(BaseHTTPRequestHandler):
                     rec, before = self.app.inbox.set_ranks(ids, why=why, by=actor)
                     cid = self.app.changes.record(actor, "decision.rank", {"ids": rec.get("ids")}, {"ranks": before}, {"ranks": rec}, undoable=False)
                     return self._send(200, {"ok": True, "ranks": rec, "change": cid})
+                if p == "/api/decisions/sort":
+                    return self._send(200, self.app.sort_decision(body, actor))
+                if p == "/api/decisions/undo-default":
+                    return self._send(200, self.app.undo_default(body, actor))
+                if p == "/api/decisions/defaults":
+                    return self._send(200, self.app.defaults_switch(body, actor))
                 d = self.app.inbox.ask(body.get("question"), body.get("options"), body.get("lane"), body.get("priority", 2),
                                        body.get("deadline"), body.get("session"), body.get("source"), body.get("id") or "",
-                                       by=actor)
-                self.app.changes.record(actor, "decision.ask", {"id": d["id"]}, {}, {"questions": {d["id"]: d["question"]}},
-                                        undoable=False)
+                                       by=actor, kind=body.get("kind"), default=body.get("default"), undo=body.get("undo"),
+                                       topic=body.get("topic"))
+                self.app.changes.record(actor, "decision.ask", {"id": d["id"], "kind": d["kind"]}, {},
+                                        {"questions": {d["id"]: d["question"]}}, undoable=False)
                 return self._send(200, {"ok": True, "decision": d})
             except (decisions.DecisionError, changes.ChangeError) as e:
                 return self._send(400, {"ok": False, "error": {"code": getattr(e, 'code', 'error'), "message": str(e)}})
@@ -3438,6 +3554,17 @@ def main(argv=None):
             except Exception:
                 pass
     threading.Thread(target=_warm, daemon=True).start()
+    every = float(os.environ.get("CCC_NAV_DEFAULTS_EVERY") or 300)     # seconds; 0 = never apply defaults here
+
+    def _defaults():    # approvals nobody objected to go ahead when their deadline day is over
+        while True:
+            time.sleep(every)
+            try:
+                Handler.app.apply_defaults()
+            except Exception as e:
+                print("defaults: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+    if every > 0:
+        threading.Thread(target=_defaults, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"CCC Navigator on {url}  (reading CCC at {args.ccc})")

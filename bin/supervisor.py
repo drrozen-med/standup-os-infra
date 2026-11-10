@@ -394,7 +394,7 @@ def wake_text(entry, reason, ps, now, note=""):
         b = st.get("blocked") or {}
         body = (head + " You are blocked on \"%s\" with unblock date %s, which is due. Try again now with a way "
                 "you have not tried yet (tried: %s), or escalate: ask the supervisor, or turn it into ONE decision "
-                "for Uri (`nav.py ask`) with options, a deadline and a default."
+                "for Uri (`nav.py ask --kind ...`, see rule 7 of your brief) with options, a deadline and a default."
                 % (b.get("what", ""), b.get("by", ""), "; ".join(b.get("tried") or []) or "-"))
     elif reason == "keep-moving" and st.get("state") == "waiting-on-uri":
         body = (head + " You have been waiting on Uri for %d min (%s). Waiting on him for those does not stop the "
@@ -564,11 +564,30 @@ def register_row(entry, ps, now, paused):
     }
 
 
+def desk_row(d, now):
+    """One problem on the supervisor's desk (holder "supervisor" in the Navigator's inbox) for the digest."""
+    start = d.get("sorted_at") if isinstance(d.get("sorted_at"), (int, float)) else d.get("asked_at")
+    lanes = [str(d.get("lane") or d.get("id"))] + [str(x.get("lane") or x.get("id")) for x in d.get("dupes") or []]
+    return {"id": str(d.get("id")), "topic": str(d.get("topic") or ""), "question": " ".join(str(d.get("question") or "").split()),
+            "raised_by": sorted(set(lanes)),
+            "days": round((now - float(start)) / 86400, 1) if isinstance(start, (int, float)) else None}
+
+
 def digest_md(d, now):
     out = ["# Supervisor digest %s%s" % (iso(now)[:16].replace("T", " "), " (dry run)" if d["dry_run"] else "")]
     od = d["decisions_overall"]
     out.append("Uri's open decisions: %d%s." % (od["open"], ", oldest %.1fd" % od["oldest_days"]
                                                  if od["oldest_days"] is not None else ""))
+    desk = d.get("desk") or []
+    if desk:
+        out.append("On YOUR desk, not Uri's (%d): problems the owners raised. Solve each one; it goes to Uri only if "
+                   "it is still open after two days or past its deadline. When solved, close it for every project "
+                   "that raised it: `NAV_ACTOR=copilot python3 %s decide <id> other --note \"solved: <what you did>\"`."
+                   % (len(desk), NAV))
+        for x in desk:
+            out.append("- %s [%s] raised by %s%s: %s" % (
+                x["id"], x["topic"], ", ".join(x["raised_by"]),
+                ", %.1fd on your desk" % x["days"] if x["days"] is not None else "", x["question"]))
     w = "; ".join("%s (%s)" % (x["project"], x["reason"]) for x in d["wakes"]) or "none"
     out.append("%s this cycle: %s." % ("Would wake" if d["dry_run"] else "Woke", w))
     held = ["%s (%s: %s)" % (x["project"], x["reason"], x["skip"]) for x in d["skips"] if x["reason"]]
@@ -647,7 +666,11 @@ def cycle(dry_run=False, now=None):
         answers = load_answers(dec)
         open_list = [x for x in dec.get("open") or [] if isinstance(x, dict)]
         open_map = {str(x.get("id")): x for x in open_list}
-        asked = [float(x["asked_at"]) for x in open_list if isinstance(x.get("asked_at"), (int, float))]
+        # The gate (ccc-navigator/decisions.py): approvals going ahead on a default, repeats of one problem and
+        # problems on the supervisor's desk are not Uri's now. He is counted and alerted only for what is his.
+        mine = [x for x in open_list if x.get("for_uri") is not False]
+        desk = [desk_row(x, now) for x in open_list if x.get("holder") == "supervisor"]
+        asked = [float(x["asked_at"]) for x in mine if isinstance(x.get("asked_at"), (int, float))]
         paused_projects = set(st.get("paused_projects") or [])
         projects = st.get("projects") or {}
         owners, wakes, skips, rows, done = [], [], [], [], {}
@@ -678,13 +701,14 @@ def cycle(dry_run=False, now=None):
                 rows.append({"project": slug, "project_key": pkey, "owner_key": (info or {}).get("key"),
                              "error": str(e), "flags": ["error"]})
         try:
-            alerts = raise_alerts(open_list, owners, now, dry)
+            alerts = raise_alerts(mine, owners, now, dry)
         except Exception as e:      # alerts must never stop the digest and register
             alerts = []
             errors.append({"project": "(alerts)", "error": "%s: %s" % (type(e).__name__, e)})
         digest = {"generated_at": iso(now), "ts": now, "dry_run": dry,
-                  "decisions_overall": {"open": len(open_list),
+                  "decisions_overall": {"open": len(mine),
                                         "oldest_days": round((now - min(asked)) / 86400, 1) if asked else None},
+                  "desk": desk,
                   "owners": owners, "wakes": wakes, "skips": skips, "alerts": alerts, "errors": errors}
         write_json(path("digest.json"), digest)
         owner.write_atomic(path("digest.md"), digest_md(digest, now))
