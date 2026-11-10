@@ -95,6 +95,8 @@ class FakeOsrc:
         self.calls, self.jobs, self.n = [], {}, 0       # jobs: id -> {"status", "cwd", "started", "model"}
         self.fail = set()                               # providers whose launch fails
         self.slow = False                               # a launch runs into its time limit
+        self.stuck = set()                              # jobs that cannot be cancelled
+        self.on_launch = None                           # called while a launch is under way
         self.blind = False                              # the listing cannot be read
 
     def __call__(self, args, cwd=None, timeout=90):
@@ -106,6 +108,8 @@ class FakeOsrc:
             j = self.jobs.get(args[2])
             return (0, json.dumps(dict(j, job_id=args[2])), "") if j and not self.blind else (1, "", "no such job")
         if args[0] == "cancel":
+            if args[1] in self.stuck:
+                return 1, "", "cancel failed"
             if args[1] in self.jobs:
                 self.jobs[args[1]]["status"] = "canceled"
             return 0, "", ""
@@ -117,6 +121,8 @@ class FakeOsrc:
             self.n += 1
             jid = "job-%d" % self.n
             self.jobs[jid] = {"status": "running", "cwd": cwd, "started": FakeNav.now, "model": args[5]}
+            if self.on_launch:
+                self.on_launch()
             return 0, jid + "\n", "[outsourcerer] job %s launched (default lane: %s)." % (jid, args[1])
         raise AssertionError("unexpected outsourcerer call: %r" % args[:3])
 
@@ -1013,6 +1019,116 @@ class Jobs(Base):
         self.run_cycle(NOON + 15 * MIN)
         self.assertEqual((self.ps()["last_job"]["ended"], self.jfile("state.json")["providers"], self.ps().get("provider_idx")),
                          ("failed", {}, None))
+
+    def test_no_job_beside_a_session_that_is_driving_the_project(self):
+        self.add_owner(P1, K1, status(), idle_min=2)                    # someone is typing in the owner's session
+        self.run_cycle()
+        self.assertEqual((self.osrc.launches(), self.skip_of()), ([], "nothing due"))       # active 2 min ago: not idle
+        self.nav.items[K1] = 40
+        self.busy.add(K1)                                               # quiet transcript, but a tool is running in it
+        self.run_cycle(NOON + 15 * MIN)
+        self.assertEqual((self.osrc.launches(), self.skip_of()), ([], "its session is at work"))
+        self.busy.clear()
+        self.nav.items[K1] = 20                                         # it stopped 20 min ago: still its project
+        self.run_cycle(NOON + 30 * MIN)
+        self.assertEqual((self.osrc.launches(), self.skip_of()), ([], "nothing due"))
+        self.nav.items[K1] = 35                                         # half an hour of silence: a job takes the turn
+        self.run_cycle(NOON + 45 * MIN)
+        self.assertEqual(len(self.osrc.launches()), 1)
+
+    def test_a_job_that_cannot_be_cancelled_keeps_its_record_and_no_turn_starts_beside_it(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.run_cycle()
+        self.osrc.stuck = {"job-1"}
+        self.run_cycle(NOON + 95 * MIN)                                 # hung, but the cancel fails
+        self.assertEqual((len(self.osrc.launches()), self.ps()["job"]["id"], self.reg()["job"]["state"]),
+                         (1, "job-1", "cancel failed"))
+        self.assertEqual(self.skip_of(), "its turn is running (job job-1 on iceman, 95 min)")
+        self.assertNotIn("last_job", self.ps())
+        self.osrc.stuck = set()
+        self.run_cycle(NOON + 110 * MIN)                                # now it goes: the next provider takes over
+        self.assertEqual((self.ps()["last_job"]["ended"], self.ps()["job"]["id"]), ("hung", "job-2"))
+
+    def test_a_pause_that_lands_while_a_job_starts_cancels_that_job(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.on_launch = lambda: sup.set_pause(None, True)
+        self.run_cycle()
+        self.assertEqual(self.osrc.cancels(), ["job-1"])
+        st = self.jfile("state.json")
+        self.assertEqual((st["paused"], "job" in st["projects"]["alpha"], "last_wake" in st["projects"]["alpha"]), (True, False, False))
+        self.assertEqual((self.skip_of(), self.jfile("digest.json")["wakes"]), ("started, then cancelled: paused meanwhile", []))
+        self.assertIn("that job was cancelled at once: paused meanwhile", self.log_md())
+        self.assertEqual(self.jfile("register.json")["jobs"]["running"], 0)
+
+    def test_a_manual_wake_that_lands_while_a_job_starts_keeps_its_own_job(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        manual = {"last_wake": {"reason": "manual", "ts": NOON + 30, "when": iso(NOON + 30)}, "wakes": {"day": TODAY, "count": 1},
+                  "job": {"id": "m-1", "started": NOON + 30, "provider": "devin"}}
+        self.osrc.on_launch = lambda: self.seed(projects={"alpha": manual})
+        self.run_cycle()
+        self.assertEqual(self.osrc.cancels(), ["job-1"])                # the cycle's job, not the one started by hand
+        self.assertEqual((self.ps()["job"]["id"], self.ps()["last_wake"]["reason"], self.ps()["wakes"]["count"]), ("m-1", "manual", 1))
+        self.assertEqual(self.skip_of(), "started, then cancelled: woken by hand meanwhile")
+
+    def test_only_one_cycle_runs_at_a_time(self):
+        import fcntl
+        self.add_owner(P1, K1, status(), idle_min=None)
+        os.makedirs(self.sup_dir, exist_ok=True)
+        with open(os.path.join(self.sup_dir, "cycle.lock"), "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)                               # a cycle that is still running
+            self.run_cycle()
+            self.assertEqual((self.osrc.launches(), self.cycles()[-1].split(" ", 1)[1]), ([], "skip: the previous cycle is still running"))
+            self.run_cycle(dry=True)                                    # a dry run changes nothing: it may run beside it
+            self.assertIn("would wake alpha", self.cycles()[-1])
+        self.run_cycle(NOON + 15 * MIN)
+        self.assertEqual(len(self.osrc.launches()), 1)
+
+    def test_provider_counts_from_a_manual_wake_survive_the_cycle(self):
+        base = {"iceman": {"ok": 2, "bad": 1, "streak": 0}, "beam": {"bad": 1, "streak": 1}}
+        mine = {"iceman": {"ok": 3, "bad": 1, "streak": 0, "last_ok": 9}, "beam": {"bad": 1, "streak": 1}, "devin": {"ok": 1}}
+        cur = {"iceman": {"ok": 2, "bad": 2, "streak": 1, "last_bad": 5}, "beam": {"bad": 2, "streak": 2}, "minimax": {"ok": 4}}
+        self.assertEqual(sup.merge_providers(cur, base, mine), {
+            "iceman": {"ok": 3, "bad": 2, "streak": 0, "last_bad": 5, "last_ok": 9},     # both scored: the turns add up
+            "beam": {"bad": 2, "streak": 2},                                             # only the manual wake did
+            "minimax": {"ok": 4}, "devin": {"ok": 1}})
+        self.assertEqual(sup.merge_providers(base, base, mine), mine)                    # nobody else: this cycle's counts
+
+    def test_the_env_stash_never_writes_outside_itself(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        wt, outside = os.path.join(self.folder(), "wt", "x"), os.path.join(self.tmp.name, "elsewhere")
+        os.makedirs(wt)
+        os.makedirs(outside)
+        os.makedirs(os.path.join(self.tmp.name, "owners-env-stash", "alpha", "wt"))
+        os.symlink(outside, os.path.join(self.tmp.name, "owners-env-stash", "alpha", "wt", "x"))
+        with open(os.path.join(wt, ".env"), "w") as f:
+            f.write("SECRET=1\n")
+        self.run_cycle()
+        self.assertEqual((os.listdir(outside), os.path.exists(os.path.join(wt, ".env"))), ([], True))
+
+    def test_a_manual_wake_starts_no_job_while_the_owners_session_is_at_work(self):
+        self.add_owner(P1, K1, status(), idle_min=1)
+        code, res = self.cli("wake", "alpha")
+        self.assertEqual((code, res["skip"], self.osrc.launches()), (1, "its session is at work", []))
+
+    def test_a_start_time_that_cannot_be_trusted_never_keeps_a_job_forever(self):
+        self.assertEqual([sup.job_started(v, NOON) for v in (NOON - 60, (NOON - 60) * 1000, NOON + 9999, "junk", None, -5)],
+                         [NOON - 60, NOON - 60, NOON, NOON, NOON, NOON])
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.jobs["x-1"] = {"status": "running", "cwd": self.folder(), "started": NOON + 10 * DAY, "model": "m"}
+        self.run_cycle()
+        self.assertEqual(self.ps()["job"]["started"], NOON)             # counted from now, so it can still be called hung
+        self.run_cycle(NOON + 95 * MIN)
+        self.assertEqual((self.osrc.cancels(), self.ps()["last_job"]["ended"]), (["x-1"], "hung"))
+
+    def test_every_live_job_left_in_the_folder_is_taken_over_one_after_the_other(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.jobs["x-1"] = {"status": "running", "cwd": self.folder(), "started": NOON - 20 * MIN, "model": "m"}
+        self.osrc.jobs["x-2"] = {"status": "running", "cwd": self.folder(), "started": NOON - 10 * MIN, "model": "m"}
+        self.run_cycle()
+        self.assertEqual(self.ps()["job"]["id"], "x-2")                 # the newest first
+        self.osrc.jobs["x-2"]["status"] = "failed"
+        self.run_cycle(NOON + 15 * MIN)
+        self.assertEqual((self.ps()["job"]["id"], self.ps()["last_job"]["id"], self.osrc.launches()), ("x-1", "x-2", []))
 
     def test_a_dry_run_starts_and_cancels_nothing(self):
         self.add_owner(P1, K1, status(), idle_min=None)

@@ -115,9 +115,16 @@ class Api(unittest.TestCase):
                 st, out = self.req("POST", "/api/supervisor", body)
                 self.assertEqual((st, out["ok"], out["action"]), (200, True, body["action"]))
         py = str(navigator.SUPERVISOR_PY)
-        self.assertEqual(calls, [[py, "engine", "--json", "all", "jobs"], [py, "night", "--json", "on"],
+        self.assertEqual(calls, [[py, "engine", "--json", "--", "all", "jobs"], [py, "night", "--json", "on"],
                                  [py, "night", "--json", "off"], [py, "stop", "--json"],
                                  [py, "feedback", "--json", "--", "alpha", "--json ship #12 first"]])    # free text is never an option
+
+    def test_request_text_that_starts_with_a_dash_is_never_an_option(self):
+        st, out = self.req("POST", "/api/supervisor", {"action": "pause", "project": "--help"})
+        self.assertEqual((st, out["ok"], out["paused_projects"]), (200, True, ["--help"]))     # taken as a name, as given
+        st, out = self.req("POST", "/api/supervisor", {"action": "wake", "project": "-x", "reason": "- revert the last commit"})
+        self.assertEqual(st, 400)                                       # refused by supervisor.py with a reason, not a crash
+        self.assertIn("error", out)
 
     def test_post_night_and_feedback_reach_supervisor_py(self):
         st, out = self.req("POST", "/api/supervisor", {"action": "night", "on": True})
@@ -136,7 +143,7 @@ class Api(unittest.TestCase):
             st, out = self.req("POST", "/api/supervisor", {"action": "wake", "project": "alpha", "reason": "go"})
         self.assertEqual((st, out["skip"]), (400, "woken 5 min ago"))
         argv, kw = calls[0]
-        self.assertEqual(argv[1:], [str(navigator.SUPERVISOR_PY), "wake", "alpha", "--reason", "go", "--json"])
+        self.assertEqual(argv[1:], [str(navigator.SUPERVISOR_PY), "wake", "--json", "--reason=go", "--", "alpha"])
         self.assertEqual(kw["env"]["NAV_ACTOR"], "copilot")
         self.assertEqual(kw["env"]["CCC_NAV_URL"], "http://127.0.0.1:%d" % self.port)
 

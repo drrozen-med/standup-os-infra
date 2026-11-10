@@ -264,32 +264,58 @@ def job_status(job_id, listing):
     return (str(j.get("status") or "").strip().lower() or None) if isinstance(j, dict) else None
 
 
-def stray_job(slug, listing):
+def stray_job(slug, listing, skip=()):
     """A live job running in this owner's folder that the supervisor has no record of (a launch whose answer was
-    lost, or another runner's): (id, started, provider label), else None."""
+    lost, or another runner's), the newest first: (id, started, provider label), else None."""
     here = os.path.realpath(owner.folder(slug))
-    for jid, j in sorted((listing or {}).items(), reverse=True):
-        if (str(j.get("status") or "").lower() in JOB_LIVE and j.get("cwd")
-                and os.path.realpath(str(j["cwd"])) == here):
-            return jid, j.get("started"), next((p[0] for p in PROVIDERS if p[3] == j.get("model")), "other")
-    return None
+    live = [(j.get("started") if isinstance(j.get("started"), (int, float)) else 0, jid, j)
+            for jid, j in (listing or {}).items()
+            if jid not in skip and str(j.get("status") or "").lower() in JOB_LIVE and j.get("cwd")
+            and os.path.realpath(str(j["cwd"])) == here]
+    if not live:
+        return None
+    _, jid, j = max(live, key=lambda x: (x[0], x[1]))
+    return jid, j.get("started"), next((p[0] for p in PROVIDERS if p[3] == j.get("model")), "other")
+
+
+def job_started(v, now):
+    """A job's start as epoch seconds, never in the future (milliseconds and junk are tolerated): a start time
+    that cannot be trusted must not keep a job from ever counting as hung."""
+    try:
+        t = float(v)
+    except (TypeError, ValueError):
+        return now
+    if t > 1e11:
+        t /= 1000.0
+    return t if 0 < t <= now else now
 
 
 def settle_job(slug, ps, st, upd_ts, listing, now, dry):
     """Jobs-engine bookkeeping for one owner -> its job as the board shows it, or None when it has none:
     {"id", "provider", "state", "min", "running"}. A turn delivered when the owner wrote its status after the job
     started. Takes over a live job in the owner's folder that nobody recorded, closes the record of a job that
-    ended, cancels one that hangs, stalls or lingers after the status (never in a dry run), and scores the provider."""
-    job = ps.get("job") if isinstance(ps.get("job"), dict) and ps["job"].get("id") else None
-    if not job:
-        ps.pop("job", None)
-        found = stray_job(slug, listing)
-        if not found:
-            return None
-        job = ps["job"] = {"id": found[0], "started": float(found[1]) if isinstance(found[1], (int, float)) else now,
-                           "provider": found[2], "adopted": True}
-    started = float(job.get("started") or now)
-    age = max(0.0, now - started)
+    ended, cancels one that hangs, stalls or lingers after the status (never in a dry run), and scores the provider.
+    When a job ended, any other live job left in the folder is taken over next, so no turn starts beside it."""
+    seen, view = set(), None
+    while True:
+        job = ps.get("job") if isinstance(ps.get("job"), dict) and ps["job"].get("id") else None
+        if not job:
+            ps.pop("job", None)
+            found = stray_job(slug, listing, seen)
+            if not found:
+                return view
+            job = ps["job"] = {"id": found[0], "started": job_started(found[1], now), "provider": found[2],
+                               "adopted": True}
+        seen.add(str(job["id"]))
+        view = settle_one(ps, st, job, upd_ts, listing, now, dry)
+        if view["running"]:
+            return view
+
+
+def settle_one(ps, st, job, upd_ts, listing, now, dry):
+    """settle_job for the one job in ps["job"]: its view; when it ended, the record moves to ps["last_job"]."""
+    started = job["started"] = job_started(job.get("started"), now)
+    age = now - started
     delivered = upd_ts is not None and upd_ts > started
     word = job_status(job["id"], listing)
     alive = word in JOB_LIVE or word == "stalled?" or word is None      # it may still hold the owner's folder
@@ -304,7 +330,11 @@ def settle_job(slug, ps, st, upd_ts, listing, now, dry):
     if end is None or (dry and alive):
         return view
     if not dry and (alive or word in ("wedged", "blocked", "permission-blocked")):
-        osrc_run(["cancel", job["id"]], timeout=60)     # nothing may be left running in the owner's folder
+        failed = osrc_run(["cancel", str(job["id"])], timeout=60)[0] != 0   # nothing may be left running in the folder
+        if failed and alive and age <= 2 * HUNG_MIN * 60:
+            again = job_status(job["id"], None)
+            if again in JOB_LIVE or again == "stalled?" or again is None:
+                return dict(view, state="cancel failed")    # still there: keep the record and try again next cycle
     ps["last_job"] = {"id": job["id"], "provider": job.get("provider"), "ended": end, "ts": now, "when": iso(now),
                       "delivered": delivered, "min": int(age // 60)}
     del ps["job"]
@@ -374,6 +404,8 @@ def stash_env(slug):
                 src = os.path.join(dp, fn)
                 dst = os.path.join(stash, os.path.relpath(src, root))
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if not (os.path.realpath(os.path.dirname(dst)) + os.sep).startswith(os.path.realpath(stash) + os.sep):
+                    continue            # a link inside the stash points elsewhere: never write outside it
                 subprocess.run(["git", "-C", dp, "update-index", "--skip-worktree", fn], capture_output=True, timeout=30)
                 os.replace(src, dst)
                 moved += 1
@@ -618,10 +650,17 @@ def observe(pkey, info, tree, answers, open_map, board_rows, ps, now, st=None, l
     job = None
     if eng == "jobs":       # no session to watch: the job is the owner's turn, its status file and job its activity
         job = settle_job(slug, ps, st if st is not None else {}, upd_ts, listing, now, dry)
-        last = max([t for t in (upd_ts, (ps.get("last_job") or {}).get("ts")) if isinstance(t, (int, float))] or [0])
+        # Someone may still drive this project in its registered session (Uri, or an owner session started by
+        # hand): while that session is at work, or was within the last half hour, no job takes a turn beside it.
+        sess = live_of(find_item(tree, key), now)
+        in_session = sess["found"] and (sess["working_now"] or (
+            (sess["idle_min"] or 0) < BUSY_MAX_IDLE_MIN and process_running(key)))
+        seen_at = now - sess["idle_min"] * 60 if sess["found"] and sess["idle_min"] is not None else None
+        last = max([t for t in (upd_ts, (ps.get("last_job") or {}).get("ts"), seen_at) if isinstance(t, (int, float))] or [0])
         running = bool(job and job["running"])
         live = {"found": True, "state": "", "live": running, "last_activity": iso(last) if last else None,
-                "idle_min": round((now - last) / 60, 1) if last else None, "working_now": running}
+                "idle_min": round((now - last) / 60, 1) if last else None, "working_now": running or in_session,
+                "in_session": in_session}
         problem = jobs_problem(status, upd_ts, ps, now)
         stale = bool(problem)
     else:
@@ -737,8 +776,10 @@ def skip_reason(entry, reason, ps, now, paused):
     if paused:
         return "paused"
     if entry.get("engine") == "jobs":
+        if (entry.get("job") or {}).get("running"):
+            return "its turn is running (%s)" % job_words(entry["job"])
         if entry["live"]["working_now"]:
-            return "its turn is running (%s)" % job_words(entry.get("job") or {})
+            return "its session is at work"
     else:
         if not entry["owner_key"]:
             return "no owner session"
@@ -1070,24 +1111,81 @@ def beat(now):
         write_json(path("state.json"), cur)
 
 
-def keep(slug, ps):
-    """Record one owner's row in state.json now: a job was started and must be known even if this cycle dies."""
-    with state_lock():
-        cur = load_state()
-        cur.setdefault("projects", {})[slug] = ps
-        write_json(path("state.json"), cur)
-
-
-def raced(slug, ps):
-    """Just before a job starts: why it must not after all (a pause, a stop or a manual wake landed during this
-    cycle), else None."""
-    cur = load_state()
+def raced(cur, slug, ps):
+    """Why a job for this owner must not start, or stay, after all: a pause, a stop or a manual wake landed in
+    state.json (cur) during this cycle. None: nothing did."""
     if cur.get("paused") or slug in (cur.get("paused_projects") or []):
-        return "paused"
+        return "paused meanwhile"
     latest = (cur.get("projects") or {}).get(slug) or {}
     if ((latest.get("last_wake") or {}).get("ts") or 0) > ((ps.get("last_wake") or {}).get("ts") or 0):
         return "woken by hand meanwhile"
     return None
+
+
+JOB_KEYS = ("job", "last_job", "turn_fails", "provider_idx")      # an owner's job bookkeeping in its row of state.json
+WAKE_KEYS = ("last_wake", "wakes", "answered_sent")
+
+
+def keep(slug, ps, before):
+    """Record one owner's row in state.json right after its job started, so the job is known even if this cycle
+    dies. If a pause, a stop or a manual wake landed while the job was starting (before: the row as it was before
+    this wake), the new job is cancelled and the newer row stays. -> why it was cancelled, or None."""
+    with state_lock():
+        cur = load_state()
+        why = raced(cur, slug, before)
+        if not why:
+            cur.setdefault("projects", {})[slug] = ps
+            write_json(path("state.json"), cur)
+            return None
+        job = ps.pop("job")
+        row = cur.setdefault("projects", {}).setdefault(slug, {})
+        if osrc_run(["cancel", str(job["id"])], timeout=60)[0] != 0 and not row.get("job"):
+            row["job"] = dict(job, stopped=True)    # it could not be cancelled: keep it known, so a stop or the
+            write_json(path("state.json"), cur)     # next cycle ends it
+        for k in JOB_KEYS + WAKE_KEYS:              # this wake never happened: the newer row counts
+            if k in row:
+                ps[k] = row[k]
+            else:
+                ps.pop(k, None)
+        return why
+
+
+def merge_providers(cur, base, mine):
+    """The provider counts to save: this cycle's turns (mine, started from base) on top of what is in the file now
+    (cur), where a manual wake may have scored meanwhile."""
+    out = dict(cur or {})
+    for label, m in (mine or {}).items():
+        b, c = (base or {}).get(label), out.get(label)
+        if c is None or c == b:
+            out[label] = m              # nobody else touched it
+        elif m != b:                    # both did: add this cycle's turns to theirs, keep this cycle's streak
+            c = dict(c)
+            for k in ("ok", "bad"):
+                c[k] = int(c.get(k) or 0) + int(m.get(k) or 0) - int((b or {}).get(k) or 0)
+            c.update({k: m[k] for k in ("streak", "last_ok", "last_bad") if k in m})
+            out[label] = c
+    return out
+
+
+@contextlib.contextmanager
+def cycle_lock():
+    """One cycle at a time (a slow one can outlast the 15 minutes): yields False while another one runs."""
+    os.makedirs(sup_dir(), exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:         # not on macOS/Linux: no lock
+        yield True
+        return
+    with open(path("cycle.lock"), "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def providers_view(st, now):
@@ -1129,9 +1227,23 @@ def providers_down_alert(st, now, dry):
 def cycle(dry_run=False, now=None):
     now = now or time.time()
     dry = dry_run or dry_env()
+    if dry:                     # changes nothing: it may run beside a real cycle
+        return run_cycle(dry, now)
+    with cycle_lock() as free:
+        if free:
+            return run_cycle(dry, now)
+    try:
+        log_cycle("skip: the previous cycle is still running", now)
+    except OSError:
+        pass
+    return 0
+
+
+def run_cycle(dry, now):
     tag = " (dry run)" if dry else ""
     try:
         st = load_state()
+        base_providers = json.loads(json.dumps(st.get("providers") or {}))
         night = quiet(now)
         if night and not st.get("night"):
             if not dry and not st.get("paused"):
@@ -1185,16 +1297,23 @@ def cycle(dry_run=False, now=None):
                         skip = "no free place: %d jobs running" % running
                     else:
                         busy = overloaded() if busy is None else busy
-                        skip = ("the Mac is busy: " + busy) if busy else None if dry else raced(slug, ps)
+                        skip = ("the Mac is busy: " + busy) if busy else None if dry else raced(load_state(), slug, ps)
                 woke = False
                 if reason and not skip:
+                    before = json.loads(json.dumps(ps))
                     woke, out = do_wake(entry, reason, ps, now, dry, st=st, night=night)
                     if not woke:
                         skip = out
                     elif jobs:
-                        running += 1
-                        if not dry:
-                            keep(slug, ps)
+                        late = None if dry else keep(slug, ps, before)
+                        if late:            # a pause, a stop or a manual wake landed while the job was starting
+                            woke, skip = False, "started, then cancelled: " + late
+                            try:
+                                owner.append_log(slug, "supervisor", "that job was cancelled at once: " + late)
+                            except (OSError, ValueError):
+                                pass
+                        else:
+                            running += 1
                 entry["wake"] = {"reason": reason, "skip": skip, "dry_run": dry}
                 entry["paused"] = paused
                 entry["register"] = register_row(entry, ps, now, paused)
@@ -1245,13 +1364,14 @@ def cycle(dry_run=False, now=None):
                 for slug, ps in done.items():
                     old = cur_projects.get(slug) or {}
                     if (old.get("last_wake") or {}).get("ts", 0) > (ps.get("last_wake") or {}).get("ts", 0):
-                        for k in ("last_wake", "wakes", "answered_sent"):
+                        for k in WAKE_KEYS:
                             ps[k] = old.get(k)
-                        if old.get("job"):
-                            ps["job"] = old["job"]      # the job that manual wake started
+                        for k in JOB_KEYS:              # the job that manual wake started, and what it settled
+                            if k in old:
+                                ps[k] = old[k]
                     cur_projects[slug] = ps
                 if any_jobs:
-                    cur["providers"] = st.get("providers") or {}
+                    cur["providers"] = merge_providers(cur.get("providers"), base_providers, st.get("providers"))
                 cur["last_cycle"] = cur["heartbeat"] = iso(now)
                 write_json(path("state.json"), cur)
         line = "cycle%s: %d owners; %s %s; skips %s%s%s" % (
@@ -1309,8 +1429,10 @@ def wake_cmd(project, note="", now=None):
                 ps.pop(k, None)
         paused = bool(st.get("paused")) or slug in (st.get("paused_projects") or [])
         skip = cap_reason(ps, now, paused)
-        if not skip and entry["engine"] == "jobs" and entry["live"]["working_now"]:
-            skip = "its turn is running (%s)" % job_words(entry.get("job") or {})
+        if not skip and entry["engine"] == "jobs" and (entry.get("job") or {}).get("running"):
+            skip = "its turn is running (%s)" % job_words(entry["job"])
+        if not skip and entry["engine"] == "jobs" and entry["live"].get("in_session"):
+            skip = "its session is at work"
         if not skip and entry["engine"] != "jobs" and not entry["owner_key"]:
             skip = "no owner session"
         res = {"ok": False, "project": slug, "reason": "manual", "dry_run": dry}
@@ -1418,7 +1540,7 @@ def stop_all():
         word = job_status(jid, listing)
         if word is not None and word not in JOB_LIVE and word != "stalled?":
             continue                    # it ended by itself
-        (failed if osrc_run(["cancel", jid], timeout=60)[0] else done).append({"project": slug, "job": jid})
+        (failed if osrc_run(["cancel", jid], timeout=20)[0] else done).append({"project": slug, "job": jid})
     for slug in sorted({x["project"] for x in done}):
         try:
             owner.append_log(slug, "supervisor", "stopped by %s: the running job was cancelled" % actor())

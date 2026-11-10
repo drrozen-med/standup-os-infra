@@ -1998,23 +1998,24 @@ def supervisor_run(body, actor, nav_url):
         engine = str(body.get("engine") or "").strip().lower()
         if engine not in SUPERVISOR_ENGINES:
             return 400, {"ok": False, "error": "engine must be one of: " + ", ".join(SUPERVISOR_ENGINES)}
-        argv = ["--json", project, engine]
+        argv = ["--", project, engine]
     elif action == "night":
         if not isinstance(body.get("on"), bool):
             return 400, {"ok": False, "error": "night needs on: true or false"}
-        argv = ["--json", "on" if body["on"] else "off"]
+        argv = ["on" if body["on"] else "off"]
     elif action == "feedback":
         text = " ".join(str(body.get("text") or "").split())[:2000]
         if not text:
             return 400, {"ok": False, "error": "feedback needs a text"}
-        argv = ["--json", "--", project, text]      # the text is free: it must never be read as an option
+        argv = ["--", project, text]
     elif action == "stop":
-        argv = ["--json"]
+        argv = []
     else:
-        argv = ([project] if project else []) + (["--reason", reason] if action == "wake" and reason else []) + ["--json"]
-    argv = [sys.executable, str(SUPERVISOR_PY), action] + argv
+        argv = (["--reason=" + reason] if action == "wake" and reason else []) + (["--", project] if project else [])
+    # what the request says comes after "--" (or inside --reason=...): it is never read as an option
+    argv = [sys.executable, str(SUPERVISOR_PY), action, "--json"] + argv
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=150,
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=300 if action == "stop" else 150,
                            env=dict(os.environ, NAV_ACTOR=actor, CCC_NAV_URL=nav_url))
         res = json.loads((r.stdout or "").strip().splitlines()[-1])
     except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:

@@ -66,7 +66,15 @@ The `jobs` engine, by rule and with no model in the loop:
 
 - **One job per owner.** The record is `job {id, started, provider}` in the owner's row of `state.json`. A live job
   in the owner's folder that nobody recorded (a launch whose answer was lost, another runner's) is taken over, not
-  doubled, and not scored. A job whose state cannot be read counts as running.
+  doubled, and not scored; if several are left there, each is taken over in turn, the newest first. A job whose
+  state cannot be read counts as running, and one that cannot be cancelled keeps its record (the board says "cancel
+  failed") until it can, so no turn starts beside it. A start time that cannot be trusted counts from now.
+- **Nothing slips in.** Only one cycle runs at a time (`cycle.lock`; a second one logs "the previous cycle is still
+  running"). Just before a job starts, and again right after, the cycle looks at `state.json`: if a pause, a stop
+  or a manual wake landed meanwhile, the new job is cancelled at once and the newer row stays.
+- **Never beside a session.** If the owner's registered session is at work (someone types in it, or it runs a tool),
+  or was active in the last 30 minutes, no job takes a turn for that project. A manual wake is refused only while
+  the session is at work right now.
 - **Delivered or not.** A turn delivered when the owner wrote its status after the job started. A job is ended (and
   cancelled, so nothing is left running in the owner's folder) when it runs over 90 min ("hung"), when Outsourcerer
   calls it stalled 20 min in with no status, or 10 min after the status was written (the turn is over).
@@ -101,8 +109,9 @@ its desk until the morning (the desk closes only when it is paused, or silent fo
 ## Stop
 
 `supervisor.py stop`: pause everything and cancel every job that runs an owner's turn, plus the jobs Outsourcerer
-lists as running inside an owner's folder (the owner's workers). A job stopped this way does not count against its
-provider. `resume` starts the cycle again; nothing else is undone.
+lists as running inside an owner's folder (the owner's workers; never a job outside the owners' folders). A job
+stopped this way does not count against its provider; one that could not be cancelled is listed in `failed`.
+`resume` starts the cycle again; nothing else is undone.
 
 ## Loud alerts
 
