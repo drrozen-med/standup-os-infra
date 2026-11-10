@@ -1126,6 +1126,18 @@ class Jobs(Base):
         self.assertEqual((res["cancelled"], [a[:2] for a, _ in self.osrc.calls if a[0] == "status" and len(a) > 2]),
                          ([{"project": "alpha", "job": "job-1"}], []))
 
+    def test_a_manual_wake_writes_only_what_it_changed(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.seed(projects={"alpha": {"idle_checkins": 1, "seen_updated_at": "x"}})
+
+        def cycle_lands():          # a cycle finishes for this owner while the manual wake's job is starting
+            self.seed(projects={"alpha": {"idle_checkins": 4, "seen_updated_at": "y", "last_shipped": {"text": "merged #9"}}})
+        self.osrc.on_launch = cycle_lands
+        self.assertEqual(self.cli("wake", "alpha")[0], 0)
+        row = self.ps()
+        self.assertEqual((row["idle_checkins"], row["seen_updated_at"], row["last_shipped"], row["job"]["id"], row["last_wake"]["reason"]),
+                         (4, "y", {"text": "merged #9"}, "job-1", "manual"))
+
     def test_only_one_cycle_runs_at_a_time(self):
         import fcntl
         self.add_owner(P1, K1, status(), idle_min=None)

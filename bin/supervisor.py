@@ -1141,8 +1141,13 @@ def keep(slug, ps, before):
     with state_lock():
         cur = load_state()
         why = raced(cur, slug, before)
-        if not why:
-            cur.setdefault("projects", {})[slug] = ps
+        if not why:             # write what this wake changed, not the whole row: the row may have moved on meanwhile
+            row = cur.setdefault("projects", {}).setdefault(slug, {})
+            for k in set(before) | set(ps):
+                if k not in ps:
+                    row.pop(k, None)
+                elif k not in before or ps[k] != before[k]:
+                    row[k] = ps[k]
             write_json(path("state.json"), cur)
             return None
     job = ps.pop("job")
@@ -1488,6 +1493,10 @@ def wake_job(pkey, info, tree, answers, open_map, note, now, dry):
         if late:
             res.update(ok=False, skip="started, then cancelled: " + late)
             res.pop("output", None)
+            try:
+                owner.append_log(slug, "supervisor", "that job was cancelled at once: " + late)
+            except (OSError, ValueError):
+                pass
     if (st.get("providers") or {}) != base:        # what this wake learned about the providers
         with state_lock():
             cur = load_state()
