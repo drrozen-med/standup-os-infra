@@ -60,15 +60,28 @@
     else render();
   }
 
-  // A cached response can mean one slow request, not a lost connection.
+  // A cached response, or one failed request, can just mean a slow server (the Mac is busy), not a lost
+  // connection. Only a refused/failed connection or a 5xx (Mac asleep, tunnel down) counts as "down", and
+  // it has to fail twice in a row. A probe that is merely slow means the Mac is reachable, so stay online.
+  function probeOnce() {
+    var timeout = new Promise(function (resolve) { setTimeout(function () { resolve('slow'); }, 15000); });
+    var net = origFetch('/api/version', { cache: 'no-store' })
+      .then(function (r) { return r.status < 500 ? 'up' : 'down'; }, function () { return 'down'; });
+    return Promise.race([net, timeout]);
+  }
   function verifyConnection(cachedAt) {
     if (checkingConnection) return checkingConnection;
     var started = Date.now();
-    var timeout = new Promise(function (_, reject) { setTimeout(function () { reject(new Error('timeout')); }, 5000); });
-    checkingConnection = Promise.race([origFetch('/api/version', { cache: 'no-store' }), timeout])
-      .then(function (r) { if (r.ok) goOnline(); else if (state.lastLive <= started) goOffline(cachedAt); })
-      .catch(function () { if (state.lastLive <= started) goOffline(cachedAt); })
-      .then(function () { checkingConnection = null; });
+    checkingConnection = probeOnce()
+      .then(function (a) {
+        if (a !== 'down') return a;
+        return new Promise(function (r) { setTimeout(r, 3000); }).then(probeOnce);   // one retry before believing it
+      })
+      .then(function (res) {
+        if (res !== 'down') goOnline();
+        else if (state.lastLive <= started) goOffline(cachedAt);
+      })
+      .then(function () { checkingConnection = null; }, function () { checkingConnection = null; });
     return checkingConnection;
   }
 

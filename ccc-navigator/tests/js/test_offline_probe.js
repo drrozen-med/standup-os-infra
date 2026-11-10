@@ -11,10 +11,10 @@ async function test(healthy) {
     new Response('{}', {headers: {'x-nav-from-cache':'1', 'x-nav-cached-at':'123'}});
   const window = {fetch, addEventListener() {}};
   const context = {window, document:doc, navigator:{}, localStorage:{getItem(){return null;}, setItem(){}},
-    Response, Date, Promise, setTimeout(){return 1;}, setInterval(){return 1;}, clearInterval(){}};
+    Response, Date, Promise, setTimeout(fn, ms){ if (ms === 3000) Promise.resolve().then(fn); return 1; }, setInterval(){return 1;}, clearInterval(){}};
   vm.runInNewContext(fs.readFileSync('ccc-navigator/static/offline.js','utf8'), context);
   await window.fetch('/api/tree');
-  for (let i=0; i<8; i++) await Promise.resolve();
+  for (let i=0; i<60; i++) await Promise.resolve();
   assert.equal(offline, !healthy, healthy ? 'slow data should not imply offline' : 'unreachable service should show offline');
 }
 (async () => { await test(true); await test(false); })().catch(e => {console.error(e);process.exit(1);});
