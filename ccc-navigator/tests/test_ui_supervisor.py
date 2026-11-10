@@ -64,6 +64,26 @@ class SupervisorUiTests(unittest.TestCase):
         self.assertIn("supPost({ action: 'engine', project: proj, engine: 'session' }", HTML)
         self.assertNotIn("prompt(", HTML.replace("prompt()/confirm()", ""))      # blocked in embedded browsers
 
+    def test_the_alarm_opens_the_morning_report(self):
+        self.assertIn("l.kind === 'report'", HTML)                   # the alarm's Open button and the notification click
+        fn = re.search(r"async function openAlert\(a\) \{(.*?)\n  \}", HTML, re.S).group(1)
+        branch = fn[fn.index("l.kind === 'report'"):]
+        self.assertIn("ackAlert(a.id)", branch[:200])                 # opening it counts as attending to it
+        self.assertIn("openReport(l.ref)", branch[:200])
+        self.assertIn("'Open report'", HTML)
+        self.assertIn("fetch('/api/report'", HTML)
+        # a screen of its own inside the supervisor area: back to the board, not re-rendered every minute
+        self.assertIn("data-rep-back", HTML)
+        self.assertIn("if (inReport()) return repHtml();", HTML)
+        self.assertIn("if (ui.sup && !inReport()) lastDetailKey = null;", HTML)
+        self.assertRegex(HTML, r"(?s)function openSupervisor\(\) \{\s*ui\.sup = true; ui\.inbox = false; ui\.report = null;")
+        # and a way back to it after the alarm is gone
+        self.assertIn("data-rep-open", HTML)
+        self.assertIn("return openReport('')", HTML)
+        # the text is escaped before any markup is added
+        body = re.search(r"const repInline = (.*?);\n", HTML).group(1)
+        self.assertTrue(body.startswith("s => esc(s)"))
+
     def test_jobs_show_on_the_board(self):
         for frag in ("data-sup-jobs", "new turns are held: ", "jb.running", "x.cooling ? ' (resting)'", "data-sup-turn",
                      "turn running ", "ended without a status", "'turns-failing': 'every model failed'", "holding: Mac busy"):

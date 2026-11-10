@@ -244,6 +244,18 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .sup-acts{margin-inline-start:auto;display:flex;gap:8px;flex-wrap:wrap}
 .sup-acts .dopt.on{color:var(--accent);background:var(--accent-soft);border-color:transparent}
 .sup-acts .dopt.stop{color:var(--danger)}
+.rep h2{font:700 18px var(--display);margin:0}
+.rep-back{align-self:flex-start;background:transparent;border:0;color:var(--primary-hi);font:700 13.5px var(--sans);padding:4px 0;cursor:pointer;min-height:32px}
+.rep-back:hover{text-decoration:underline}
+.rep-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rep-when{font-size:12px;color:var(--dim)}
+.rep-body{max-width:820px;line-height:1.55;font-size:14px}
+.rep-body h3{font:700 15px var(--display);margin:20px 0 6px;color:var(--text)}
+.rep-body ul{margin:4px 0 8px;padding-inline-start:20px}
+.rep-body li{margin:3px 0}
+.rep-body p{margin:6px 0}
+.rep-body code{font-size:12.5px;background:var(--line);border-radius:4px;padding:0 4px}
+.rep-note{color:var(--dim);font-size:12.5px}
 .sup-jobs{margin:0;font-size:12.5px;color:var(--dim)}.sup-jobs b{font-weight:700;color:var(--accent)}
 .sup-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
 .sup-row{display:grid;grid-template-columns:12px minmax(110px,170px) minmax(0,1fr) auto 28px 28px;grid-template-areas:"dot name sum meta brain menu" ". . flags flags . .";column-gap:10px;row-gap:4px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
@@ -619,7 +631,9 @@ body.has-alert #drawer{top:var(--alert-h)}
   }
   let tree = null, flat = [], lastDetailKey = null, inflight = false, chatInst = null;
   let decs = { open: [], answered: [] }, decSig = '';
-  let sup = null, supSig = '', supAt = 0, supFailAt = 0;   // supervisor register (GET /api/supervisor)
+  let sup = null, supSig = '', supAt = 0, supFailAt = 0;
+  let rep = null;   // the morning report on screen: {name, text, mtime} or {name, error} (opened from the alarm or the board)
+  const inReport = () => ui.report != null && ui.report !== false;   // '' = "the newest", still a report screen   // supervisor register (GET /api/supervisor)
   const supOpen = new Set();   // projects whose summary is expanded
 
   const $ = (s) => document.querySelector(s);
@@ -709,7 +723,7 @@ body.has-alert #drawer{top:var(--alert-h)}
       sup = d; supFailAt = 0;
     } catch (e) { sup = null; supFailAt = now; }
     const sig = JSON.stringify(sup) + '|' + Math.floor(now / 60000);   // times on screen move once a minute
-    if (sig !== supSig) { supSig = sig; if (ui.sup) lastDetailKey = null; }
+    if (sig !== supSig) { supSig = sig; if (ui.sup && !inReport()) lastDetailKey = null; }
   }
   const supT = v => { if (v == null || v === '') return 0; if (typeof v === 'number') return v > 1e12 ? v / 1000 : v; const n = Date.parse(v); return isNaN(n) ? 0 : n / 1000; };
   const supBase = p => String(p || '').split('/').filter(Boolean).pop() || String(p || '');
@@ -765,7 +779,46 @@ body.has-alert #drawer{top:var(--alert-h)}
       <span class="dots" role="button" tabindex="0" data-sup-menu="${esc(r.project)}" aria-label="Supervisor actions for ${esc(name)}" title="Actions">${DOTS}</span>
     </div>`;
   }
+  // ---- morning report: opened from the alarm's Open button, or from the board. Read-only, written by the night watchdog.
+  const repInline = s => esc(s).replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  function repBody(text) {
+    const out = []; let list = false;
+    for (const raw of String(text || '').split('\n')) {
+      const line = raw.replace(/\s+$/, ''), li = /^\s*[-*]\s+(.*)$/.exec(line), h = /^(#{1,3})\s+(.*)$/.exec(line);
+      if (li) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li dir="auto">${repInline(li[1])}</li>`); continue; }
+      if (list) { out.push('</ul>'); list = false; }
+      if (h) { if (h[1].length > 1) out.push(`<h3 dir="auto">${repInline(h[2])}</h3>`); continue; }   // the page title is the screen's own
+      if (line.trim()) out.push(`<p dir="auto">${repInline(line)}</p>`);
+    }
+    if (list) out.push('</ul>');
+    return out.join('');
+  }
+  function repHtml() {
+    const back = '<button type="button" class="rep-back" data-rep-back>‹ Supervisor</button>';
+    if (!rep) return `<div class="detail sup rep">${back}<h2>Morning report</h2><p class="hint">Loading…</p></div>`;
+    const day = String(rep.name || '').replace('morning-report-', ''), t = supT(rep.mtime);
+    if (rep.error) return `<div class="detail sup rep">${back}<h2>Morning report ${esc(day)}</h2><p class="hint">${esc(rep.error)}</p></div>`;
+    return `<div class="detail sup rep">${back}
+      <div class="rep-head"><h2>Morning report ${esc(day)}</h2><span class="rep-when">${t ? 'written ' + agoLong(t) : ''}</span></div>
+      <p class="rep-note">To answer anything in this report, use Decisions.</p>
+      <div class="rep-body" data-rep-body>${repBody(rep.text)}</div>
+    </div>`;
+  }
+  async function openReport(name) {
+    ui.sup = true; ui.report = name || ''; ui.inbox = false; ui.today = false; ui.selected = null; store.set('selected', null);
+    rep = null;
+    if (narrow()) document.body.classList.add('m-detail');
+    renderList(); renderDetail(true);
+    try {
+      const r = await fetch('/api/report' + (name ? '?name=' + encodeURIComponent(name) : ''), { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      rep = r.ok && d.ok ? d : { name: name || '', error: (d && d.error) || 'The report could not be read (HTTP ' + r.status + ').' };
+      if (rep.name) ui.report = rep.name;
+    } catch (e) { rep = { name: name || '', error: 'The Navigator could not be reached.' }; }
+    if (ui.sup && inReport()) { renderPinned(); renderDetail(true); }
+  }
   function supHtml() {
+    if (inReport()) return repHtml();
     const back = '<button type="button" class="mback" data-mback>‹ Sessions</button>';
     if (!sup) return `<div class="detail sup">${back}<h2>Supervisor</h2><p class="hint">The supervisor is not available yet. This page fills in once it has run a cycle.</p></div>`;
     const rows = Array.isArray(sup.register) ? sup.register : [], pi = supPausedInfo(), t = supT(sup.digest_at);
@@ -778,6 +831,7 @@ body.has-alert #drawer{top:var(--alert-h)}
         <span class="sup-pill ${pi.all ? 'paused' : ''}">${pi.all ? 'Paused' : 'Running'}</span>
         <span class="sup-last ${late ? 'late' : ''}">${t ? 'Last cycle ' + agoLong(t) : 'No cycle yet'}</span>
         <span class="sup-acts">
+          <button type="button" class="dopt" data-rep-open title="Open the newest morning report">Morning report</button>
           <button type="button" class="dopt ${night ? 'on' : ''}" data-sup-night="${night ? 'off' : 'on'}" aria-pressed="${night}" title="${night ? 'Owners keep working through the night (00:00-07:00) under the night rules: no production changes, no spending. Tap to let them rest at night.' : 'Owners rest from 00:00 to 07:00. Tap to keep them working through the night under the night rules.'}">Night work: ${night ? 'on' : 'off'}</button>
           <button type="button" class="dopt" data-sup-act="${pi.all ? 'resume' : 'pause'}" title="${pi.all ? 'Let the supervisor wake owners again' : 'Stop the supervisor from waking any owner'}">${pi.all ? 'Resume' : 'Pause'}</button>
           <button type="button" class="dopt stop" data-sup-stop title="Pause the supervisor and cancel every owner job that is running now">Stop all</button>
@@ -825,7 +879,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     openChatSession(row.owner_key, 'Owner');
   }
   function openSupervisor() {
-    ui.sup = true; ui.inbox = false; ui.today = false; ui.selected = null; store.set('selected', null);
+    ui.sup = true; ui.inbox = false; ui.report = null; rep = null; ui.today = false; ui.selected = null; store.set('selected', null);
     if (narrow()) document.body.classList.add('m-detail');
     renderList(); renderDetail(true);
     loadSupervisor(true).then(() => { if (ui.sup) { renderPinned(); renderDetail(true); } });
@@ -972,6 +1026,9 @@ body.has-alert #drawer{top:var(--alert-h)}
       const det = card.closest('details'); if (det) det.open = true;
       card.classList.add('flash'); card.scrollIntoView({ block: 'center', behavior: 'smooth' });
       setTimeout(() => card.classList.remove('flash'), 2500);
+    } else if (l.kind === 'report') {
+      ackAlert(a.id);    // opening the report counts as attending to it
+      openReport(l.ref);
     } else if (l.kind === 'session') openChatSession(l.ref, 'Alert');
     else if (l.kind === 'url' && /^https?:\/\//i.test(l.ref)) window.open(l.ref, '_blank', 'noopener');
   }
@@ -1048,7 +1105,7 @@ body.has-alert #drawer{top:var(--alert-h)}
     $('#abCount').textContent = open.length > 1 ? '+' + (open.length - 1) + ' more' : '';
     $('#abText').title = a.title + (a.body ? '\n' + a.body : '');
     $('#abOpen').hidden = !a.link;
-    $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : 'Open';
+    $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : a.link && a.link.kind === 'report' ? 'Open report' : 'Open';
     $('#abSound').hidden = soundReady() || muted() || !(window.AudioContext || window.webkitAudioContext);
     $('#abMute').hidden = false;   // the Mac voice rings even when this page has no sound
     $('#abMute').textContent = muted() ? 'Unmute' : 'Mute 1 h';
@@ -1755,6 +1812,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     const sw = e.target.closest('[data-defaults]'); if (sw) return setDefaults(sw.dataset.defaults === 'on');
   });
   $('#main').addEventListener('click', e => {   // supervisor board
+    if (e.target.closest('[data-rep-open]')) { e.stopPropagation(); return openReport(''); }
+    if (e.target.closest('[data-rep-back]')) { e.stopPropagation(); return openSupervisor(); }
     const act = e.target.closest('[data-sup-act]');
     if (act) { e.stopPropagation(); const a = act.dataset.supAct; return supPost({ action: a }, a === 'pause' ? 'Supervisor paused' : 'Supervisor resumed'); }
     const ng = e.target.closest('[data-sup-night]');

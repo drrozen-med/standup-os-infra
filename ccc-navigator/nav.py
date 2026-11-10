@@ -574,11 +574,17 @@ def build_parser():
     alrl.add_argument("--decision", metavar="ID", help="link to a decision in the inbox (Open shows it; answering it acks)")
     alrl.add_argument("--session", metavar="KEY", help="link to a session chat, e.g. claude:<uuid>")
     alrl.add_argument("--url", dest="link_url", metavar="URL", help="link to a web page (http/https)")
+    alrl.add_argument("--report", metavar="NAME", help="link to a morning report, e.g. morning-report-2026-11-10 (Open shows it)")
     alr.add_argument("--key", default="", help="dedupe key (default: the link, e.g. decision:<id>, else the title)")
     ala = alt_sub.add_parser("ack", help="ack an alert (I'm on it): stops the banner, sound and title flash everywhere")
     _add_global_options(ala, subcommand=True)
     ala.add_argument("id", nargs="?", default="", help="alert id (from nav alerts)")
     ala.add_argument("--all", action="store_true", help="ack every open alert")
+
+    rp = subparsers.add_parser("report", help="the morning report: the newest, or one by name (what the alarm's Open button shows)")
+    _add_global_options(rp, subcommand=True)
+    rp.add_argument("name", nargs="?", default="", help="morning-report-YYYY-MM-DD, or YYYY-MM-DD (default: the newest)")
+    rp.add_argument("--list", action="store_true", help="list the reports, newest first")
 
     dg = subparsers.add_parser("desktop-groups", help="Claude desktop sidebar groups and the project each files under")
     _add_global_options(dg, subcommand=True)
@@ -1285,6 +1291,26 @@ def cmd_alerts(args, client):
     return 0
 
 
+def cmd_report(args, client):
+    if args.list:
+        rows = client.get("/api/reports").get("reports") or []
+        if args.table:
+            print("\n".join("%s  %6d bytes  %s ago" % (r["name"], r["size"], human_age(r["mtime"])) for r in rows)
+                  or "no morning reports yet")
+        else:
+            print_json({"reports": rows})
+        return 0
+    name = args.name.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", name):
+        name = "morning-report-" + name
+    res = client.get("/api/report" + ("?name=" + urllib.parse.quote(name) if name else ""))
+    if args.table:
+        print(res.get("text") or "")
+    else:
+        print_json(res)
+    return 0
+
+
 def cmd_alert(args, client):
     if args.alert_cmd == "raise":
         link = None
@@ -1294,6 +1320,8 @@ def cmd_alert(args, client):
             link = {"kind": "session", "ref": args.session}
         elif args.link_url:
             link = {"kind": "url", "ref": args.link_url}
+        elif args.report:
+            link = {"kind": "report", "ref": args.report}
         res = client.post("/api/alerts/raise", {"title": args.title, "body": args.body, "link": link, "key": args.key})
         if args.table:
             a = res.get("alert") or {}
@@ -2873,6 +2901,8 @@ def main(argv=None):
             return cmd_alerts(args, client)
         if args.command == "alert":
             return cmd_alert(args, client)
+        if args.command == "report":
+            return cmd_report(args, client)
         if args.command == "desktop-groups":
             return cmd_desktop_groups(args, client)
         if args.command == "map-desktop-group":

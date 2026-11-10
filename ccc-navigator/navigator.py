@@ -1983,6 +1983,44 @@ def desk_open(now=None):
     return bool(seen) and (now or time.time()) - max(seen) < DESK_FRESH_S
 
 
+REPORT_BYTES = 400_000
+
+
+def reports_list():
+    """GET /api/reports: {reports: [{name, mtime, size}]} newest first. Only the morning reports the night watchdog
+    writes into the supervisor folder (morning-report-YYYY-MM-DD.md); nothing else there is ever served."""
+    out = []
+    try:
+        for p in supervisor_dir().glob("morning-report-*.md"):
+            name = p.stem
+            if alerts.REPORT_RE.match(name) and p.is_file() and not p.is_symlink():
+                st = p.stat()
+                out.append({"name": name, "mtime": st.st_mtime, "size": st.st_size})
+    except OSError:
+        pass
+    return {"reports": sorted(out, key=lambda r: r["name"], reverse=True)}
+
+
+def report_read(name):
+    """GET /api/report?name=: {name, text, mtime}; no name = the newest. -> (http status, body)."""
+    name = str(name or "").strip()
+    if not name:
+        rows = reports_list()["reports"]
+        if not rows:
+            return 404, {"ok": False, "error": "no morning report yet"}
+        name = rows[0]["name"]
+    if not alerts.REPORT_RE.match(name):
+        return 400, {"ok": False, "error": "report must be morning-report-YYYY-MM-DD"}
+    p = supervisor_dir() / (name + ".md")
+    try:
+        if p.is_symlink() or not p.is_file():
+            return 404, {"ok": False, "error": "no such report"}
+        text = p.read_bytes()[:REPORT_BYTES].decode("utf-8", "replace")
+        return 200, {"ok": True, "name": name, "text": text, "mtime": p.stat().st_mtime}
+    except OSError:
+        return 404, {"ok": False, "error": "no such report"}
+
+
 def supervisor_run(body, actor, nav_url):
     """POST /api/supervisor: runs bin/supervisor.py. -> (http status, result).
     {action: pause|resume, project?} | {action: wake, project, reason?} | {action: engine, project (or "all"),
@@ -3104,6 +3142,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/alerts":
             return self._send(200, alerts_view(self.app))
+        if u.path == "/api/reports":
+            return self._send(200, dict(reports_list(), ok=True))
+        if u.path == "/api/report":
+            code, res = report_read((urllib.parse.parse_qs(u.query).get("name") or [""])[0])
+            return self._send(code, res)
         if u.path == "/api/desktop-groups":
             return self._send(200, {"ok": True, "groups": self.app.desktop_group_list(),
                                     "folders": self.app.project_folders()})
