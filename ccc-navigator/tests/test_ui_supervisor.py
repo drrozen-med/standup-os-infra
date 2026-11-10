@@ -49,6 +49,27 @@ class SupervisorUiTests(unittest.TestCase):
         self.assertIn("supPost({ action: 'pause', project: proj }", HTML)
         self.assertIn("supPost({ action: 'resume', project: proj }", HTML)
 
+    def test_night_stop_feedback_and_engine_controls(self):
+        self.assertIn("data-sup-night=", HTML)      # header: night work on/off
+        self.assertIn("supPost({ action: 'night', on }", HTML)
+        self.assertIn("data-sup-stop", HTML)         # header: stop all, after a confirmation in the page's own dialog
+        fn = re.search(r"async function supStop\(\) \{(.*?)\n  \}", HTML, re.S).group(1)
+        self.assertIn("askConfirm(", fn)
+        self.assertIn("supPost({ action: 'stop' }", fn)
+        fn = re.search(r"async function supFeedback\(proj, name\) \{(.*?)\n  \}", HTML, re.S).group(1)
+        self.assertIn("askText(", fn)
+        self.assertIn("supPost({ action: 'feedback', project: proj, text: text.trim() }", fn)
+        self.assertIn("label: 'Give feedback…'", HTML)
+        self.assertIn("supPost({ action: 'engine', project: proj, engine: 'jobs' }", HTML)
+        self.assertIn("supPost({ action: 'engine', project: proj, engine: 'session' }", HTML)
+        self.assertNotIn("prompt(", HTML.replace("prompt()/confirm()", ""))      # blocked in embedded browsers
+
+    def test_jobs_show_on_the_board(self):
+        for frag in ("data-sup-jobs", "new turns are held: ", "jb.running", "x.cooling ? ' (resting)'", "data-sup-turn",
+                     "turn running ", "ended without a status", "'turns-failing': 'every model failed'", "holding: Mac busy"):
+            self.assertIn(frag, HTML)
+        self.assertIn(".sup-acts{margin-inline-start:auto", HTML)
+
     def test_brain_reuses_open_owner(self):
         fn = re.search(r"function openSupOwner\(proj\) \{(.*?)\n  \}", HTML, re.S).group(1)
         self.assertIn("openOwner(repo.key)", fn)

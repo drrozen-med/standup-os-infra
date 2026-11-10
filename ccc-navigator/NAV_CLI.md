@@ -145,17 +145,29 @@ without one, the navigator appends `[navigator] turn ended without a status upda
 
 ```bash
 # Supervisor (docs/supervisor.md): keeps every owner moving; bin/supervisor.py runs every 15 min.
-python3 nav.py supervisor --table                   # register: state, days since shipped, decisions, wakes, flags
-python3 nav.py supervisor                           # same as JSON: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail}
+python3 nav.py supervisor --table                   # register: state, days since shipped, decisions, wakes, the turn's job, flags
+python3 nav.py supervisor                           # same as JSON: {register, digest_at, paused, paused_projects, last_cycle, cycles_tail, night, engine_default, jobs}
 python3 nav.py supervisor pause                     # pause all supervision (no cycle, no wakes)
 python3 nav.py supervisor pause boardsBridge        # pause one project (key, folder name or display name)
 python3 nav.py supervisor resume [boardsBridge]
 python3 nav.py supervisor wake cdl-bridge --reason "Rebase #12 first"   # manual wake, same caps
+python3 nav.py supervisor engine all jobs           # every owner's turn is one free-model job (also for owners added later)
+python3 nav.py supervisor engine vera session       # one owner back to messages into its session
+python3 nav.py supervisor night on                  # keep working 00:00-07:00 under the night rules (off: rest)
+python3 nav.py supervisor feedback vera "Stop re-planning; ship #546 first"   # opens that owner's next turn
+python3 nav.py supervisor stop                      # pause everything and cancel every running owner job
 ```
 
 Same as `GET /api/supervisor` and `POST /api/supervisor {"action": "pause"|"resume"|"wake", "project"?,
-"reason"?}` (phone: paired and same origin, like every other change). A refused wake (paused, woken in the
-last 30 min, 24 wakes today) is HTTP 400 with `skip` saying why. The cycle writes
+"reason"?}`, `{"action": "engine", "project": <project or "all">, "engine": "session"|"jobs"}`,
+`{"action": "night", "on": true|false}`, `{"action": "feedback", "project", "text"}`, `{"action": "stop"}`
+(phone: paired and same origin, like every other change). A refused wake (paused, woken in the last 30 min,
+24 wakes today, or its turn's job is still running) is HTTP 400 with `skip` saying why.
+
+An owner on the `jobs` engine gets its turn as one free-model job instead of a message (docs/supervisor.md,
+"Engines"): its register row has `engine`, `job` (`id`, `provider`, `state`, `min`, `running`) and `last_job`
+(`provider`, `ended`, `delivered`); `jobs` in the view is `{running, max, held, night, providers}`. `stop` answers
+`{paused, cancelled: [{project, job}], failed}`. The cycle writes
 `~/.ccc-navigator/supervisor/{digest.json,digest.md,register.json,state.json,cycles.log}`;
 `bin/supervisor.py cycle --dry-run` (or `SUPERVISOR_DRY_RUN=1`) decides and logs wakes but sends nothing.
 
