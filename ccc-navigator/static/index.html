@@ -241,7 +241,10 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
 .sup-pill{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 10px;border:1px solid var(--line2);color:var(--live)}
 .sup-pill.paused{color:var(--accent);background:var(--accent-soft);border-color:transparent}
 .sup-last{font-size:12px;color:var(--dim)}.sup-last.late{color:var(--accent)}
-.sup-head .dopt{margin-inline-start:auto}
+.sup-acts{margin-inline-start:auto;display:flex;gap:8px;flex-wrap:wrap}
+.sup-acts .dopt.on{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.sup-acts .dopt.stop{color:var(--danger)}
+.sup-jobs{margin:0;font-size:12.5px;color:var(--dim)}.sup-jobs b{font-weight:700;color:var(--accent)}
 .sup-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
 .sup-row{display:grid;grid-template-columns:12px minmax(110px,170px) minmax(0,1fr) auto 28px 28px;grid-template-areas:"dot name sum meta brain menu" ". . flags flags . .";column-gap:10px;row-gap:4px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
 .sup-row:first-child{border-top:0}
@@ -469,7 +472,7 @@ body.drawer-open #drawer{transform:none}body.drawer-open #drawerScrim{opacity:1;
   .pin-row{flex:1 1 calc(50% - 6px)}   /* four pills: two rows of two, names stay readable */
   .pin-row.sup .ps{display:none}
   .detail.sup{padding:12px}
-  .sup-head .dopt{margin-inline-start:0}
+  .sup-acts{margin-inline-start:0}
   .sup-row>.owner-b,.sup-row>.dots{width:30px;height:30px}
   #side.folded .chips,#side.folded #pinned,#side.folded .status,#side.folded .search{display:none}
   .foot{padding:4px 12px;gap:0}
@@ -717,7 +720,7 @@ body.has-alert #drawer{top:var(--alert-h)}
   };
   const supRowPaused = (r, pi) => !!(r.paused || pi.projects.has(r.project));
   const supRepo = r => tree && tree.repos.find(x => x.key === r.project || supBase(x.key) === r.project || x.name === r.project);
-  const FLAG_LABEL = { 'idle-2x': 'idle 2 check-ins', 'no-status': 'no status', 'blocked-past-due': 'blocked past due', 'decision-7d': 'decision 7d+' };
+  const FLAG_LABEL = { 'idle-2x': 'idle 2 check-ins', 'no-status': 'no status', 'blocked-past-due': 'blocked past due', 'decision-7d': 'decision 7d+', 'turns-failing': 'every model failed' };
   const supFlagLabel = f => FLAG_LABEL[f] || String(f).replace(/-/g, ' ');
   const STATE_LABEL = { working: 'working', 'waiting-on-uri': 'waiting on you', blocked: 'blocked', 'picking-next': 'picking next' };
   function supSummary() {
@@ -726,6 +729,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     parts.push(n ? n + (n === 1 ? ' owner' : ' owners') : 'no owners yet');
     if (push) parts.push(push + (push === 1 ? ' needs' : ' need') + ' a push');
     if (pi.all) parts.push('paused');
+    const jb = sup && sup.jobs;
+    if (jb && !pi.all) parts.push(jb.held ? 'holding: Mac busy' : jb.running + ' working');
     parts.push(t ? 'last cycle ' + agoLong(t) : 'no cycle yet');
     return { txt: parts.join(' · '), n: push };
   }
@@ -743,12 +748,18 @@ body.has-alert #drawer{top:var(--alert-h)}
     const decTxt = dn ? `${dn} decision${dn === 1 ? '' : 's'} open${od != null ? ' · oldest ' + (od < 1 ? 'today' : Math.floor(od) + 'd') : ''}` : 'no decisions open';
     const lw = r.last_wake, lwt = lw && supT(lw.when);
     const wake = lw && lw.reason ? `woke ${lwt ? agoLong(lwt) : 'earlier'}: ${lw.reason}` : 'not woken yet';
+    // jobs engine: the owner's turn is one free-model job; show which model and how the last one ended
+    const job = r.job, lj = r.last_job, jobs = r.engine === 'jobs';
+    const turn = !jobs ? '' : job && job.running ? `${job.provider || 'job'}: turn running ${job.min || 0} min`
+      : job && job.state === 'canceled' ? `${job.provider || 'job'}: turn stopped`
+      : lj ? `${lj.provider || 'job'}: last turn ${lj.delivered ? 'reported' : 'ended without a status'}` : 'runs as free-model jobs';
+    const turnTitle = !jobs ? '' : job && job.running ? `Job ${job.id} (${job.state})` : lj ? `Job ${lj.id || 'not started'}: ${lj.ended}, ${lj.min || 0} min` : '';
     const chips = (paused ? ['<span class="sup-flag">paused</span>'] : []).concat(flags.map(f => `<span class="sup-flag ${/blocked|past-due/.test(f) ? 'bad' : ''}">${esc(supFlagLabel(f))}</span>`));
     return `<div class="sup-row ${paused ? 'paused' : ''} ${supOpen.has(r.project) ? 'open' : ''}" data-sup-proj="${esc(r.project)}">
       <span class="dot ${dot}" title="${esc(stTxt)}"></span>
       <span class="sup-name"><b dir="auto" title="${esc(r.project)}"><bdi>${esc(name)}</bdi></b><i class="${stCls}">${esc(stTxt)}</i></span>
       <span class="sup-sum" dir="auto" title="${esc(sum)}" data-sup-sum>${esc(sum)}</span>
-      <span class="sup-meta"><span title="${esc(shipTitle)}">${esc(shipped)}</span><span class="${dn && od >= 7 ? 'warn' : ''}">${esc(decTxt)}</span><span title="${esc((r.wakes_today || 0) + ' wake(s) today')}">${esc(wake)}</span></span>
+      <span class="sup-meta"><span title="${esc(shipTitle)}">${esc(shipped)}</span><span class="${dn && od >= 7 ? 'warn' : ''}">${esc(decTxt)}</span><span title="${esc((r.wakes_today || 0) + ' wake(s) today')}">${esc(wake)}</span>${turn ? `<span class="${lj && !lj.delivered && !(job && job.running) ? 'warn' : ''}" title="${esc(turnTitle)}" data-sup-turn>${esc(turn)}</span>` : ''}</span>
       <span class="sup-flags">${chips.join('')}</span>
       <span class="owner-b ${stCls ? 'warn' : ''}" role="button" tabindex="0" data-sup-owner="${esc(r.project)}" aria-label="Open owner" title="Open owner">🧠</span>
       <span class="dots" role="button" tabindex="0" data-sup-menu="${esc(r.project)}" aria-label="Supervisor actions for ${esc(name)}" title="Actions">${DOTS}</span>
@@ -759,12 +770,20 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (!sup) return `<div class="detail sup">${back}<h2>Supervisor</h2><p class="hint">The supervisor is not available yet. This page fills in once it has run a cycle.</p></div>`;
     const rows = Array.isArray(sup.register) ? sup.register : [], pi = supPausedInfo(), t = supT(sup.digest_at);
     const late = !pi.all && t && Date.now() / 1000 - t > 45 * 60;   // a cycle runs every 15 min
+    const jb = sup.jobs, night = !!sup.night;
+    const prov = jb && jb.providers ? Object.entries(jb.providers).map(([k, x]) => `${k} ${x.ok || 0}/${(x.ok || 0) + (x.bad || 0)}${x.cooling ? ' (resting)' : ''}`).join(' · ') : '';
+    const jobsLine = jb ? `<p class="sup-jobs" data-sup-jobs>Owner turns run as free-model jobs: ${Number(jb.running) || 0} of ${Number(jb.max) || 0} running${jb.held ? ` · <b>new turns are held: ${esc(jb.held)}</b>` : ''}${prov ? ' · delivered: ' + esc(prov) : ''}</p>` : '';
     return `<div class="detail sup">${back}
       <div class="sup-head"><h2>Supervisor</h2>
         <span class="sup-pill ${pi.all ? 'paused' : ''}">${pi.all ? 'Paused' : 'Running'}</span>
         <span class="sup-last ${late ? 'late' : ''}">${t ? 'Last cycle ' + agoLong(t) : 'No cycle yet'}</span>
-        <button type="button" class="dopt" data-sup-act="${pi.all ? 'resume' : 'pause'}" title="${pi.all ? 'Let the supervisor wake owners again' : 'Stop the supervisor from waking any owner'}">${pi.all ? 'Resume' : 'Pause'}</button>
+        <span class="sup-acts">
+          <button type="button" class="dopt ${night ? 'on' : ''}" data-sup-night="${night ? 'off' : 'on'}" aria-pressed="${night}" title="${night ? 'Owners keep working through the night (00:00-07:00) under the night rules: no production changes, no spending. Tap to let them rest at night.' : 'Owners rest from 00:00 to 07:00. Tap to keep them working through the night under the night rules.'}">Night work: ${night ? 'on' : 'off'}</button>
+          <button type="button" class="dopt" data-sup-act="${pi.all ? 'resume' : 'pause'}" title="${pi.all ? 'Let the supervisor wake owners again' : 'Stop the supervisor from waking any owner'}">${pi.all ? 'Resume' : 'Pause'}</button>
+          <button type="button" class="dopt stop" data-sup-stop title="Pause the supervisor and cancel every owner job that is running now">Stop all</button>
+        </span>
       </div>
+      ${jobsLine}
       ${rows.length ? `<div class="sup-list">${rows.map(r => supRowHtml(r, pi)).join('')}</div>` : '<p class="hint">No owners yet. Make a session the owner of a project from its menu.</p>'}
     </div>`;
   }
@@ -787,7 +806,17 @@ body.has-alert #drawer{top:var(--alert-h)}
       { label: 'Wake now', fn: () => supPost({ action: 'wake', project: proj }, 'Woke ' + name) },
       paused ? { label: 'Resume this project', fn: () => supPost({ action: 'resume', project: proj }, 'Resumed ' + name) }
              : { label: 'Pause this project', fn: () => supPost({ action: 'pause', project: proj }, 'Paused ' + name) },
+      { label: 'Give feedback…', fn: () => supFeedback(proj, name) },
+      row.engine === 'jobs' ? { label: 'Run it in its session instead', fn: () => supPost({ action: 'engine', project: proj, engine: 'session' }, name + ' is woken in its session again') }
+                            : { label: 'Run it as free-model jobs', fn: () => supPost({ action: 'engine', project: proj, engine: 'jobs' }, name + ' now runs as free-model jobs') },
     ];
+  }
+  async function supFeedback(proj, name) {
+    const text = await askText({ title: 'Feedback for ' + name, hint: 'The owner reads it first in its next turn (free-model jobs).', placeholder: 'What should it do differently?', multiline: true, ok: 'Send' });
+    if (text && text.trim()) supPost({ action: 'feedback', project: proj, text: text.trim() }, 'Feedback saved for ' + name);
+  }
+  async function supStop() {
+    if (await askConfirm('Stop everything?', 'Pauses the supervisor and cancels every owner job that is running now. Resume starts it again.', 'Stop all')) supPost({ action: 'stop' }, 'Stopped: supervisor paused, running jobs cancelled');
   }
   function openSupOwner(proj) {
     const row = ((sup && sup.register) || []).find(r => r.project === proj); if (!row) return;
@@ -1728,6 +1757,9 @@ body.has-alert #drawer{top:var(--alert-h)}
   $('#main').addEventListener('click', e => {   // supervisor board
     const act = e.target.closest('[data-sup-act]');
     if (act) { e.stopPropagation(); const a = act.dataset.supAct; return supPost({ action: a }, a === 'pause' ? 'Supervisor paused' : 'Supervisor resumed'); }
+    const ng = e.target.closest('[data-sup-night]');
+    if (ng) { e.stopPropagation(); const on = ng.dataset.supNight === 'on'; return supPost({ action: 'night', on }, on ? 'Owners keep working at night' : 'Owners rest at night'); }
+    if (e.target.closest('[data-sup-stop]')) { e.stopPropagation(); return supStop(); }
     const m = e.target.closest('[data-sup-menu]');
     if (m) { e.stopPropagation(); e.preventDefault(); if (menuAnchor === m) return closeMenu(); return openMenu(m, supMenu(m)); }
     const ob = e.target.closest('[data-sup-owner]');
