@@ -95,6 +95,18 @@ class SupervisorUiTests(unittest.TestCase):
         body = re.search(r"const repInline = (.*?);\n", HTML).group(1)
         self.assertTrue(body.startswith("s => esc(s)"))
 
+    def test_the_alarm_bar_can_step_to_the_next_alert(self):
+        # the morning report behind a decision must not be unreachable: the count is a button that shows the next one
+        self.assertIn('<button type="button" class="ab-n" id="abCount" hidden', HTML)
+        self.assertIn("const shownAlert = () =>", HTML)
+        click = re.search(r"\$\('#alertBar'\)\.addEventListener\('click', e => \{(.*?)\n    if \(e\.target\.closest\('#abAck'\)", HTML, re.S).group(1)
+        self.assertIn("const a = shownAlert();", click)           # Open and I'm on it act on the alert on screen, not the newest
+        self.assertIn("abIdx = (abIdx + 1) % openAlerts().length", click)
+        draw = re.search(r"function renderAlerts\(\) \{(.*?)\n  \}", HTML, re.S).group(1)
+        self.assertIn("alarm.top = open[0].id; alarm.lastChime = 0; abIdx = 0;", draw)    # a new alert chimes and comes first
+        self.assertIn("const a = open[abIdx];", draw)
+        self.assertNotIn("alarm.top = a.id", draw)                 # stepping through must not chime again
+
     def test_jobs_show_on_the_board(self):
         for frag in ("data-sup-jobs", "new turns are held: ", "jb.running", "x.cooling ? ' (resting)'", "data-sup-turn",
                      "turn running ", "ended without a status", "'turns-failing': 'every model failed'", "holding: Mac busy"):

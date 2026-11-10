@@ -522,7 +522,7 @@ body.has-alert #drawer{top:var(--alert-h)}
 <body>
 <div id="alertBar" role="alert" aria-live="assertive" hidden>
   <span class="ab-i" aria-hidden="true">!</span>
-  <span class="ab-t" id="abText"><span id="abTitle" dir="auto"></span><span class="ab-n" id="abCount"></span></span>
+  <span class="ab-t" id="abText"><span id="abTitle" dir="auto"></span><button type="button" class="ab-n" id="abCount" hidden title="Show the next alert"></button></span>
   <span class="ab-b">
     <button type="button" class="ab-snd" id="abSound" hidden>Turn on alert sound</button>
     <button type="button" class="ab-main" id="abOpen">Open</button>
@@ -1097,17 +1097,24 @@ body.has-alert #drawer{top:var(--alert-h)}
     clearTimeout(alarm.timer); alarm.timer = null; alarm.flash = false; alarm.top = null;
     document.title = BASE_TITLE;
   }
+  // The bar shows one alert at a time. The newest comes first; "+N more" steps to the next, so an alert behind
+  // others (the morning report behind a decision) is still one tap from its own Open button.
+  let abIdx = 0;
+  const shownAlert = () => { const o = openAlerts(); return o.length ? o[abIdx < o.length ? abIdx : 0] : null; };
   function renderAlerts() {
     const bar = $('#alertBar'); if (!bar) return;
     const open = openAlerts(), on = open.length > 0;
     document.body.classList.toggle('has-alert', on);
     bar.hidden = !on;
-    if (!on) return stopAlarm();
-    const a = open[0];
-    if (alarm.top !== a.id) { alarm.top = a.id; alarm.lastChime = 0; }   // a new alert on top chimes at once
+    if (!on) { abIdx = 0; return stopAlarm(); }
+    if (alarm.top !== open[0].id) { alarm.top = open[0].id; alarm.lastChime = 0; abIdx = 0; }   // a new alert on top chimes at once and is shown
+    if (abIdx >= open.length) abIdx = 0;
+    const a = open[abIdx];
     bar.dataset.id = a.id;
     $('#abTitle').textContent = a.title;
-    $('#abCount').textContent = open.length > 1 ? '+' + (open.length - 1) + ' more' : '';
+    const more = $('#abCount');
+    more.hidden = open.length < 2;
+    more.textContent = open.length > 1 ? (abIdx + 1) + ' of ' + open.length + ' ›' : '';
     $('#abText').title = a.title + (a.body ? '\n' + a.body : '');
     $('#abOpen').hidden = !a.link;
     $('#abOpen').textContent = a.link && a.link.kind === 'decision' ? 'Open decision' : a.link && a.link.kind === 'report' ? 'Open report' : 'Open';
@@ -1118,7 +1125,8 @@ body.has-alert #drawer{top:var(--alert-h)}
     if (!alarm.timer) alarmTick();
   }
   $('#alertBar').addEventListener('click', e => {
-    const a = openAlerts()[0]; if (!a) return;
+    const a = shownAlert(); if (!a) return;
+    if (e.target.closest('#abCount')) { abIdx = (abIdx + 1) % openAlerts().length; return renderAlerts(); }
     if (e.target.closest('#abAck')) return ackAlert(a.id);
     if (e.target.closest('#abOpen')) return openAlert(a);
     if (e.target.closest('#abSound')) { unlockAudio(); const c = alarm.ctx; if (c) c.resume().then(() => { if (chime()) alarm.lastChime = Date.now(); renderAlerts(); }).catch(() => {}); return; }
