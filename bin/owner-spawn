@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Spawn a project owner on any engine and register it (GHI #103).
+
+    owner-spawn <repo-path> opencode [--model provider/model] [--title NAME]
+    owner-spawn <repo-path> pi       [--engine-dir DIR]
+
+What it does:
+  1. builds the owner brief the same way every other owner gets it
+     (`bin/owner.py brief <slug>`, the versioned source of this prompt),
+  2. starts the agent with that brief as its first turn (headless, logged),
+  3. registers the new session with `nav owner set <repo> <engine>:<id>`.
+
+claude is not spawned here yet: its sessions are discovered through CCC and
+registered from the Navigator UI ("Make this the owner of ...").
+
+The session the owner runs in afterwards is the same artifact every check-in
+resume works on (pi: the jsonl; opencode: its session db), so any engine's
+owner survives restarts the same way.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path("~/projects/standup-os").expanduser()   # the navigator repo (bin/owner.py, nav.py)
+RUNS = Path("~/.ccc-navigator/engine-runs").expanduser()
+
+
+def run(argv, cwd, timeout=None, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    return subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=e)
+
+
+def brief(repo):
+    slug = re.sub(r"^[a-z]+:", "", os.path.basename(str(repo).rstrip("/")))
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", slug).lstrip(".") or "_"
+    r = run([sys.executable, str(REPO / "bin" / "owner.py"), "brief", slug], cwd=repo)
+    if r.returncode != 0 or not r.stdout.strip():
+        print("brief failed: %s %s" % (r.stdout.strip()[:200], r.stderr.strip()[:200]), file=sys.stderr)
+        sys.exit(1)
+    return r.stdout
+
+
+def nav_set(repo, key):
+    r = run([sys.executable, str(REPO / "ccc-navigator" / "nav.py"), "owner", "set", str(repo), key],
+            cwd=repo, timeout=120)
+    ok = r.returncode == 0
+    print("nav owner set ->", "ok" if ok else r.stderr.strip()[:300] or r.stdout.strip()[:300])
+    return ok
+
+
+def spawn_opencode(repo, model=None, title=None):
+    RUNS.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = title or ("owner-" + os.path.basename(str(repo)) + "-" + stamp)
+    log = RUNS / (name + ".log")
+    argv = ["opencode", "run", "--agent", os.environ.get("OPENCODE_AGENT") or "build", "--format", "json"]
+    if model:
+        argv += ["-m", model]
+    argv += ["--title", name]
+    with log.open("w") as fh:
+        proc = subprocess.Popen(argv + [brief(repo)], cwd=str(repo), stdout=fh,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+                                env=dict(os.environ))
+        out = []   # keep the shell echo quiet; the log file carries the stream
+    # wait for the session id from the json stream, bounded
+    sid = None
+    deadline = time.time() + 180
+    sid_re = re.compile(r'"sessionID":"(ses_[A-Za-z0-9]{8,60})"')
+    while time.time() < deadline and proc.poll() is None and not sid:
+        try:
+            text = log.read_text()[-4000:]
+            m = sid_re.search(text)
+            sid = m.group(1) if m else None
+        except OSError:
+            sid = None
+        time.sleep(1)
+    if not sid:
+        print("session id not seen in time; log: %s" % log, file=sys.stderr)
+        sys.exit(1)
+    nav_set(repo, "opencode:" + sid)
+    print("owner log: %s" % log)
+    print("key: opencode:%s" % sid)
+    return 0
+
+
+def spawn_pi(repo):
+    # pi: create the session with the brief as its first turn, headless
+    r = run(["pi", "-p", brief(repo)], cwd=repo, timeout=300)
+    if r.returncode != 0:
+        print("pi run failed: %s" % (r.stderr or "").strip()[:300], file=sys.stderr)
+        sys.exit(1)
+    r2 = run(["pi", "sessions", "--json"], cwd=repo, timeout=60)
+    sid = None
+    try:
+        rows = json.loads((r2.stdout or "[]"))
+        if rows:
+            newest = max(rows, key=lambda s: str(s.get("file") or s.get("mtime") or ""))
+            sid = newest.get("id") or newest.get("session_id")
+    except (ValueError, TypeError):
+        pass
+    if not sid:
+        print("could not read the new pi session id from `pi sessions --json`", file=sys.stderr)
+        sys.exit(1)
+    nav_set(repo, "pi:" + sid)
+    print("key: pi:%s" % sid)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, description="spawn a project owner and register it")
+    ap.add_argument("repo", help="project folder, e.g. ~/projects/airline")
+    ap.add_argument("engine", choices=["opencode", "pi"], help="which harness to spawn")
+    ap.add_argument("--model", help="engine-specific model id (opencode: provider/model)")
+    ap.add_argument("--title", help="session title (opencode)")
+    a = ap.parse_args()
+    repo = os.path.abspath(os.path.expanduser(a.repo))
+    if not (Path(repo) / ".git").exists():
+        print("not a git checkout: %s" % repo, file=sys.stderr)
+        sys.exit(2)
+    return spawn_opencode(repo, a.model, a.title) if a.engine == "opencode" else spawn_pi(repo)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
