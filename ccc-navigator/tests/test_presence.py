@@ -5,6 +5,8 @@ a real Navigator open. The page polls every 10 s, the server counts the
 polling clients, and the Mac alarm only speaks when that count is above zero.
 """
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -67,6 +69,13 @@ class PresenceTests(unittest.TestCase):
 
 class AlarmGateTests(unittest.TestCase):
     def setUp(self):
+        # The alarm reads its mute state from a file; point it at a throwaway one so
+        # the test never depends on whether Uri has the alarm muted right now.
+        self.tmp = tempfile.NamedTemporaryFile(delete=False)
+        self.tmp.close()
+        os.environ["ALERT_ALARM_STATE"] = self.tmp.name
+        self.addCleanup(lambda: os.environ.pop("ALERT_ALARM_STATE", None))
+        self.addCleanup(lambda: os.path.exists(self.tmp.name) and os.unlink(self.tmp.name))
         self.alarm = load_alarm()
 
     def test_the_alarm_asks_the_server_who_is_looking(self):
