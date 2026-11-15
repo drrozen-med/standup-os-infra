@@ -222,24 +222,35 @@ def login_path():
     return _LOGIN_PATH
 
 
-def job_env():
-    """The environment an Outsourcerer call runs in."""
+def job_env(external_allow=""):
+    """The environment an Outsourcerer call runs in.
+
+    `external_allow`: colon-separated path patterns the lane may touch outside its
+    working directory. An owner turn runs in its own folder but must read the
+    repo's CLAUDE.md/AGENTS.md and run gh there; without this the OpenCode lane
+    denies every such read ("Permission denied: external_directory") and the turn
+    can land no code. Everything outside the named paths stays denied.
+    """
     seen, out = set(), []
     for p in (os.environ.get("SUPERVISOR_JOB_PATH", "").split(os.pathsep) + os.environ.get("PATH", "").split(os.pathsep)
               + [os.path.expanduser(x) for x in JOB_PATH] + login_path()):
         if p and p not in seen:
             seen.add(p)
             out.append(p)
-    return dict(os.environ, PATH=os.pathsep.join(out), OSRC_REQUIRE_INTERACTIVE="0")
+    env = dict(os.environ, PATH=os.pathsep.join(out), OSRC_REQUIRE_INTERACTIVE="0")
+    if external_allow:
+        env["OSRC_EXTERNAL_ALLOW"] = external_allow
+    return env
 
 
-def osrc_run(args, cwd=None, timeout=90):
+def osrc_run(args, cwd=None, timeout=90, external_allow=""):
     """Run outsourcerer.sh -> (exit code, stdout, stderr). 127: not installed, 124: timed out. Mocked in tests."""
     sh = osrc_path()
     if not sh:
         return 127, "", "outsourcerer.sh not found (%s)" % OSRC_GLOB
     try:
-        r = subprocess.run([sh] + list(args), cwd=cwd, env=job_env(), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([sh] + list(args), cwd=cwd, env=job_env(external_allow),
+                           capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return 124, "", "timed out after %d s" % timeout
     except OSError as e:
@@ -450,7 +461,8 @@ def launch_job(entry, ps, st, now, text):
         stash_env(slug)
     except (OSError, subprocess.SubprocessError):
         pass                # if a .env still blocks the launch, the launch says so
-    rc, out, err = osrc_run(["--provider", prov, "bg", verb, "-m", model, text], cwd=folder, timeout=LAUNCH_S)
+    rc, out, err = osrc_run(["--provider", prov, "bg", verb, "-m", model, text], cwd=folder, timeout=LAUNCH_S,
+                             external_allow=entry.get("project_key") or "")
     m = re.search(r"\bjob (\S+) launched", out + "\n" + err)
     if not m:
         why = " ".join((err or out or "exit %d" % rc).split())[-160:]
