@@ -75,7 +75,11 @@ ENGINES = ("session", "jobs")       # a message into its session | one free-mode
 PROVIDERS = (                       # the jobs engine's chain, best measured first: label, Outsourcerer provider, verb, model
     ("iceman", "opencode", "edit", "opencode-go/iceman-contributor-free"),
     ("minimax", "droid", "yolo", "custom:MiniMax-M3-direct"),
-    ("beam", "opencode", "edit", "opencode-go/beam-free"),
+    # opencode/beam-free, not opencode-go/beam-free: the go-model name answers with
+    # "Model unavailable" or hangs (2 of 14 turns delivered, two timeouts, the rest
+    # cancelled as the chain moved on); the opencode one delivered every turn tried
+    # (2026-11-15).
+    ("beam", "opencode", "edit", "opencode/beam-free"),
     ("devin", "devin", "edit", "swe-2-high"),
 )
 OSRC_GLOB = "~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh"
