@@ -93,15 +93,17 @@ class FakeOsrc:
 
     def __init__(self):
         self.calls, self.jobs, self.n = [], {}, 0       # jobs: id -> {"status", "cwd", "started", "model"}
+        self.allows = []                                # OSRC_EXTERNAL_ALLOW each launch asked for
         self.fail = set()                               # providers whose launch fails
         self.slow = False                               # a launch runs into its time limit
         self.stuck = set()                              # jobs that cannot be cancelled
         self.on_launch = None                           # called while a launch is under way
         self.blind = False                              # the listing cannot be read
 
-    def __call__(self, args, cwd=None, timeout=90):
+    def __call__(self, args, cwd=None, timeout=90, external_allow=""):
         args = list(args)
         self.calls.append((args, cwd))
+        self.allows.append(external_allow)
         if args[:2] == ["status", "--json"]:
             if len(args) == 2:
                 return (1, "", "boom") if self.blind else (0, json.dumps({"jobs": [dict(j, job_id=i) for i, j in self.jobs.items()]}), "")
@@ -893,6 +895,19 @@ class Jobs(Base):
         self.assertEqual(len(self.osrc.launches()), 1)
         self.assertEqual(self.skip_of(), "its turn is running (job job-1 on iceman, 40 min)")
         self.assertEqual(self.osrc.cancels(), [])
+
+    def test_the_turn_may_reach_the_repo_outside_its_own_folder(self):
+        # The owner turn runs in its own folder but must read the repo's CLAUDE.md and
+        # run gh there. Without the allow-list the OpenCode lane denies every such read
+        # ("Permission denied: external_directory") and the turn lands no code.
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.run_cycle()
+        self.assertEqual(self.osrc.allows[-1], P1)
+
+    def test_nothing_outside_the_named_path_is_allowed(self):
+        env = sup.job_env("/Users/me/projects/alpha")
+        self.assertEqual(env["OSRC_EXTERNAL_ALLOW"], "/Users/me/projects/alpha")
+        self.assertNotIn("OSRC_EXTERNAL_ALLOW", sup.job_env())     # no path, no knob
 
     def test_a_turn_that_wrote_its_status_counts_for_the_provider_and_the_owner_stays_on_it(self):
         self.add_owner(P1, K1, status(), idle_min=None)
