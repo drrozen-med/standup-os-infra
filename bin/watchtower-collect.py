@@ -97,12 +97,26 @@ def parse_ts(s):
 
 
 def ci_state(repo, sha):
-    """Return green | red | pending | none for a commit."""
+    """Return green | red | pending | none for a commit.
+
+    Only the newest attempt of each check counts. A commit keeps every check-run
+    it ever had, so a single failed attempt (a runner that died, a job that was
+    cancelled and re-run) would pin that commit red for ever - even after the
+    re-run passed. The newest attempt of each check is what GitHub shows as the
+    commit's state, and it is what the board should measure.
+    """
     try:
         runs = api(f"/repos/{repo}/commits/{sha}/check-runs?per_page=100")["check_runs"]
         status = api(f"/repos/{repo}/commits/{sha}/status")
     except NoAccess:
         return "unknown"
+    latest = {}
+    for r in runs:
+        key = r.get("name") or r.get("id")
+        prev = latest.get(key)
+        if prev is None or (r.get("id") or 0) >= (prev.get("id") or 0):
+            latest[key] = r
+    runs = list(latest.values())
     bad = {"failure", "timed_out", "cancelled", "action_required"}
     if any(r["conclusion"] in bad for r in runs) or status["state"] in ("failure", "error"):
         return "red"
