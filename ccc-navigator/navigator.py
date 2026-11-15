@@ -41,6 +41,8 @@ import changes
 import decisions
 import devin_delivery
 import orca
+import opencode_run
+import presence
 import pi_run
 import remote
 import actions
@@ -2171,6 +2173,7 @@ class App:
                            "~/projects/standup-os/watchtower/decisions.json"))
         self.changes = changes.ChangeLog(os.environ.get("CCC_NAV_CHANGES") or home / "changes.jsonl")
         self.alerts = alerts.Alerts(os.environ.get("CCC_NAV_ALERTS") or home / "alerts.json")
+        self.presence = presence.Presence()   # who is looking at the Navigator right now
         self.voice = voice.Voice(home / "voice")
         self._last_text = {}
         self.file_cache = home / "file-cache.json"
@@ -2200,6 +2203,9 @@ class App:
             return "no-session"
         if engine == "pi":
             r = pi_run.send(self.args.pi_dir, sid, text)
+            return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
+        if engine == "opencode":
+            r = opencode_run.send(sid, text)
             return "sent" if r.get("ok") else "failed: " + str(r.get("error"))
         if self.moved(sid):
             return "moved"
@@ -3002,7 +3008,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         return self._send(200, got[0], got[1])
 
-    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
+    NAV_POST = {"/api/rename", "/api/nickname", "/api/assign", "/api/group", "/api/hide", "/api/pin", "/api/icon", "/api/note", "/api/triage", "/api/pi/send", "/api/opencode/send", "/api/hide/undo", "/api/unhide-scope", "/api/move-project", "/api/desktop-map", "/api/copilot", "/api/owner", "/api/supervisor", "/api/order",
                 "/api/decisions/answer", "/api/decisions/reopen", "/api/decisions/ask", "/api/decisions/rank",
                 "/api/decisions/sort", "/api/decisions/undo-default", "/api/decisions/defaults",
                 "/api/alerts/raise", "/api/alerts/ack", "/api/alerts/mute",
@@ -3151,11 +3157,23 @@ class Handler(BaseHTTPRequestHandler):
 
     do_PUT = do_DELETE = do_PATCH = _proxy_gated
 
+    def _note_presence(self):
+        """Record that a Navigator view (browser tab or phone) just talked to us.
+
+        The Mac alarm only speaks while this count is above zero, so the Mac
+        never talks to an empty room. A test double without a presence tracker
+        is simply nobody looking.
+        """
+        pres = getattr(self.app, "presence", None)
+        if pres is not None:
+            pres.note(self.headers)
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "bad host"})
         if not self._gate():
             return
+        self._note_presence()
         u = urllib.parse.urlparse(self.path)
         if u.path == "/api/remote/sessions":
             return self._remote_api(u.path, None)
@@ -3203,12 +3221,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.app.pi_transcript(sid))
         if u.path == "/api/pi/run":
             return self._send(200, pi_run.status((urllib.parse.parse_qs(u.query).get("id") or [""])[0]))
+        if u.path == "/api/opencode/transcript":
+            sid = (urllib.parse.parse_qs(u.query).get("sid") or [""])[0]
+            if not sid:
+                return self._send(400, {"error": "sid required"})
+            return self._send(200, {"ok": True, "engine": "opencode", "sid": sid,
+                                    "events": opencode_run.events(sid)})
         if u.path == "/api/decisions":
             return self._send(200, dict(self.app.decisions_view(), ok=True))
         if u.path == "/api/supervisor":
             return self._send(200, dict(supervisor_view(), ok=True))
         if u.path == "/api/alerts":
             return self._send(200, alerts_view(self.app))
+        if u.path == "/api/presence":
+            # who is looking at the Navigator right now: the page polls every 10 s,
+            # so a browser tab or the phone shows up here and a closed one does not.
+            pres = getattr(self.app, "presence", None)
+            views = pres.views() if pres is not None else []
+            return self._send(200, {"ok": True, "count": len(views), "views": views,
+                                    "window": pres.window if pres is not None else 0,
+                                    "last_seen": pres.last_seen() if pres is not None else 0})
         if u.path == "/api/reports":
             return self._send(200, dict(reports_list(), ok=True))
         if u.path == "/api/report":
@@ -3319,6 +3351,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._origin_ok():
             return self._send(403, {"error": "cross-origin"})
+        self._note_presence()
         path = urllib.parse.urlparse(self.path).path
         if path in self.LOCAL_ONLY:
             try:
@@ -3407,6 +3440,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = devin_delivery.deliver(sid, str(b.get("text") or ""), self.app.ccc.base, self.app.ccc.rows()[0])
                 if result is not None:
                     return self._send(200 if result.get("ok") else 409, result)
+            if opencode_run.known(sid):
+                # CCC cannot see current OpenCode sessions; the navigator delivers them itself.
+                result = opencode_run.send(sid, str(b.get("text") or ""))
+                return self._send(200 if result.get("ok") else 400, result)
             return self._proxy(raw)
         if path.startswith("/api/voice/"):
             return self._voice_post(path)
@@ -3444,6 +3481,11 @@ class Handler(BaseHTTPRequestHandler):
             st.set_icon(str(body.get("key") or ""), body.get("icon"))
         elif p == "/api/pi/send":
             res = pi_run.send(self.app.args.pi_dir, body.get("sid"), body.get("text"))
+            return self._send(200 if res.get("ok") else 400, res)
+        elif p == "/api/opencode/send":
+            # CCC cannot deliver to a current OpenCode session (it reads the legacy
+            # session table), so the navigator resumes it itself.
+            res = opencode_run.send(body.get("sid"), body.get("text"))
             return self._send(200 if res.get("ok") else 400, res)
         elif p == "/api/note":
             key = str(body.get("key") or "")

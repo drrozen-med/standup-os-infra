@@ -7,6 +7,9 @@ while any is open, plays a loud system sound and says the alert out loud. It sto
 alert is acknowledged anywhere ("I'm on it" in the Navigator, `nav alert ack`, or answering the
 linked decision). Skips quiet hours (00:00-07:00 local) and while muted.
 
+It stays silent unless a Navigator is really open: the Navigator page polls every 10 s, so the
+server knows who is looking, and the Mac does not talk to an empty room (Uri's rule, 2026-11-15).
+
   alert-alarm.py            one check (what launchd runs)
   alert-alarm.py mute [MIN] mute the alarm for MIN minutes (default 60)
   alert-alarm.py unmute
@@ -49,6 +52,17 @@ def open_alerts():
         return json.load(r).get("open") or []
 
 
+def navigator_open():
+    """True when a real Navigator view (a browser tab or the phone) is connected.
+
+    The Navigator page polls every 10 s and the server counts who polled, so a
+    closed tab falls out of the window in about a minute. Without one there is
+    nobody who could see the alert, so the Mac does not say it out loud.
+    """
+    with urllib.request.urlopen(NAV_URL + "/api/presence", timeout=5) as r:
+        return int(json.load(r).get("count") or 0) > 0
+
+
 def ring(alerts):
     newest = max(alerts, key=lambda a: a.get("raised_at") or 0)
     title = " ".join(str(newest.get("title") or "a decision needs you").split())[:SAY_CHARS]
@@ -71,6 +85,11 @@ def check(now=None):
         return "navigator unreachable: %s" % e
     if not alerts:
         return "no open alerts"
+    try:
+        if not navigator_open():
+            return "no Navigator open: %d alert(s) waiting" % len(alerts)
+    except Exception as e:      # the server is older than the gate: stay quiet rather than nag into the void
+        return "presence unknown (%s): %d alert(s) waiting" % (e, len(alerts))
     ring(alerts)
     return "rang for %d alert(s)" % len(alerts)
 

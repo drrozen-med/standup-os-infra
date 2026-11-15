@@ -138,6 +138,9 @@ def last_activity(key):
     try:
         if engine == "pi":
             ev = get("/api/pi/transcript?sid=" + urllib.parse.quote(sid)).get("events") or []
+        elif engine == "opencode":
+            # CCC cannot see current OpenCode sessions; the navigator reads their store.
+            ev = get("/api/opencode/transcript?sid=" + urllib.parse.quote(sid)).get("events") or []
         else:
             ev = get("/api/conversations/" + urllib.parse.quote(sid)).get("events") or []
     except Exception:
@@ -154,7 +157,11 @@ def last_activity(key):
     failed, txt = False, ""
     for e in reversed(ev):
         if e.get("type") == "assistant":
-            txt = " ".join(b.get("text") or "" for b in e.get("blocks") or [] if b.get("kind") == "text")
+            blocks = e.get("blocks") or []
+            if blocks:
+                txt = " ".join(b.get("text") or "" for b in blocks if b.get("kind") in ("text", None, ""))
+            else:
+                txt = e.get("text") or ""
             failed = is_usage_error(txt)
             break
     return when, failed, txt

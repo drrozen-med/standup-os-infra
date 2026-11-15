@@ -2153,6 +2153,7 @@ def flatten_events(events):
 
 def fetch_events(client, sid, engine):
     path = ("/api/pi/transcript?sid=" + urllib.parse.quote(sid)) if engine == "pi" \
+        else ("/api/opencode/transcript?sid=" + urllib.parse.quote(sid)) if engine == "opencode" \
         else ("/api/conversations/" + urllib.parse.quote(sid))
     return client._request(path).get("events") or []
 
@@ -2183,6 +2184,10 @@ def cmd_send(args, client):
         res = client.post("/api/pi/send", {"sid": sid, "text": text})
         if res.get("ok") is False:
             raise NavError("Pi send failed: %s" % (res.get("error") or res))
+    elif engine == "opencode":  # CCC cannot see current OpenCode sessions: the navigator resumes them
+        res = client.post("/api/opencode/send", {"sid": sid, "text": text})
+        if res.get("ok") is False:
+            raise NavError("OpenCode send failed: %s" % (res.get("error") or res))
     else:
         res = client.post("/api/inject-input", {"session_id": sid, "text": text})
         if res.get("ok") is False:

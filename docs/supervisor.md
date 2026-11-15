@@ -218,3 +218,9 @@ and the engine switch. Works at 375 px.
 newest alert out loud while any loud alert is open, independent of Safari. It stops when the alert is
 acknowledged anywhere. Quiet hours 00:00-07:00. `alert-alarm.py mute [MIN]` / `unmute`. It plays at the Mac's
 current volume (×3); it never changes system volume.
+
+It speaks only while a Navigator is really open: the Navigator page polls every 10 s, the server counts who
+polled (`GET /api/presence` -> `{count, views, window, last_seen}`), and the alarm stays quiet when that count
+is zero. A browser tab and the phone on the tunnel count; scripts (nav.py, the titler, the supervisor cycle)
+do not. So the Mac never talks to an empty room - the alert waits, quietly, for the next time the Navigator is
+open (Uri's rule, 2026-11-15).

@@ -355,6 +355,16 @@ Pi runs its tools without approval prompts, like any message sent through CCC.
 If a Pi terminal is open in the same folder the result carries a `warning`: that
 terminal will not show the exchange until it is reopened.
 
+**OpenCode sessions** work the same way, and for the same reason. CCC's OpenCode
+adapter reads the legacy `session` table of OpenCode's store while current
+OpenCode writes `session_v2`, so CCC cannot see a live session at all and
+answers `repo_required`. The navigator therefore talks to OpenCode itself
+(`ccc-navigator/opencode_run.py`): `opencode run --session <id> --auto "<text>"`
+resumes the session headlessly, and the transcript is read from OpenCode's own
+store. Runs are logged in `~/.ccc-navigator/opencode-runs/`. This is what makes
+an OpenCode session usable as the Co-pilot: the 15-minute check-in can deliver
+to it and read the reply back.
+
 ## Notes
 
 ```bash
@@ -481,6 +491,11 @@ ref}, key?}` and `POST /api/alerts/ack {id}` or `{all: true}` (phone: paired and
 the link, e.g. `decision:<id>`, else the title): a raise while that key is open returns the open alert with
 `raised: false`; an acked key can raise again only 12 h after its ack. Stored in `~/.ccc-navigator/alerts.json`
 (env `CCC_NAV_ALERTS`); every raise and ack is in `changes.jsonl` (`alert.raise`, `alert.ack`) with its actor.
+
+`GET /api/presence` says who is looking at the Navigator right now: `{count, views, window, last_seen}`.
+The page polls every 10 s, so a browser tab or the phone on the tunnel is counted and a closed one falls out of
+the window (~45 s). The Mac alarm (`bin/alert-alarm.py`) speaks only while that count is above zero, so the Mac
+never talks to an empty room.
 
 ## Triage (live status of every session)
 
