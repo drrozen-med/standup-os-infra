@@ -40,9 +40,11 @@ RUNNERS = {
     "sleepySounds_love": "actions.runner.drrozen-med-sleepySounds-love.ss-ci-251.service",
     "vera": "actions.runner.drrozen-med-vera.vera-ci-251.service",
 }
-# a second runner for sleepySounds: the Android JVM gate is long, main must not wait behind it
+# a second runner for the two repos whose queues are longest:
+# sleepySounds' Android JVM gate is long, boardsBridge has many PR checks waiting
 EXTRA = {
     "sleepySounds_love": "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service",
+    "boardsBridge": "actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
 }
 
 MAX_ACTIVE = int(os.environ.get("RUNNER_ADMISSION_MAX", "4"))
