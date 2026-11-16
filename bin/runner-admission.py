@@ -19,6 +19,7 @@ Usage: runner-admission.py [--dry-run] [--max N]
 """
 
 import argparse
+import datetime
 import json
 import os
 import subprocess
@@ -44,12 +45,15 @@ RUNNERS = {
 # sleepySounds' Android JVM gate is long, boardsBridge has many PR checks waiting
 EXTRA = {
     "sleepySounds_love": ["actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service",
-                          "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service"],
+                          "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service",
+                          "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-d.service"],
     "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
                      "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
 }
 
 MAX_ACTIVE = int(os.environ.get("RUNNER_ADMISSION_MAX", "4"))
+RESTART_COOLDOWN = int(os.environ.get("RUNNER_ADMISSION_COOLDOWN", "900"))  # seconds between restarts of one runner
+STATE = os.path.expanduser("~/.ccc-navigator/runner-admission-state.json")
 SSH = ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", HOST]
 
 
@@ -100,6 +104,23 @@ def runner_busy(repo, unit):
     return bool((runner_info(repo).get(unit.split(".")[-2]) or {}).get("busy"))
 
 
+def load_state():
+    try:
+        with open(STATE) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE, "w") as fh:
+            json.dump(state, fh, indent=1)
+    except OSError:
+        pass
+
+
 def set_unit(unit, action):
     subprocess.run(SSH + ["incus exec %s -- systemctl %s %s" % (CONTAINER, action, unit)],
                    capture_output=True, text=True)
@@ -111,14 +132,15 @@ def main():
     ap.add_argument("--max", type=int, default=MAX_ACTIVE)
     args = ap.parse_args()
 
-    need = {}          # repo -> (queued, running)
+    need = {}          # repo -> (queued, running, queued_on_main)
     for repo in RUNNERS:
         q = len(runs(repo, "queued"))
         r = len(runs(repo, "in_progress"))
-        need[repo] = (q, r)
+        qm = len([x for x in runs(repo, "queued") if x.get("head_branch") == "main"])
+        need[repo] = (q, r, qm)
 
     # a runner whose repo has a job in flight stays up; its repo having queued work is a reason to wake it
-    wanted = [repo for repo, (q, r) in need.items() if q > 0 or r > 0]
+    wanted = [repo for repo, (q, r, _qm) in need.items() if q > 0 or r > 0]
     # repos that are busy first (their job is running now), then the ones waiting longest
     wanted.sort(key=lambda repo: (-need[repo][1], -need[repo][0], repo))
 
@@ -147,17 +169,41 @@ def main():
             busy += 1
     # 2. stop the runners whose repo has nothing queued and nothing running
     for repo, units in active_now.items():
-        q, r = need.get(repo, (0, 0))
+        q, r, _qm = need.get(repo, (0, 0, 0))
         if q or r:
             continue
         for unit in units:
             stopped.append((repo, unit))
             awake -= 1
 
+    # 3. over the cap: put the idle runners of the least urgent repos to sleep (a busy runner keeps
+    #    working; a queued job just waits a little longer). Eleven concurrent jobs in this container is
+    #    what made the kernel swap and the runners drop their sessions. A repo with a queued MAIN run
+    #    always keeps its runner awake: main CI is what the board measures.
+    if busy > args.max:
+        idle = []
+        for repo, units in active_now.items():
+            q, r, qm = need.get(repo, (0, 0, 0))
+            if not q and not r:
+                continue
+            if qm:
+                continue
+            for unit in units:
+                if not runner_busy(repo, unit):
+                    idle.append((q, repo, unit))
+        idle.sort(key=lambda t: (t[0], t[1]))
+        for q, repo, unit in idle:
+            if busy <= args.max:
+                break
+            if (repo, unit) in stopped:
+                continue
+            stopped.append((repo, unit))
+            busy -= 1
+
     if args.dry_run:
         for repo in sorted(need):
-            q, r = need[repo]
-            print("%-22s queued=%-3d running=%-3d %s" % (repo, q, r, ",".join(active_now.get(repo, [])) or "-"))
+            q, r, qm = need[repo]
+            print("%-22s queued=%-3d running=%-3d main=%-3d %s" % (repo, q, r, qm, ",".join(active_now.get(repo, [])) or "-"))
         print("would start:", started)
         print("would stop: ", stopped)
         return 0
@@ -170,17 +216,27 @@ def main():
         print("stop  %s (%s, no queued or running work)" % (unit, repo))
 
     # a runner whose repo is waiting but which GitHub calls offline has lost its session:
-    # restart it so it re-registers and picks the work up
+    # restart it so it re-registers and picks the work up. One restart is enough - a runner that
+    # is offline because the box is overloaded reconnects on its own, and restarting every pass
+    # would kill the job it is working on.
+    now = int(datetime.datetime.now().timestamp())
+    state = load_state()
     for repo in wanted:
-        q, r = need[repo]
+        q, r, _qm = need[repo]
         if not q:
             continue
         unit = RUNNERS.get(repo)
         if not unit or unit in [u for _, u in started] or unit in [u for _, u in stopped]:
             continue
-        if runner_status(repo, unit) == "offline":
-            set_unit(unit, "restart")
-            print("restart %s (%s: GitHub says offline while %d runs wait)" % (unit, repo, q))
+        if runner_status(repo, unit) != "offline":
+            continue
+        last = state.get(unit, 0)
+        if now - last < RESTART_COOLDOWN:
+            continue
+        state[unit] = now
+        set_unit(unit, "restart")
+        print("restart %s (%s: GitHub says offline while %d runs wait)" % (unit, repo, q))
+    save_state(state)
     return 0
 
 
