@@ -40,11 +40,12 @@ RUNNERS = {
     "sleepySounds_love": "actions.runner.drrozen-med-sleepySounds-love.ss-ci-251.service",
     "vera": "actions.runner.drrozen-med-vera.vera-ci-251.service",
 }
-# a second runner for the two repos whose queues are longest:
+# extra runners for the repos whose queues are longest:
 # sleepySounds' Android JVM gate is long, boardsBridge has many PR checks waiting
 EXTRA = {
-    "sleepySounds_love": "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service",
-    "boardsBridge": "actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
+    "sleepySounds_love": ["actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service"],
+    "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
+                     "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
 }
 
 MAX_ACTIVE = int(os.environ.get("RUNNER_ADMISSION_MAX", "4"))
@@ -103,10 +104,10 @@ def main():
     wanted.sort(key=lambda repo: (-need[repo][1], -need[repo][0], repo))
 
     active_now = {}
-    for repo in list(RUNNERS) + list(EXTRA):
-        for unit in ([RUNNERS[repo]] if repo in RUNNERS else []) + ([EXTRA[repo]] if repo in EXTRA else []):
-            state = unit_state(unit)
-            if state == "active":
+    for repo in set(list(RUNNERS) + list(EXTRA)):
+        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
+        for unit in units:
+            if unit_state(unit) == "active":
                 active_now.setdefault(repo, []).append(unit)
 
     awake = sum(len(v) for v in active_now.values())
@@ -116,8 +117,9 @@ def main():
     for repo in wanted:
         if awake >= args.max:
             break
-        for unit in ([RUNNERS[repo]] if repo in RUNNERS else []) + ([EXTRA.get(repo)] if repo in EXTRA else []):
-            if unit is None or unit in active_now.get(repo, []):
+        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
+        for unit in units:
+            if unit in active_now.get(repo, []):
                 continue
             if awake >= args.max:
                 break
