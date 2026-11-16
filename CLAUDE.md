@@ -1,5 +1,7 @@
 # Working agreement for agents in this repo
 
+All agents must use Total Recall (the `recall` skill) to search past sessions and decisions before acting, and to save new decisions.
+
 The owner (Uri) does not want to be asked at every step. In this repo you have standing authority to:
 
 - branch, commit, push and open a PR;
