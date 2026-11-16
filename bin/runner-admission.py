@@ -72,14 +72,32 @@ def unit_state(unit):
     return (out.stdout or "").strip()
 
 
+_RUNNER_INFO = {}
+
+
+def runner_info(repo):
+    """{name: {"status":..., "busy":...}} as GitHub sees the repo's runners (cached per run)."""
+    if repo not in _RUNNER_INFO:
+        out = subprocess.run(
+            ["gh", "api", "repos/drrozen-med/%s/actions/runners?per_page=50" % repo, "--jq",
+             '[.runners[] | {name: .name, status: .status, busy: .busy}]'],
+            capture_output=True, text=True)
+        try:
+            rows = json.loads(out.stdout or "[]")
+        except ValueError:
+            rows = []
+        _RUNNER_INFO[repo] = {r.get("name"): r for r in rows if isinstance(r, dict)}
+    return _RUNNER_INFO[repo]
+
+
 def runner_status(repo, unit):
     """'online' / 'offline' as GitHub sees the runner, or None when it cannot be read."""
-    name = unit.split(".")[-2]
-    out = subprocess.run(
-        ["gh", "api", "repos/drrozen-med/%s/actions/runners" % repo, "--jq",
-         '[.runners[] | select(.name=="' + name + '") | .status]'],
-        capture_output=True, text=True)
-    return (out.stdout or "").strip().strip('"') or None
+    return (runner_info(repo).get(unit.split(".")[-2]) or {}).get("status")
+
+
+def runner_busy(repo, unit):
+    """True when GitHub says this runner is running a job."""
+    return bool((runner_info(repo).get(unit.split(".")[-2]) or {}).get("busy"))
 
 
 def set_unit(unit, action):
@@ -114,18 +132,19 @@ def main():
     awake = sum(len(v) for v in active_now.values())
     started, stopped = [], []
 
-    # 1. wake the runners whose repo is waiting (room permitting)
+    # 1. wake the runners whose repo is waiting. The cap counts runners that are BUSY
+    #    (a busy runner is a job in the container), not runners that merely sit awake:
+    #    a repo whose work is waiting must get its runner as soon as a job slot frees.
+    busy = sum(1 for repo, units in active_now.items() for u in units if runner_busy(repo, u))
     for repo in wanted:
-        if awake >= args.max:
-            break
         units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
         for unit in units:
             if unit in active_now.get(repo, []):
                 continue
-            if awake >= args.max:
+            if busy >= args.max:
                 break
             started.append((repo, unit))
-            awake += 1
+            busy += 1
     # 2. stop the runners whose repo has nothing queued and nothing running
     for repo, units in active_now.items():
         q, r = need.get(repo, (0, 0))
