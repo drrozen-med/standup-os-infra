@@ -43,7 +43,8 @@ RUNNERS = {
 # extra runners for the repos whose queues are longest:
 # sleepySounds' Android JVM gate is long, boardsBridge has many PR checks waiting
 EXTRA = {
-    "sleepySounds_love": ["actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service"],
+    "sleepySounds_love": ["actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service",
+                          "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service"],
     "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
                      "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
 }
