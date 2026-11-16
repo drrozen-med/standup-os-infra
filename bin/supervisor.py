@@ -91,7 +91,7 @@ JOB_ENDED = ("done", "done?", "failed", "canceled", "cancelled", "timeout", "int
              "permission-blocked")
 JOBS_MAX = 4            # owner jobs at once (env SUPERVISOR_JOBS_MAX)
 JOBS_MAX_NIGHT = 2      # ... during quiet hours, when night mode keeps the cycle going
-LAUNCH_S = 120          # seconds a launch may take
+LAUNCH_S = 300          # seconds a launch may take (a loaded Mac needs minutes)
 HUNG_MIN = 90           # a job running longer than this is cancelled
 STALL_MIN = 30          # a job Outsourcerer calls stalled or silent, this old and with no status written, is cancelled
 LINGER_MIN = 10         # a job still running this long after its owner wrote the status is cancelled: the turn is over

@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_URL = "http://127.0.0.1:8095"
-REQUEST_TIMEOUT = 120
+REQUEST_TIMEOUT = 300   # a supervisor wake launches a job inside the request; on a loaded Mac that takes minutes
 AGE_RE = re.compile(r"^(\d+(?:\.\d+)?)([smhdw])$", re.IGNORECASE)
 AGE_SECONDS = {
     "s": 1,

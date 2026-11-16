@@ -2082,7 +2082,7 @@ def supervisor_run(body, actor, nav_url):
     # what the request says comes after "--" (or inside --reason=...): it is never read as an option
     argv = [sys.executable, str(SUPERVISOR_PY), action, "--json"] + argv
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=300 if action == "stop" else 150,
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=420 if action == "stop" else 330,
                            env=dict(os.environ, NAV_ACTOR=actor, CCC_NAV_URL=nav_url))
         res = json.loads((r.stdout or "").strip().splitlines()[-1])
     except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
