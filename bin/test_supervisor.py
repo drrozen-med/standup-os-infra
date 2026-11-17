@@ -968,7 +968,7 @@ class Jobs(Base):
         # every lane cooling off (the free-model quota ran out): a wake cannot succeed, so do not try
         self.add_owner(P1, K1, status(), idle_min=None)
         bad = {"bad": 9, "streak": 9, "last_bad": NOON - 10 * MIN}
-        self.seed(providers={label: dict(bad) for label in ("iceman", "pickle", "beam", "minimax", "devin")})
+        self.seed(providers={label: dict(bad) for label in ("codex", "iceman", "pickle", "beam", "minimax", "devin")})
         self.run_cycle()
         self.assertEqual(self.osrc.launches(), [])
         self.assertIn("every lane is resting", self.skip_of())
@@ -1316,7 +1316,7 @@ class Jobs(Base):
         self.assertEqual(self.osrc.launches()[0][:6], PICKLE)          # iceman rests for an hour
         self.assertEqual(self.runs.raises(), [])
         self.assertIn("iceman 0 delivered / 3 failed (resting: 3 failed in a row)", self.text("digest.md"))
-        self.seed(providers={k: dict(bad) for k in ("iceman", "pickle", "beam", "minimax", "devin")},
+        self.seed(providers={k: dict(bad) for k in ("codex", "iceman", "pickle", "beam", "minimax", "devin")},
                   projects={"alpha": {"job": {"id": "job-1", "started": NOON, "provider": "pickle"}}})
         self.run_cycle(NOON + 15 * MIN)
         (argv,) = self.runs.raises()
@@ -1400,7 +1400,7 @@ class Engines(Base):
         with mock.patch.dict(os.environ, {"SUPERVISOR_CHAIN": "devin, nope, iceman"}):
             self.assertEqual([p[0] for p in sup.chain()], ["devin", "iceman"])
         with mock.patch.dict(os.environ, {"SUPERVISOR_CHAIN": "nope"}):
-            self.assertEqual(len(sup.chain()), 5)
+            self.assertEqual(len(sup.chain()), 6)
 
 
 if __name__ == "__main__":

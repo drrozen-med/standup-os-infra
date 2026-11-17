@@ -86,6 +86,11 @@ PROVIDERS = (                       # the jobs engine's chain, best measured fir
     ("beam", "opencode", "edit", "opencode/beam-free"),
     ("minimax", "droid", "yolo", "custom:MiniMax-M3-direct"),
     ("devin", "devin", "edit", "swe-2-high"),
+    # codex-native: Uri's ChatGPT plan ($0 cash), and the only lane with capacity left - the
+    # opencode free tier and the Antigravity lane are both quota-exhausted (2026-11-17). The model
+    # name is "sol" (gpt-5.6-sol); gpt-5.5 is rejected by a ChatGPT account. It is last because
+    # it is the fallback: a turn walks the whole chain when the earlier lanes are down.
+    ("codex", "codex", "edit", "sol"),
 )
 OSRC_GLOB = "~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh"
 JOB_PATH = ("~/.opencode/bin", "~/.local/bin", "~/bin", "/opt/homebrew/bin", "/usr/local/bin")   # launchd's PATH is bare
@@ -470,7 +475,7 @@ def job_prompt(entry, reason, ps, now, note="", night=False):
 LANE_DOWN = re.compile(r"marked DOWN|preflight returned non-zero|refusing to launch", re.I)
 
 
-def launch_job(entry, ps, st, now, text, tries=3):
+def launch_job(entry, ps, st, now, text, tries=0):
     """Start this owner's turn (text: job_prompt) as one Outsourcerer job in its owner folder. -> (ok, short text).
     On success the job is in ps["job"]; a launch that fails counts against the provider, so the next try uses the
     next one. A lane that is DOWN (the free-model quota ran out, the plan limit) must not cost the owner its turn:
@@ -480,7 +485,7 @@ def launch_job(entry, ps, st, now, text, tries=3):
     if not os.path.isdir(folder):
         return False, "no owner folder %s" % folder
     tried = []
-    for _ in range(max(1, tries)):
+    for _ in range(max(1, tries or len(chain()))):
         label, prov, verb, model = pick_provider(ps, st, now, skip=tried)
         try:
             stash_env(slug)
