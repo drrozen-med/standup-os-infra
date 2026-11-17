@@ -95,6 +95,8 @@ class FakeOsrc:
         self.calls, self.jobs, self.n = [], {}, 0       # jobs: id -> {"status", "cwd", "started", "model"}
         self.allows = []                                # OSRC_EXTERNAL_ALLOW each launch asked for
         self.fail = set()                               # providers whose launch fails
+        self.fail_models = set()                        # models whose launch fails (one model, same provider)
+        self.down = set()                               # models whose lane is down (quota, plan limit)
         self.slow = False                               # a launch runs into its time limit
         self.stuck = set()                              # jobs that cannot be cancelled
         self.on_launch = None                           # called while a launch is under way
@@ -118,7 +120,11 @@ class FakeOsrc:
         if args[0] == "--provider":
             if self.slow:
                 return 124, "", "timed out after 120 s"
-            if args[1] in self.fail:
+            if args[5] in self.down:
+                return 1, "", ("ERROR: the %s lane is marked DOWN (plan limit exhausted). "
+                               "ERROR: bg: refusing to launch -- the route preflight returned non-zero (rc=1). "
+                               "Nothing was started." % args[1])
+            if args[1] in self.fail or args[5] in self.fail_models:
                 return 1, "", "[outsourcerer] %s: quota exceeded" % args[1]
             self.n += 1
             jid = "job-%d" % self.n
@@ -826,7 +832,9 @@ class Manual(Base):
 
 P3 = "/Users/x/projects/gamma"
 NIGHT = datetime.datetime(2026, 11, 3, 3, 0, 0).timestamp()      # 03:00 local: quiet hours
-ICEMAN = ["--provider", "opencode", "bg", "edit", "-m", "opencode-go/iceman-contributor-free"]
+ICEMAN = ["--provider", "opencode", "bg", "edit", "-m", "opencode/iceman-free"]
+PICKLE = ["--provider", "opencode", "bg", "edit", "-m", "opencode/big-pickle"]
+BEAM = ["--provider", "opencode", "bg", "edit", "-m", "opencode/beam-free"]
 MINIMAX = ["--provider", "droid", "bg", "yolo", "-m", "custom:MiniMax-M3-direct"]
 
 
@@ -929,24 +937,32 @@ class Jobs(Base):
         self.osrc.jobs["job-1"]["status"] = "wedged"
         self.run_cycle(NOON + 15 * MIN)                                 # 15 min after the wake, not the usual 30
         self.assertEqual(self.osrc.cancels(), ["job-1"])                # nothing is left running in the owner's folder
-        self.assertEqual([a[:6] for a in self.osrc.launches()], [ICEMAN, MINIMAX])
+        self.assertEqual([a[:6] for a in self.osrc.launches()], [ICEMAN, PICKLE])
         self.assertIn('[Supervisor wake: no-status] Your last turn (on iceman) ended "wedged" after 15 min without a status',
                       self.osrc.launches()[1][6])
         h = self.jfile("state.json")["providers"]["iceman"]
         self.assertEqual((h["bad"], h["streak"]), (1, 1))
-        self.assertEqual((self.ps()["provider_idx"], self.ps()["turn_fails"], self.ps()["job"]["provider"]), (1, 1, "minimax"))
+        self.assertEqual((self.ps()["provider_idx"], self.ps()["turn_fails"], self.ps()["job"]["provider"]), (1, 1, "pickle"))
 
     def test_a_launch_that_fails_counts_against_the_provider_and_the_next_one_gets_the_try(self):
         self.add_owner(P1, K1, status(), idle_min=None)
-        self.osrc.fail = {"opencode"}
+        self.osrc.fail_models = {"opencode/iceman-free"}
         self.run_cycle()
         self.assertEqual(self.skip_of(), "could not start a job on iceman: [outsourcerer] opencode: quota exceeded")
         self.assertNotIn("job", self.ps())
         self.assertNotIn("last_wake", self.ps())
         self.assertEqual(self.jfile("state.json")["providers"]["iceman"]["bad"], 1)
         self.run_cycle(NOON + 15 * MIN)
-        self.assertEqual(self.osrc.launches()[-1][:6], MINIMAX)
-        self.assertEqual(self.ps()["job"]["provider"], "minimax")
+        self.assertEqual(self.osrc.launches()[-1][:6], PICKLE)
+        self.assertEqual(self.ps()["job"]["provider"], "pickle")
+
+    def test_a_lane_that_is_down_tries_the_next_provider_in_the_same_turn(self):
+        self.add_owner(P1, K1, status(), idle_min=None)
+        self.osrc.down = {"opencode/iceman-free"}
+        self.run_cycle()
+        self.assertEqual([a[:6] for a in self.osrc.launches()], [ICEMAN, PICKLE])
+        self.assertEqual(self.ps()["job"]["provider"], "pickle")
+        self.assertNotIn("could not start", self.skip_of() or "")
 
     def test_a_launch_that_runs_out_of_time_is_not_the_providers_failure(self):
         self.add_owner(P1, K1, status(), idle_min=None)
@@ -986,7 +1002,7 @@ class Jobs(Base):
         self.run_cycle(NOON + 95 * MIN)
         self.assertEqual(self.osrc.cancels(), ["job-1"])
         self.assertEqual(self.jfile("state.json")["providers"]["iceman"]["bad"], 1)
-        self.assertEqual([a[:6] for a in self.osrc.launches()], [ICEMAN, MINIMAX])
+        self.assertEqual([a[:6] for a in self.osrc.launches()], [ICEMAN, PICKLE])
         self.assertEqual(self.ps()["job"]["id"], "job-2")
 
     def test_a_job_still_running_after_its_status_is_ended_as_delivered(self):
@@ -1287,11 +1303,11 @@ class Jobs(Base):
         bad = {"bad": 3, "streak": 3, "last_bad": NOON - 10 * MIN}
         self.seed(providers={"iceman": dict(bad)})
         self.run_cycle()
-        self.assertEqual(self.osrc.launches()[0][:6], MINIMAX)          # iceman rests for an hour
+        self.assertEqual(self.osrc.launches()[0][:6], PICKLE)          # iceman rests for an hour
         self.assertEqual(self.runs.raises(), [])
         self.assertIn("iceman 0 delivered / 3 failed (resting: 3 failed in a row)", self.text("digest.md"))
-        self.seed(providers={k: dict(bad) for k in ("iceman", "minimax", "beam", "devin")},
-                  projects={"alpha": {"job": {"id": "job-1", "started": NOON, "provider": "minimax"}}})
+        self.seed(providers={k: dict(bad) for k in ("iceman", "pickle", "beam", "minimax", "devin")},
+                  projects={"alpha": {"job": {"id": "job-1", "started": NOON, "provider": "pickle"}}})
         self.run_cycle(NOON + 15 * MIN)
         (argv,) = self.runs.raises()
         self.assertEqual(argv[argv.index("--key") + 1], "supervisor:providers-down")
@@ -1331,7 +1347,7 @@ class Jobs(Base):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             sup.main(["status"])
-        self.assertIn("jobs: 1 running of 4; providers: iceman 0/0, minimax 0/0, beam 0/0, devin 0/0", out.getvalue())
+        self.assertIn("jobs: 1 running of 4; providers: iceman 0/0, pickle 0/0, beam 0/0, minimax 0/0, devin 0/0", out.getvalue())
         self.assertIn("{job job-1 on iceman, 0 min}", out.getvalue())
 
 
@@ -1374,7 +1390,7 @@ class Engines(Base):
         with mock.patch.dict(os.environ, {"SUPERVISOR_CHAIN": "devin, nope, iceman"}):
             self.assertEqual([p[0] for p in sup.chain()], ["devin", "iceman"])
         with mock.patch.dict(os.environ, {"SUPERVISOR_CHAIN": "nope"}):
-            self.assertEqual(len(sup.chain()), 4)
+            self.assertEqual(len(sup.chain()), 5)
 
 
 if __name__ == "__main__":

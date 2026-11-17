@@ -181,14 +181,16 @@ def cooling(h, now):
     return int(h.get("streak") or 0) >= COOL_STREAK and now - float(h.get("last_bad") or 0) < COOL_MIN * 60
 
 
-def pick_provider(ps, st, now):
+def pick_provider(ps, st, now, skip=()):
     """This owner's provider for its next turn: its own place in the chain (it moves on after a turn that delivered
-    nothing and stays where a turn delivered), skipping providers that are cooling off, unless they all are."""
+    nothing and stays where a turn delivered), skipping providers that are cooling off, unless they all are.
+    `skip` holds the labels already tried in this turn, so a retry moves on instead of repeating."""
     ch = chain()
     i = int(ps.get("provider_idx") or 0) % len(ch)
     order = ch[i:] + ch[:i]
     health = st.get("providers") or {}
-    return next((p for p in order if not cooling(health.get(p[0]), now)), order[0])
+    remaining = [p for p in order if p[0] not in skip] or order
+    return next((p for p in remaining if not cooling(health.get(p[0]), now)), remaining[0])
 
 
 def score(st, ps, label, delivered, now):
@@ -457,32 +459,44 @@ def job_prompt(entry, reason, ps, now, note="", night=False):
     return "\n\n".join(parts)
 
 
-def launch_job(entry, ps, st, now, text):
+LANE_DOWN = re.compile(r"marked DOWN|preflight returned non-zero|refusing to launch", re.I)
+
+
+def launch_job(entry, ps, st, now, text, tries=3):
     """Start this owner's turn (text: job_prompt) as one Outsourcerer job in its owner folder. -> (ok, short text).
     On success the job is in ps["job"]; a launch that fails counts against the provider, so the next try uses the
-    next one."""
+    next one. A lane that is DOWN (the free-model quota ran out, the plan limit) must not cost the owner its turn:
+    the next provider in the chain is tried straight away."""
     slug = entry["project"]
     folder = owner.folder(slug)
     if not os.path.isdir(folder):
         return False, "no owner folder %s" % folder
-    label, prov, verb, model = pick_provider(ps, st, now)
-    try:
-        stash_env(slug)
-    except (OSError, subprocess.SubprocessError):
-        pass                # if a .env still blocks the launch, the launch says so
-    rc, out, err = osrc_run(["--provider", prov, "bg", verb, "-m", model, text], cwd=folder, timeout=LAUNCH_S,
-                             external_allow=entry.get("project_key") or "")
-    m = re.search(r"\bjob (\S+) launched", out + "\n" + err)
-    if not m:
+    tried = []
+    for _ in range(max(1, tries)):
+        label, prov, verb, model = pick_provider(ps, st, now, skip=tried)
+        try:
+            stash_env(slug)
+        except (OSError, subprocess.SubprocessError):
+            pass                # if a .env still blocks the launch, the launch says so
+        rc, out, err = osrc_run(["--provider", prov, "bg", verb, "-m", model, text], cwd=folder, timeout=LAUNCH_S,
+                                 external_allow=entry.get("project_key") or "")
+        m = re.search(r"\bjob (\S+) launched", out + "\n" + err)
+        if m:
+            ps["job"] = {"id": m.group(1), "started": now, "provider": label}
+            return True, "job %s on %s" % (m.group(1), label)
         why = " ".join((err or out or "exit %d" % rc).split())[-160:]
         if rc in (124, 127):        # the Mac was too slow or Outsourcerer is missing: not this provider's failure
             return False, "could not start a job: %s" % why     # (a job that did start is taken over next cycle)
-        ps["last_job"] = {"id": None, "provider": label, "ended": "not started", "ts": now, "when": iso(now),
-                          "delivered": False, "min": 0}
+        tried.append(label)
         score(st, ps, label, False, now)
-        return False, "could not start a job on %s: %s" % (label, why)
-    ps["job"] = {"id": m.group(1), "started": now, "provider": label}
-    return True, "job %s on %s" % (m.group(1), label)
+        if not LANE_DOWN.search(why):
+            ps["last_job"] = {"id": None, "provider": label, "ended": "not started", "ts": now, "when": iso(now),
+                              "delivered": False, "min": 0}
+            return False, "could not start a job on %s: %s" % (label, why)
+        # the lane is down: try the next provider in this same turn
+    ps["last_job"] = {"id": None, "provider": tried[-1] if tried else "", "ended": "not started", "ts": now,
+                      "when": iso(now), "delivered": False, "min": 0}
+    return False, "could not start a job: every lane is down (%s)" % ", ".join(tried)
 
 
 # ---------------------------------------------------------------- io (mocked in tests)
