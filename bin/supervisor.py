@@ -472,7 +472,9 @@ def job_prompt(entry, reason, ps, now, note="", night=False):
     return "\n\n".join(parts)
 
 
-LANE_DOWN = re.compile(r"marked DOWN|preflight returned non-zero|refusing to launch", re.I)
+LANE_DOWN = re.compile(r"marked DOWN|preflight returned non-zero|refusing to launch"
+                    r"|Free usage limit reached|usage limit reached|Model unavailable"
+                    r"|Agent not found|quota exceeded|plan limit exhausted|Individual quota reached", re.I)
 
 
 def launch_job(entry, ps, st, now, text, tries=0):

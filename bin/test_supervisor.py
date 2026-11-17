@@ -945,14 +945,11 @@ class Jobs(Base):
         self.assertEqual((self.ps()["provider_idx"], self.ps()["turn_fails"], self.ps()["job"]["provider"]), (1, 1, "pickle"))
 
     def test_a_launch_that_fails_counts_against_the_provider_and_the_next_one_gets_the_try(self):
+        # a quota refusal is a lane being down, not the owner's fault: the turn moves on at once
         self.add_owner(P1, K1, status(), idle_min=None)
         self.osrc.fail_models = {"opencode/iceman-free"}
         self.run_cycle()
-        self.assertEqual(self.skip_of(), "could not start a job on iceman: [outsourcerer] opencode: quota exceeded")
-        self.assertNotIn("job", self.ps())
-        self.assertNotIn("last_wake", self.ps())
         self.assertEqual(self.jfile("state.json")["providers"]["iceman"]["bad"], 1)
-        self.run_cycle(NOON + 15 * MIN)
         self.assertEqual(self.osrc.launches()[-1][:6], PICKLE)
         self.assertEqual(self.ps()["job"]["provider"], "pickle")
 
