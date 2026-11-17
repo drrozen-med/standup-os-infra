@@ -51,6 +51,11 @@ EXTRA = {
                      "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
 }
 
+# The GitHub runner name of a unit, when it differs from the unit's own name (a runner
+# registered under another name because GitHub would not delete the old registration).
+RUNIT = {
+    "actions.runner.drrozen-med-boardsBridge.hermes-bb.service": "hermes-bb-4",
+}
 MAX_ACTIVE = int(os.environ.get("RUNNER_ADMISSION_MAX", "4"))
 RESTART_COOLDOWN = int(os.environ.get("RUNNER_ADMISSION_COOLDOWN", "900"))  # seconds between restarts of one runner
 STATE = os.path.expanduser("~/.ccc-navigator/runner-admission-state.json")
@@ -96,12 +101,12 @@ def runner_info(repo):
 
 def runner_status(repo, unit):
     """'online' / 'offline' as GitHub sees the runner, or None when it cannot be read."""
-    return (runner_info(repo).get(unit.split(".")[-2]) or {}).get("status")
+    return (runner_info(repo).get(RUNIT.get(unit, unit.split(".")[-2])) or {}).get("status")
 
 
 def runner_busy(repo, unit):
     """True when GitHub says this runner is running a job."""
-    return bool((runner_info(repo).get(unit.split(".")[-2]) or {}).get("busy"))
+    return bool((runner_info(repo).get(RUNIT.get(unit, unit.split(".")[-2])) or {}).get("busy"))
 
 
 def load_state():
