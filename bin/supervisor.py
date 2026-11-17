@@ -181,6 +181,14 @@ def cooling(h, now):
     return int(h.get("streak") or 0) >= COOL_STREAK and now - float(h.get("last_bad") or 0) < COOL_MIN * 60
 
 
+def all_lanes_resting(st, now):
+    """True when every provider in the chain is cooling off: no turn can succeed, so trying is waste.
+    The free-model quota is the usual cause - every lane answers 'Free usage limit reached'."""
+    health = st.get("providers") or {}
+    ch = chain()
+    return bool(ch) and all(cooling(health.get(p[0]), now) for p in ch)
+
+
 def pick_provider(ps, st, now, skip=()):
     """This owner's provider for its next turn: its own place in the chain (it moves on after a turn that delivered
     nothing and stays where a turn delivered), skipping providers that are cooling off, unless they all are.
@@ -1344,7 +1352,9 @@ def run_cycle(dry, now):
                 if reason and not skip and night and not jobs:
                     skip = "resting until 07:00"        # night mode keeps the jobs going; nobody types into a session at night
                 if reason and not skip and jobs:
-                    if running >= cap:
+                    if all_lanes_resting(st, now):
+                        skip = "every lane is resting (free-model quota) - no turn can start"
+                    elif running >= cap:
                         skip = "no free place: %d jobs running" % running
                     else:
                         busy = overloaded() if busy is None else busy

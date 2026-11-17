@@ -964,6 +964,16 @@ class Jobs(Base):
         self.assertEqual(self.ps()["job"]["provider"], "pickle")
         self.assertNotIn("could not start", self.skip_of() or "")
 
+    def test_no_turn_is_started_when_every_lane_is_resting(self):
+        # every lane cooling off (the free-model quota ran out): a wake cannot succeed, so do not try
+        self.add_owner(P1, K1, status(), idle_min=None)
+        bad = {"bad": 9, "streak": 9, "last_bad": NOON - 10 * MIN}
+        self.seed(providers={label: dict(bad) for label in ("iceman", "pickle", "beam", "minimax", "devin")})
+        self.run_cycle()
+        self.assertEqual(self.osrc.launches(), [])
+        self.assertIn("every lane is resting", self.skip_of())
+        self.assertIn("every lane is resting", self.cycles()[-1])
+
     def test_a_launch_that_runs_out_of_time_is_not_the_providers_failure(self):
         self.add_owner(P1, K1, status(), idle_min=None)
         self.osrc.slow = True
