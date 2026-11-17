@@ -154,19 +154,15 @@ def main():
     awake = sum(len(v) for v in active_now.values())
     started, stopped = [], []
 
-    # 1. wake the runners whose repo is waiting. The primary runner of a repo with queued work is
-    #    always woken - it is that repo's only way to run anything. The EXTRA runners (a repo's
-    #    second and third) are what the cap limits, because they are what pushes the container
-    #    into swap: eleven concurrent jobs in this box is what made the kernel OOM-kill Gradle.
+    # 1. wake the runners whose repo is waiting, while there is room. The cap counts BUSY runners:
+    #    a busy runner is a job on the box, and .251 has four cores for everything. Two concurrent
+    #    jobs (RUNNER_ADMISSION_MAX) is what the box can run without oversubscribing it - the
+    #    airline e2e suite logged "machine load 26.5 on 4 cores ... a timing failure below may be
+    #    load, not a bug" and failed 12 of 79 scripts under load. A runner whose repo waits is
+    #    woken as soon as a slot frees (this controller runs every 3 minutes).
     busy = sum(1 for repo, units in active_now.items() for u in units if runner_busy(repo, u))
     for repo in wanted:
-        unit = RUNNERS.get(repo)
-        if not unit or unit in active_now.get(repo, []):
-            continue
-        started.append((repo, unit))
-        busy += 1
-    for repo in wanted:
-        units = EXTRA.get(repo, [])
+        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
         for unit in units:
             if unit in active_now.get(repo, []):
                 continue
@@ -196,10 +192,9 @@ def main():
             if qm:
                 continue
             for unit in units:
-                if unit == RUNNERS.get(repo):
-                    continue          # a repo's primary runner stays awake
                 if not runner_busy(repo, unit):
                     idle.append((q, repo, unit))
+        # a repo whose MAIN run is queued keeps its runner awake; the rest sleep, shortest queue first
         idle.sort(key=lambda t: (t[0], t[1]))
         for q, repo, unit in idle:
             if busy <= args.max:
