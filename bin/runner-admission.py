@@ -154,12 +154,19 @@ def main():
     awake = sum(len(v) for v in active_now.values())
     started, stopped = [], []
 
-    # 1. wake the runners whose repo is waiting. The cap counts runners that are BUSY
-    #    (a busy runner is a job in the container), not runners that merely sit awake:
-    #    a repo whose work is waiting must get its runner as soon as a job slot frees.
+    # 1. wake the runners whose repo is waiting. The primary runner of a repo with queued work is
+    #    always woken - it is that repo's only way to run anything. The EXTRA runners (a repo's
+    #    second and third) are what the cap limits, because they are what pushes the container
+    #    into swap: eleven concurrent jobs in this box is what made the kernel OOM-kill Gradle.
     busy = sum(1 for repo, units in active_now.items() for u in units if runner_busy(repo, u))
     for repo in wanted:
-        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
+        unit = RUNNERS.get(repo)
+        if not unit or unit in active_now.get(repo, []):
+            continue
+        started.append((repo, unit))
+        busy += 1
+    for repo in wanted:
+        units = EXTRA.get(repo, [])
         for unit in units:
             if unit in active_now.get(repo, []):
                 continue
@@ -189,6 +196,8 @@ def main():
             if qm:
                 continue
             for unit in units:
+                if unit == RUNNERS.get(repo):
+                    continue          # a repo's primary runner stays awake
                 if not runner_busy(repo, unit):
                     idle.append((q, repo, unit))
         idle.sort(key=lambda t: (t[0], t[1]))
