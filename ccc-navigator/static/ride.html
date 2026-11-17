@@ -15,7 +15,7 @@
 html,body{margin:0;background:var(--bg);color:var(--ink);font:18px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 body{min-height:100dvh;display:flex;flex-direction:column;gap:10px;padding:max(10px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
 header{display:flex;align-items:center;justify-content:space-between;gap:10px}
-header a{color:var(--dim);text-decoration:none;font-size:15px;padding:8px 0 8px 12px}
+header a{color:var(--ink);text-decoration:none;font-size:17px;font-weight:700;padding:12px 18px;min-height:48px;display:flex;align-items:center;background:var(--card);border:2px solid var(--line);border-radius:16px}
 .state{font-size:15px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dim);display:flex;align-items:center;gap:8px}
 .dot{width:12px;height:12px;border-radius:50%;background:var(--dim)}
 .state[data-s=speaking] .dot{background:var(--go)}
@@ -62,7 +62,7 @@ summary::-webkit-details-marker{display:none}
 <body>
 <header>
   <div class="state" id="state" data-s="idle"><span class="dot"></span><span id="stateTxt">Ready</span></div>
-  <a href="/">Sessions</a>
+  <a href="/" aria-label="Back to Sessions">&larr; Sessions</a>
 </header>
 <div class="where" id="where"></div>
 <div class="now" id="now">Tap <b>Start ride</b>. You'll hear what needs you, one item at a time, and answer with the big buttons or your voice.</div>
