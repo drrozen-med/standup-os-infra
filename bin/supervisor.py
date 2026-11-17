@@ -73,13 +73,18 @@ ALERT_MAX_NEW = 1       # new loud alerts raised per cycle, so the first live cy
 # Engines (docs/supervisor.md, "Engines"): how an owner gets its turn.
 ENGINES = ("session", "jobs")       # a message into its session | one free-model job per turn
 PROVIDERS = (                       # the jobs engine's chain, best measured first: label, Outsourcerer provider, verb, model
-    ("iceman", "opencode", "edit", "opencode-go/iceman-contributor-free"),
-    ("minimax", "droid", "yolo", "custom:MiniMax-M3-direct"),
+    # opencode/iceman-free, not opencode-go/iceman-contributor-free: the opencode-go names are
+    # no longer in the registry (the nurse_job_interview lane reported them gone on 2026-11-17)
+    # and the opencode names were verified by a live job on 2026-11-17 (done, exit 0).
+    ("iceman", "opencode", "edit", "opencode/iceman-free"),
+    # big-pickle finished a four-item task with tsc, build and lint green (2026-11-16).
+    ("pickle", "opencode", "edit", "opencode/big-pickle"),
     # opencode/beam-free, not opencode-go/beam-free: the go-model name answers with
     # "Model unavailable" or hangs (2 of 14 turns delivered, two timeouts, the rest
     # cancelled as the chain moved on); the opencode one delivered every turn tried
-    # (2026-11-15).
+    # (2026-11-15). Its free quota runs out, so it is not first.
     ("beam", "opencode", "edit", "opencode/beam-free"),
+    ("minimax", "droid", "yolo", "custom:MiniMax-M3-direct"),
     ("devin", "devin", "edit", "swe-2-high"),
 )
 OSRC_GLOB = "~/.claude/plugins/cache/outsourcerer/outsourcerer/*/skills/outsourcerer/scripts/outsourcerer.sh"
