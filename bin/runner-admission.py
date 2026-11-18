@@ -252,6 +252,31 @@ def main():
             stopped.append((repo, unit))
             awake -= 1
 
+    # 4. the box is still oversubscribed because every runner that finishes picks up the next
+    #    queued job at once: eleven jobs on four (stolen) cores means every e2e suite times out.
+    #    Shed load deliberately: stop a runner of a repo with a deep queue (its job is the least
+    #    urgent one to finish, and its owner can re-run it), at most a couple per pass so the queue
+    #    keeps moving. A runner that is the only one for a repo whose MAIN run waits is never taken.
+    if awake > args.max:
+        shed = []
+        for repo, units in active_now.items():
+            q, r, qm = need.get(repo, (0, 0, 0))
+            if q < 5 or (qm and len(units) < 2):
+                continue
+            keeper = keep_first(repo)
+            for unit in units:
+                if unit == keeper and qm:
+                    continue
+                shed.append((-q, repo, unit))
+        shed.sort()
+        for _q, repo, unit in shed[:2]:
+            if awake <= args.max:
+                break
+            if (repo, unit) in stopped:
+                continue
+            stopped.append((repo, unit))
+            awake -= 1
+
     # 3. wake a runner for a repo that is waiting, while there is room
     for repo in wanted:
         if awake >= args.max:
