@@ -333,15 +333,16 @@ def main():
             stopped.append((repo, unit))
             awake -= 1
 
-    # 3. wake a runner for a repo that is waiting, while there is room
+    # 3. wake a runner for a repo that is waiting. A repo's PRIMARY runner is always woken when its
+    #    repo has queued work: sleeping it is what made PR #98's CI wait for a human (the unit was
+    #    stopped, so Restart=always could not bring it back). The cap only limits the EXTRA runners.
     for repo in wanted:
-        if awake >= args.max:
-            break
-        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
+        primary = RUNNERS.get(repo)
+        units = ([primary] if primary else []) + EXTRA.get(repo, [])
         for unit in units:
             if unit in active_now.get(repo, []):
                 continue
-            if awake >= args.max:
+            if unit != primary and awake >= args.max:
                 break
             started.append((repo, unit))
             awake += 1
