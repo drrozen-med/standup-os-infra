@@ -263,6 +263,9 @@ def main():
             q, r, qm = need.get(repo, (0, 0, 0))
             if q < 5 or (qm and len(units) < 2):
                 continue
+            if qm:
+                continue          # never shed a runner that is working on a repo's MAIN check:
+                                # a cancelled main check is a red main, which is what the board measures
             keeper = keep_first(repo)
             for unit in units:
                 if unit == keeper and qm:
