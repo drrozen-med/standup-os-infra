@@ -23,6 +23,7 @@ import datetime
 import json
 import os
 import subprocess
+import time
 import sys
 
 HOST = "root@187.124.181.251"
@@ -218,6 +219,26 @@ def cancel_dead_queued(repo, min_age_min=30):
     return n
 
 
+STARTED = os.path.expanduser("~/.ccc-navigator/runner-admission-started.json")
+
+
+def load_started():
+    """When the controller last started each runner (so it does not stop what it just started)."""
+    try:
+        with open(STARTED) as fh:
+            return {k: float(v) for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_started(mapping):
+    try:
+        with open(STARTED, "w") as fh:
+            json.dump({k: int(v) for k, v in mapping.items()}, fh, indent=1)
+    except OSError:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -245,6 +266,7 @@ def main():
 
     awake = sum(len(v) for v in active_now.values())
     started, stopped = [], []
+    started_at = load_started()
 
     # The cap counts runners that are AWAKE, not jobs that are running: GitHub hands work to any
     # online runner, so the number of awake runners IS the concurrency of the box. .251 has four
@@ -262,12 +284,20 @@ def main():
         primary = RUNNERS.get(repo)
         return primary if primary in units else (units[0] if units else None)
 
-    # 1. stop the runners whose repo has nothing queued and nothing running
+    # 1. stop the runners whose repo has nothing queued and nothing running. A runner with a live
+    #    worker is NEVER stopped: stopping it kills the job it is running, and that is how a cancelled
+    #    check (a red main) happened. The controller also waits a few minutes after it started a
+    #    runner, so the start/stop does not flap while a run is still being registered.
+    now_ts = time.time()
     for repo, units in active_now.items():
         q, r, _qm = need.get(repo, (0, 0, 0))
         if q or r:
             continue
         for unit in units:
+            if runner_busy(repo, unit):
+                continue
+            if now_ts - started_at.get(unit, 0) < 300:
+                continue
             stopped.append((repo, unit))
             awake -= 1
 
@@ -357,10 +387,13 @@ def main():
 
     for repo, unit in started:
         set_unit(unit, "start")
+        started_at[unit] = time.time()
         print("start %s (%s)" % (unit, repo))
     for repo, unit in stopped:
         set_unit(unit, "stop")
+        started_at.pop(unit, None)
         print("stop  %s (%s, no queued or running work)" % (unit, repo))
+    save_started(started_at)
 
     # a runner whose repo is waiting but which GitHub calls offline has lost its session:
     # restart it so it re-registers and picks the work up. One restart is enough - a runner that
