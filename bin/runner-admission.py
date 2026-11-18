@@ -235,8 +235,10 @@ def main():
                 continue
             keeper = keep_first(repo)
             for unit in units:
-                if unit == keeper or runner_busy(repo, unit):
-                    continue                      # the keeper and any busy runner stay
+                if runner_busy(repo, unit):
+                    continue                      # a runner with a job in flight stays
+                if unit == keeper and qm:
+                    continue                      # the primary of a repo whose MAIN run waits stays
                 candidates.append((0 if qm else 1, -q, repo, unit))
         candidates.sort()
         for _qm, _q, repo, unit in candidates:
