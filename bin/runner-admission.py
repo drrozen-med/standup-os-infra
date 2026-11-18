@@ -49,13 +49,13 @@ EXTRA = {
                           "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service",
                           "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-d.service"],
     "run-residency": ["actions.runner.drrozen-med-run-residency.rr-ci-252.service"],
-    "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
-                     "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
+    "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service"],
 }
 
 # The GitHub runner name of a unit, when it differs from the unit's own name (a runner
 # registered under another name because GitHub would not delete the old registration).
 RUNIT = {
+    # the boardsBridge lane re-registered the primary runner under a new name
     "actions.runner.drrozen-med-boardsBridge.hermes-bb.service": "hermes-bb-4",
 }
 MAX_ACTIVE = int(os.environ.get("RUNNER_ADMISSION_MAX", "4"))
@@ -175,6 +175,49 @@ def set_unit(unit, action):
                    capture_output=True, text=True)
 
 
+def cancel_dead_queued(repo, min_age_min=30):
+    """Cancel queued runs whose branch has no open PR. GitHub cancels a job that waits 24h and
+    counts it as a failed check, so a pile of stale queued runs turns every PR red. They cost
+    nothing to cancel: no open PR means nobody is waiting for that check."""
+    out = subprocess.run(["gh", "api", "repos/drrozen-med/%s/actions/runs?status=queued&per_page=50" % repo,
+                          "--jq", "[.workflow_runs[] | {id, branch:.head_branch, created:.created_at}]"],
+                         capture_output=True, text=True)
+    try:
+        queued = json.loads(out.stdout or "[]")
+    except ValueError:
+        return 0
+    if not queued:
+        return 0
+    prs = subprocess.run(["gh", "api", "repos/drrozen-med/%s/pulls?state=open&per_page=100" % repo,
+                           "--jq", "[.[].head.ref]"], capture_output=True, text=True)
+    try:
+        live = set(json.loads(prs.stdout or "[]"))
+    except ValueError:
+        live = set()
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    n = 0
+    default_branch = subprocess.run(["gh", "api", "repos/drrozen-med/%s" % repo, "--jq", ".default_branch"],
+                                    capture_output=True, text=True).stdout.strip()
+    for run in queued:
+        if run.get("branch") in live:
+            continue
+        if run.get("branch") == default_branch:
+            continue      # the default branch is what the board measures: never cancel it
+        try:
+            age = (now - _dt.datetime.fromisoformat(str(run["created"]).replace("Z", "+00:00"))).total_seconds() / 60
+        except Exception:
+            continue
+        if age < min_age_min:
+            continue
+        rr = subprocess.run(["gh", "run", "cancel", str(run["id"]), "--repo", "drrozen-med/%s" % repo],
+                            capture_output=True, text=True)
+        if rr.returncode == 0:
+            n += 1
+            print("cancel stale queued run %s (%s, %.0f min old)" % (run["id"], run.get("branch"), age))
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -227,6 +270,12 @@ def main():
         for unit in units:
             stopped.append((repo, unit))
             awake -= 1
+
+    # 1b. stale queued runs (no open PR) are dead weight: GitHub cancels them after 24h and counts
+    #     that as a failed check, which is how a big queue turns every PR red.
+    if not args.dry_run:
+        for repo in sorted(need):
+            cancel_dead_queued(repo)
 
     # 2. over the cap: put idle runners to sleep, keeping the repos with the most waiting work and
     #    the primary runner of any repo whose main CI is queued.
