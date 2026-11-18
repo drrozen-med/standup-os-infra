@@ -242,7 +242,9 @@ def main():
                     continue                      # a runner with a job in flight stays
                 if unit == keeper and qm:
                     continue                      # the primary of a repo whose MAIN run waits stays
-                candidates.append((0 if qm else 1, -q, repo, unit))
+                # a repo whose MAIN run waits keeps its runner longest; among the rest the
+                # shortest queue gives up first
+                candidates.append((1 if qm else 0, q, repo, unit))
         candidates.sort()
         for _qm, _q, repo, unit in candidates:
             if awake <= args.max:
@@ -261,16 +263,18 @@ def main():
         shed = []
         for repo, units in active_now.items():
             q, r, qm = need.get(repo, (0, 0, 0))
-            if q < 5 or (qm and len(units) < 2):
+            if not q and not r:
                 continue
-            if qm:
-                continue          # never shed a runner that is working on a repo's MAIN check:
-                                # a cancelled main check is a red main, which is what the board measures
             keeper = keep_first(repo)
             for unit in units:
                 if unit == keeper and qm:
-                    continue
-                shed.append((-q, repo, unit))
+                    continue      # never shed a runner that is working on a repo's MAIN check:
+                                # a cancelled main check is a red main, which is what the board measures
+                if runner_busy(repo, unit):
+                    continue      # never cancel a job in flight
+                shed.append((q, repo, unit))
+        # the repo with the SHORTEST queue gives up its runner first: a repo with a deep queue
+        # needs its runners, a repo with one waiting job can wait its turn.
         shed.sort()
         for _q, repo, unit in shed[:2]:
             if awake <= args.max:
