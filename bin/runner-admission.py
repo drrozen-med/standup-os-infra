@@ -36,6 +36,7 @@ RUNNERS = {
     "nurse_job_interview": "actions.runner.drrozen-med-nurse_job_interview.nbi-ci-251.service",
     "road-trip-companion": "actions.runner.drrozen-med-road-trip-companion.rt-ci-251.service",
     "run-residency": "actions.runner.drrozen-med-run-residency.rr-ci-251.service",
+    "run-residency": "actions.runner.drrozen-med-run-residency.rr-ci-251.service",
     "shared-marketing": "actions.runner.drrozen-med-shared-marketing.sm-ci-251.service",
     "shlav-bet-family": "actions.runner.drrozen-med-shlav-bet-family.fm-ci-251.service",
     "sleepySounds_love": "actions.runner.drrozen-med-sleepySounds-love.ss-ci-251.service",
@@ -47,6 +48,7 @@ EXTRA = {
     "sleepySounds_love": ["actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service",
                           "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service",
                           "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-d.service"],
+    "run-residency": ["actions.runner.drrozen-med-run-residency.rr-ci-252.service"],
     "boardsBridge": ["actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service",
                      "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service"],
 }
@@ -132,6 +134,7 @@ DIR = {
     "actions.runner.drrozen-med-nurse_job_interview.nbi-ci-251.service": "/opt/gha-nbi",
     "actions.runner.drrozen-med-road-trip-companion.rt-ci-251.service": "/opt/gha-rt",
     "actions.runner.drrozen-med-run-residency.rr-ci-251.service": "/opt/gha-rr",
+    "actions.runner.drrozen-med-run-residency.rr-ci-252.service": "/opt/gha-runner-bb-3",
     "actions.runner.drrozen-med-shared-marketing.sm-ci-251.service": "/opt/gha-sm",
     "actions.runner.drrozen-med-shared-marketing.sm-ci-251-b.service": "/opt/gha-sm-2",
     "actions.runner.drrozen-med-slav-bet-family.fm-ci-251.service": "/opt/gha-fm",
