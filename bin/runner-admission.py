@@ -104,9 +104,50 @@ def runner_status(repo, unit):
     return (runner_info(repo).get(RUNIT.get(unit, unit.split(".")[-2])) or {}).get("status")
 
 
+_BUSY_DIRS = None
+
+
+def container_busy_dirs():
+    """The runner directories on .251 that currently run a job (the worker processes).
+    GitHub's own "busy" flag stays true for minutes after a runner was killed mid-job, and
+    trusting it would keep dead runners awake and let the concurrency drift."""
+    global _BUSY_DIRS
+    if _BUSY_DIRS is None:
+        cmd = r"""pgrep -af Runner.Worker | sed -n 's/.*\(\/opt\/gha[a-z0-9-]*\)\/bin.*/\1/p' | sort -u"""
+        out = subprocess.run(SSH + ["incus exec %s -- bash -c %s" % (CONTAINER, cmd)],
+                             capture_output=True, text=True, timeout=60)
+        _BUSY_DIRS = set(out.stdout.split())
+    return _BUSY_DIRS
+
+
+# the runner directory on .251 behind each unit (the unit name is not the directory name)
+DIR = {
+    "actions.runner.drrozen-med-vera.vera-ci-251.service": "/opt/gha",
+    "actions.runner.drrozen-med-airline.airline-ci-251.service": "/opt/gha-airline",
+    "actions.runner.drrozen-med-boardsBridge.hermes-bb.service": "/opt/gha-runner-bb",
+    "actions.runner.drrozen-med-boardsBridge.hermes-bb-2.service": "/opt/gha-runner-bb-2",
+    "actions.runner.drrozen-med-boardsBridge.hermes-bb-3.service": "/opt/gha-runner-bb-3",
+    "actions.runner.drrozen-med-boardsBridge.hermes-bb-4.service": "/opt/gha-runner-bb-4",
+    "actions.runner.drrozen-med-cdl-bridge.cdl-ci-251.service": "/opt/gha-cdl",
+    "actions.runner.drrozen-med-nurse_job_interview.nbi-ci-251.service": "/opt/gha-nbi",
+    "actions.runner.drrozen-med-road-trip-companion.rt-ci-251.service": "/opt/gha-rt",
+    "actions.runner.drrozen-med-run-residency.rr-ci-251.service": "/opt/gha-rr",
+    "actions.runner.drrozen-med-shared-marketing.sm-ci-251.service": "/opt/gha-sm",
+    "actions.runner.drrozen-med-shared-marketing.sm-ci-251-b.service": "/opt/gha-sm-2",
+    "actions.runner.drrozen-med-slav-bet-family.fm-ci-251.service": "/opt/gha-fm",
+    "actions.runner.drrozen-med-sleepySounds-love.ss-ci-251.service": "/opt/gha-ss",
+    "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-b.service": "/opt/gha-ss-2",
+    "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-c.service": "/opt/gha-airline-2",
+    "actions.runner.drrozen-med-sleepySounds_love.ss-ci-251-d.service": "/opt/gha-rt-2",
+}
+
+
 def runner_busy(repo, unit):
-    """True when GitHub says this runner is running a job."""
-    return bool((runner_info(repo).get(RUNIT.get(unit, unit.split(".")[-2])) or {}).get("busy"))
+    """True when this runner is actually running a job (the container's worker processes)."""
+    dirs = container_busy_dirs()
+    if not dirs:
+        return bool((runner_info(repo).get(RUNIT.get(unit, unit.split(".")[-2])) or {}).get("busy"))
+    return DIR.get(unit, "") in dirs
 
 
 def load_state():
@@ -159,23 +200,23 @@ def main():
     awake = sum(len(v) for v in active_now.values())
     started, stopped = [], []
 
-    # 1. wake the runners whose repo is waiting, while there is room. The cap counts BUSY runners:
-    #    a busy runner is a job on the box, and .251 has four cores for everything. Two concurrent
-    #    jobs (RUNNER_ADMISSION_MAX) is what the box can run without oversubscribing it - the
-    #    airline e2e suite logged "machine load 26.5 on 4 cores ... a timing failure below may be
-    #    load, not a bug" and failed 12 of 79 scripts under load. A runner whose repo waits is
-    #    woken as soon as a slot frees (this controller runs every 3 minutes).
+    # The cap counts runners that are AWAKE, not jobs that are running: GitHub hands work to any
+    # online runner, so the number of awake runners IS the concurrency of the box. .251 has four
+    # cores (and 70% steal from the hypervisor), and under that load the e2e suites fail on their
+    # own timeouts - the airline browser-full logged "machine load 26.5 on 4 cores ... a timing
+    # failure below may be load, not a bug". So at most args.max runners stay awake; a runner with
+    # a job is never stopped (that would kill work in flight), and a repo whose MAIN run is queued
+    # keeps its primary runner.
+    awake = sum(len(v) for v in active_now.values())
     busy = sum(1 for repo, units in active_now.items() for u in units if runner_busy(repo, u))
-    for repo in wanted:
-        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
-        for unit in units:
-            if unit in active_now.get(repo, []):
-                continue
-            if busy >= args.max:
-                break
-            started.append((repo, unit))
-            busy += 1
-    # 2. stop the runners whose repo has nothing queued and nothing running
+
+    def keep_first(repo):
+        """The runner of this repo that is kept awake when there is room for only one."""
+        units = active_now.get(repo) or []
+        primary = RUNNERS.get(repo)
+        return primary if primary in units else (units[0] if units else None)
+
+    # 1. stop the runners whose repo has nothing queued and nothing running
     for repo, units in active_now.items():
         q, r, _qm = need.get(repo, (0, 0, 0))
         if q or r:
@@ -184,30 +225,40 @@ def main():
             stopped.append((repo, unit))
             awake -= 1
 
-    # 3. over the cap: put the idle runners of the least urgent repos to sleep (a busy runner keeps
-    #    working; a queued job just waits a little longer). Eleven concurrent jobs in this container is
-    #    what made the kernel swap and the runners drop their sessions. A repo with a queued MAIN run
-    #    always keeps its runner awake: main CI is what the board measures.
-    if busy > args.max:
-        idle = []
+    # 2. over the cap: put idle runners to sleep, keeping the repos with the most waiting work and
+    #    the primary runner of any repo whose main CI is queued.
+    if awake > args.max:
+        candidates = []
         for repo, units in active_now.items():
             q, r, qm = need.get(repo, (0, 0, 0))
             if not q and not r:
                 continue
-            if qm:
-                continue
+            keeper = keep_first(repo)
             for unit in units:
-                if not runner_busy(repo, unit):
-                    idle.append((q, repo, unit))
-        # a repo whose MAIN run is queued keeps its runner awake; the rest sleep, shortest queue first
-        idle.sort(key=lambda t: (t[0], t[1]))
-        for q, repo, unit in idle:
-            if busy <= args.max:
+                if unit == keeper or runner_busy(repo, unit):
+                    continue                      # the keeper and any busy runner stay
+                candidates.append((0 if qm else 1, -q, repo, unit))
+        candidates.sort()
+        for _qm, _q, repo, unit in candidates:
+            if awake <= args.max:
                 break
             if (repo, unit) in stopped:
                 continue
             stopped.append((repo, unit))
-            busy -= 1
+            awake -= 1
+
+    # 3. wake a runner for a repo that is waiting, while there is room
+    for repo in wanted:
+        if awake >= args.max:
+            break
+        units = ([RUNNERS[repo]] if repo in RUNNERS else []) + EXTRA.get(repo, [])
+        for unit in units:
+            if unit in active_now.get(repo, []):
+                continue
+            if awake >= args.max:
+                break
+            started.append((repo, unit))
+            awake += 1
 
     if args.dry_run:
         for repo in sorted(need):
